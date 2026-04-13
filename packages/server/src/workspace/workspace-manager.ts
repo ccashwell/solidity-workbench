@@ -1,11 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Connection } from "vscode-languageserver/node.js";
+import type { Connection } from "vscode-languageserver/node.js";
 import { URI } from "vscode-uri";
+import type {
+  FoundryProfile,
+  Remapping} from "@solforge/common";
 import {
   FoundryConfig,
-  FoundryProfile,
-  Remapping,
   parseRemapping,
   resolveImportPath,
 } from "@solforge/common";
@@ -52,9 +53,7 @@ export class WorkspaceManager {
   }
 
   get libDirs(): string[] {
-    return (this.config?.libs ?? ["lib"]).map((l) =>
-      path.join(this.rootPath, l),
-    );
+    return (this.config?.libs ?? ["lib"]).map((l) => path.join(this.rootPath, l));
   }
 
   getRemappings(): Remapping[] {
@@ -92,9 +91,7 @@ export class WorkspaceManager {
       this.config = this.parseFoundryToml(content);
       this.connection.console.log("Loaded foundry.toml configuration");
     } catch (err) {
-      this.connection.console.error(
-        `Failed to load foundry.toml: ${err}`,
-      );
+      this.connection.console.error(`Failed to load foundry.toml: ${err}`);
     }
   }
 
@@ -137,9 +134,7 @@ export class WorkspaceManager {
             // Check if there's a src/ subdirectory
             const srcPath = path.join(libDir, entry.name, "src");
             const hasSubSrc = fs.existsSync(srcPath);
-            const target = hasSubSrc
-              ? `${libDir}/${entry.name}/src/`
-              : `${libDir}/${entry.name}/`;
+            const target = hasSubSrc ? `${libDir}/${entry.name}/src/` : `${libDir}/${entry.name}/`;
 
             // Only add if not already covered by explicit remappings
             const prefix = `${entry.name}/`;
@@ -153,9 +148,7 @@ export class WorkspaceManager {
       }
     }
 
-    this.connection.console.log(
-      `Loaded ${this.remappings.length} remappings`,
-    );
+    this.connection.console.log(`Loaded ${this.remappings.length} remappings`);
   }
 
   /**
@@ -197,9 +190,7 @@ export class WorkspaceManager {
     // 1. Try remappings first
     const remapped = resolveImportPath(importPath, this.remappings);
     if (remapped) {
-      const resolved = path.isAbsolute(remapped)
-        ? remapped
-        : path.join(this.rootPath, remapped);
+      const resolved = path.isAbsolute(remapped) ? remapped : path.join(this.rootPath, remapped);
       if (fs.existsSync(resolved)) return resolved;
     }
 
@@ -217,11 +208,7 @@ export class WorkspaceManager {
     }
 
     // 4. Try node_modules
-    const nodeModulesPath = path.join(
-      this.rootPath,
-      "node_modules",
-      importPath,
-    );
+    const nodeModulesPath = path.join(this.rootPath, "node_modules", importPath);
     if (fs.existsSync(nodeModulesPath)) return nodeModulesPath;
 
     return null;
@@ -280,8 +267,7 @@ export class WorkspaceManager {
 
       // Track section headers
       if (trimmed.startsWith("[")) {
-        inDefaultProfile =
-          trimmed === "[profile.default]" || trimmed === "[default]";
+        inDefaultProfile = trimmed === "[profile.default]" || trimmed === "[default]";
         continue;
       }
 
@@ -355,10 +341,7 @@ export class WorkspaceManager {
       .map((s) => s.trim())
       .filter(Boolean)
       .map((s) => {
-        if (
-          (s.startsWith('"') && s.endsWith('"')) ||
-          (s.startsWith("'") && s.endsWith("'"))
-        ) {
+        if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
           return s.slice(1, -1);
         }
         return s;

@@ -1,15 +1,11 @@
-import {
-  Location,
-  Position,
-  ReferenceContext,
-  TextDocuments,
-} from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
+import type { Position, ReferenceContext, TextDocuments } from "vscode-languageserver/node.js";
+import { Location } from "vscode-languageserver/node.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import * as fs from "node:fs";
-import { SymbolIndex } from "../analyzer/symbol-index.js";
-import { WorkspaceManager } from "../workspace/workspace-manager.js";
-import { SolidityParser } from "../parser/solidity-parser.js";
+import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { SolidityParser } from "../parser/solidity-parser.js";
 
 /**
  * Full workspace-wide find-all-references.
@@ -107,7 +103,16 @@ export class ReferencesProvider {
           inBlockComment = false;
           // Only check the part after */
           const afterComment = line.slice(line.indexOf("*/") + 2);
-          this.matchInSegment(afterComment, line.indexOf("*/") + 2, symbolName, regex, lineNum, uri, results, seen);
+          this.matchInSegment(
+            afterComment,
+            line.indexOf("*/") + 2,
+            symbolName,
+            regex,
+            lineNum,
+            uri,
+            results,
+            seen,
+          );
         }
         continue;
       }

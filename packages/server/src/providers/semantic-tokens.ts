@@ -1,18 +1,11 @@
-import {
-  SemanticTokens,
-  SemanticTokensBuilder,
-  Range,
-} from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
+import type { SemanticTokens, Range } from "vscode-languageserver/node.js";
+import { SemanticTokensBuilder } from "vscode-languageserver/node.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
 import { SolSemanticTokenTypes, SolSemanticTokenModifiers } from "@solforge/common";
-import { SolidityParser } from "../parser/solidity-parser.js";
+import type { SolidityParser } from "../parser/solidity-parser.js";
 
-const tokenTypeMap = new Map(
-  SolSemanticTokenTypes.map((t, i) => [t, i]),
-);
-const tokenModifierMap = new Map(
-  SolSemanticTokenModifiers.map((m, i) => [m, i]),
-);
+const tokenTypeMap = new Map(SolSemanticTokenTypes.map((t, i) => [t, i]));
+const tokenModifierMap = new Map(SolSemanticTokenModifiers.map((m, i) => [m, i]));
 
 /**
  * Provides semantic token highlighting for Solidity.
@@ -40,14 +33,7 @@ export class SemanticTokensProvider {
     // Highlight pragmas
     for (const pragma of su.pragmas) {
       this.pushToken(builder, pragma.range.start.line, 0, 6, "keyword", []); // "pragma"
-      this.pushToken(
-        builder,
-        pragma.range.start.line,
-        7,
-        pragma.name.length,
-        "namespace",
-        [],
-      );
+      this.pushToken(builder, pragma.range.start.line, 7, pragma.name.length, "namespace", []);
     }
 
     // Highlight import paths
@@ -154,10 +140,7 @@ export class SemanticTokensProvider {
     return builder.build();
   }
 
-  provideSemanticTokensRange(
-    document: TextDocument,
-    range: Range,
-  ): SemanticTokens {
+  provideSemanticTokensRange(document: TextDocument, range: Range): SemanticTokens {
     // For range requests, we still compute full tokens and filter
     // A production implementation would optimize this with range tracking
     return this.provideSemanticTokens(document);

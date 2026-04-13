@@ -13,9 +13,7 @@ import * as vscode from "vscode";
  * - solforge.flatten: Flatten the current contract
  * - solforge.inspectStorage: Inspect storage layout
  */
-export function registerFoundryCommands(
-  context: vscode.ExtensionContext,
-): void {
+export function registerFoundryCommands(context: vscode.ExtensionContext): void {
   const config = () => vscode.workspace.getConfiguration("solforge");
 
   function getForge(): string {
@@ -57,9 +55,7 @@ export function registerFoundryCommands(
       const terminal = getOrCreateTerminal();
       terminal.show();
       const verbosity = config().get<number>("test.verbosity") ?? 2;
-      terminal.sendText(
-        `${getForge()} test --match-path ${filePath} ${"-".repeat(verbosity)}v`,
-      );
+      terminal.sendText(`${getForge()} test --match-path ${filePath} ${"-".repeat(verbosity)}v`);
     }),
   );
 
@@ -84,9 +80,7 @@ export function registerFoundryCommands(
       const terminal = getOrCreateTerminal();
       terminal.show();
       const verbosity = config().get<number>("test.verbosity") ?? 2;
-      terminal.sendText(
-        `${getForge()} test --match-test ${testName} ${"-".repeat(verbosity)}v`,
-      );
+      terminal.sendText(`${getForge()} test --match-test ${testName} ${"-".repeat(verbosity)}v`);
     }),
   );
 
@@ -96,9 +90,7 @@ export function registerFoundryCommands(
     vscode.commands.registerCommand("solforge.format", async () => {
       const editor = vscode.window.activeTextEditor;
       if (editor && editor.document.languageId === "solidity") {
-        await vscode.commands.executeCommand(
-          "editor.action.formatDocument",
-        );
+        await vscode.commands.executeCommand("editor.action.formatDocument");
       } else {
         const terminal = getOrCreateTerminal();
         terminal.show();
@@ -146,22 +138,16 @@ export function registerFoundryCommands(
 
       // Try to detect the contract name from the file
       const text = editor.document.getText();
-      const contractMatch = text.match(
-        /(?:abstract\s+)?contract\s+(\w+)/,
-      );
+      const contractMatch = text.match(/(?:abstract\s+)?contract\s+(\w+)/);
       if (!contractMatch) {
-        vscode.window.showWarningMessage(
-          "Could not detect contract name in this file.",
-        );
+        vscode.window.showWarningMessage("Could not detect contract name in this file.");
         return;
       }
 
       const contractName = contractMatch[1];
       const terminal = getOrCreateTerminal();
       terminal.show();
-      terminal.sendText(
-        `${getForge()} inspect ${contractName} storage-layout`,
-      );
+      terminal.sendText(`${getForge()} inspect ${contractName} storage-layout`);
     }),
   );
 }
@@ -185,18 +171,14 @@ function getOrCreateTerminal(): vscode.Terminal {
  * Find the test function name at the current cursor position.
  * Walks upward from the cursor to find the enclosing function declaration.
  */
-function findTestFunctionAtCursor(
-  editor: vscode.TextEditor,
-): string | null {
+function findTestFunctionAtCursor(editor: vscode.TextEditor): string | null {
   const document = editor.document;
   const position = editor.selection.active;
 
   // Walk upward to find a function declaration
   for (let line = position.line; line >= 0; line--) {
     const lineText = document.lineAt(line).text;
-    const match = lineText.match(
-      /function\s+((?:test|testFuzz|testFork|testFail)_\w+)\s*\(/,
-    );
+    const match = lineText.match(/function\s+((?:test|testFuzz|testFork|testFail)_\w+)\s*\(/);
     if (match) return match[1];
 
     // Stop if we hit a contract/interface boundary

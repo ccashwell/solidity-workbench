@@ -1,11 +1,12 @@
-import {
+import type {
   Connection,
   Diagnostic,
-  DiagnosticSeverity,
-  TextDocuments,
+  TextDocuments} from "vscode-languageserver/node.js";
+import {
+  DiagnosticSeverity
 } from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
-import { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import { SolidityLinter } from "./linter.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 
@@ -66,10 +67,7 @@ export class DiagnosticsProvider {
    */
   async provideFullDiagnostics(uri: string): Promise<void> {
     try {
-      const result = await this.workspace.runForge([
-        "build",
-        "--format-json",
-      ]);
+      const result = await this.workspace.runForge(["build", "--format-json"]);
 
       // Parse forge build JSON output for errors
       const diagnosticsByFile = this.parseForgeOutput(result.stdout, result.stderr);
@@ -117,7 +115,8 @@ export class DiagnosticsProvider {
               start: { line: 0, character: 0 },
               end: { line: 0, character: 0 },
             },
-            message: "Missing SPDX license identifier. Consider adding: // SPDX-License-Identifier: MIT",
+            message:
+              "Missing SPDX license identifier. Consider adding: // SPDX-License-Identifier: MIT",
             source: "solforge",
             code: "missing-spdx",
           });
@@ -137,7 +136,8 @@ export class DiagnosticsProvider {
                 start: { line: i, character: 0 },
                 end: { line: i, character: line.length },
               },
-              message: "Floating pragma detected. Consider pinning the Solidity version for deployable contracts.",
+              message:
+                "Floating pragma detected. Consider pinning the Solidity version for deployable contracts.",
               source: "solforge",
               code: "floating-pragma",
             });
@@ -160,14 +160,19 @@ export class DiagnosticsProvider {
       }
 
       // Check for selfdestruct usage
-      if (trimmed.includes("selfdestruct") && !trimmed.startsWith("//") && !trimmed.startsWith("*")) {
+      if (
+        trimmed.includes("selfdestruct") &&
+        !trimmed.startsWith("//") &&
+        !trimmed.startsWith("*")
+      ) {
         diagnostics.push({
           severity: DiagnosticSeverity.Warning,
           range: {
             start: { line: i, character: line.indexOf("selfdestruct") },
             end: { line: i, character: line.indexOf("selfdestruct") + 12 },
           },
-          message: "selfdestruct is deprecated (EIP-6049). It no longer destroys the contract on most EVM chains.",
+          message:
+            "selfdestruct is deprecated (EIP-6049). It no longer destroys the contract on most EVM chains.",
           source: "solforge",
           code: "deprecated-selfdestruct",
         });
@@ -184,10 +189,7 @@ export class DiagnosticsProvider {
    * Parse forge build output into diagnostics per file.
    * Forge outputs JSON with errors in the standard solc format.
    */
-  private parseForgeOutput(
-    stdout: string,
-    stderr: string,
-  ): Map<string, Diagnostic[]> {
+  private parseForgeOutput(stdout: string, stderr: string): Map<string, Diagnostic[]> {
     const diagnosticsByFile = new Map<string, Diagnostic[]>();
 
     // Try parsing as JSON first (forge build --format-json)
@@ -246,10 +248,7 @@ export class DiagnosticsProvider {
     return diagnosticsByFile;
   }
 
-  private parseSolcError(
-    error: any,
-    diagnosticsByFile: Map<string, Diagnostic[]>,
-  ): void {
+  private parseSolcError(error: any, diagnosticsByFile: Map<string, Diagnostic[]>): void {
     if (!error.sourceLocation) return;
 
     const file = error.sourceLocation.file;

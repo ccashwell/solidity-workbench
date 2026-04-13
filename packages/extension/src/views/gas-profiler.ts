@@ -37,9 +37,7 @@ export class GasProfilerProvider implements vscode.TreeDataProvider<GasEntry> {
     context.subscriptions.push(treeView);
 
     // Watch .gas-snapshot
-    this.watcher = vscode.workspace.createFileSystemWatcher(
-      "**/.gas-snapshot",
-    );
+    this.watcher = vscode.workspace.createFileSystemWatcher("**/.gas-snapshot");
     this.watcher.onDidChange(() => this.refresh());
     this.watcher.onDidCreate(() => this.refresh());
     context.subscriptions.push(this.watcher);
@@ -108,10 +106,7 @@ export class GasProfilerProvider implements vscode.TreeDataProvider<GasEntry> {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) return [];
 
-    const snapshotPath = path.join(
-      workspaceFolder.uri.fsPath,
-      ".gas-snapshot",
-    );
+    const snapshotPath = path.join(workspaceFolder.uri.fsPath, ".gas-snapshot");
 
     try {
       if (!fs.existsSync(snapshotPath)) return [];
@@ -139,9 +134,7 @@ export class GasProfilerProvider implements vscode.TreeDataProvider<GasEntry> {
       const gas = parseInt(gasStr, 10);
 
       // Check for fuzz run stats
-      const fuzzMatch = line.match(
-        /\(runs:\s+(\d+),\s+μ:\s+(\d+),\s+~:\s+(\d+)\)/,
-      );
+      const fuzzMatch = line.match(/\(runs:\s+(\d+),\s+μ:\s+(\d+),\s+~:\s+(\d+)\)/);
 
       let contractEntry = contractMap.get(contractName);
       if (!contractEntry) {
@@ -194,9 +187,7 @@ export class GasProfilerProvider implements vscode.TreeDataProvider<GasEntry> {
     }
 
     for (let i = 0; i < lines.length; i++) {
-      const match = lines[i].match(
-        /function\s+((?:test|testFuzz|testFork|testFail)_\w+)\s*\(/,
-      );
+      const match = lines[i].match(/function\s+((?:test|testFuzz|testFork|testFail)_\w+)\s*\(/);
       if (!match) continue;
 
       // Try to find gas for this function in any contract

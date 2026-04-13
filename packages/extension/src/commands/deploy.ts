@@ -15,9 +15,7 @@ import * as vscode from "vscode";
  * - Etherscan verification after deployment
  * - Deployment receipt display
  */
-export function registerDeployCommands(
-  context: vscode.ExtensionContext,
-): void {
+export function registerDeployCommands(context: vscode.ExtensionContext): void {
   // ── forge create (simple deploy) ──────────────────────────────────
 
   context.subscriptions.push(
@@ -122,33 +120,30 @@ export function registerDeployCommands(
   // ── Check verification status ─────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      "solforge.deploy.verifyCheck",
-      async () => {
-        const guid = await vscode.window.showInputBox({
-          title: "Verification GUID",
-          placeHolder: "The GUID returned by the verify command",
-        });
-        if (!guid) return;
+    vscode.commands.registerCommand("solforge.deploy.verifyCheck", async () => {
+      const guid = await vscode.window.showInputBox({
+        title: "Verification GUID",
+        placeHolder: "The GUID returned by the verify command",
+      });
+      if (!guid) return;
 
-        const chainId = await vscode.window.showInputBox({
-          title: "Chain ID",
-          value: "1",
-        });
+      const chainId = await vscode.window.showInputBox({
+        title: "Chain ID",
+        value: "1",
+      });
 
-        const etherscanKey = await getEtherscanApiKey();
-        const config = vscode.workspace.getConfiguration("solforge");
-        const forgePath = config.get<string>("foundryPath") || "forge";
+      const etherscanKey = await getEtherscanApiKey();
+      const config = vscode.workspace.getConfiguration("solforge");
+      const forgePath = config.get<string>("foundryPath") || "forge";
 
-        let cmd = `${forgePath} verify-check ${guid}`;
-        cmd += ` --chain-id ${chainId}`;
-        if (etherscanKey) cmd += ` --etherscan-api-key ${etherscanKey}`;
+      let cmd = `${forgePath} verify-check ${guid}`;
+      cmd += ` --chain-id ${chainId}`;
+      if (etherscanKey) cmd += ` --etherscan-api-key ${etherscanKey}`;
 
-        const terminal = getOrCreateDeployTerminal();
-        terminal.show();
-        terminal.sendText(cmd);
-      },
-    ),
+      const terminal = getOrCreateDeployTerminal();
+      terminal.show();
+      terminal.sendText(cmd);
+    }),
   );
 }
 
@@ -189,10 +184,7 @@ async function pickContract(): Promise<ContractInfo | undefined> {
   }
 
   // Find all Solidity files in src/
-  const files = await vscode.workspace.findFiles(
-    "src/**/*.sol",
-    "**/node_modules/**",
-  );
+  const files = await vscode.workspace.findFiles("src/**/*.sol", "**/node_modules/**");
 
   const items: vscode.QuickPickItem[] = [];
   for (const file of files) {
@@ -272,9 +264,7 @@ async function pickSigningMethod(): Promise<string | undefined> {
   return (picked as any).flag;
 }
 
-async function getConstructorArgs(
-  contractName: string,
-): Promise<string | undefined> {
+async function getConstructorArgs(contractName: string): Promise<string | undefined> {
   const hasConstructor = await vscode.window.showQuickPick(
     ["No constructor arguments", "Enter constructor arguments"],
     { placeHolder: `Does ${contractName} have constructor arguments?` },

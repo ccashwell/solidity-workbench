@@ -23,9 +23,8 @@ export class StorageLayoutPanel {
 
   activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
-      vscode.commands.registerCommand(
-        "solforge.inspectStoragePanel",
-        () => this.showPanel(context),
+      vscode.commands.registerCommand("solforge.inspectStoragePanel", () =>
+        this.showPanel(context),
       ),
     );
   }
@@ -39,8 +38,7 @@ export class StorageLayoutPanel {
 
     // Detect contract name from the file
     const text = editor.document.getText();
-    const contractNames = [...text.matchAll(/(?:abstract\s+)?contract\s+(\w+)/g)]
-      .map((m) => m[1]);
+    const contractNames = [...text.matchAll(/(?:abstract\s+)?contract\s+(\w+)/g)].map((m) => m[1]);
 
     if (contractNames.length === 0) {
       vscode.window.showWarningMessage("No contract found in this file.");
@@ -87,9 +85,7 @@ export class StorageLayoutPanel {
     this.panel.webview.html = this.buildHtml(contractName, layout);
   }
 
-  private async getStorageLayout(
-    contractName: string,
-  ): Promise<StorageEntry[] | null> {
+  private async getStorageLayout(contractName: string): Promise<StorageEntry[] | null> {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) return null;
 
@@ -112,14 +108,10 @@ export class StorageLayoutPanel {
     } catch (err: any) {
       // Try alternative format
       try {
-        const result = await execFileAsync(
-          forgePath,
-          ["inspect", contractName, "storage"],
-          {
-            cwd: workspaceFolder.uri.fsPath,
-            maxBuffer: 10 * 1024 * 1024,
-          },
-        );
+        const result = await execFileAsync(forgePath, ["inspect", contractName, "storage"], {
+          cwd: workspaceFolder.uri.fsPath,
+          maxBuffer: 10 * 1024 * 1024,
+        });
         return this.parseTextLayout(result.stdout);
       } catch {
         return null;
@@ -132,7 +124,10 @@ export class StorageLayoutPanel {
     const lines = text.split("\n").filter((l) => l.includes("|"));
 
     for (const line of lines) {
-      const parts = line.split("|").map((p) => p.trim()).filter(Boolean);
+      const parts = line
+        .split("|")
+        .map((p) => p.trim())
+        .filter(Boolean);
       if (parts.length < 4 || parts[0] === "Name") continue;
 
       entries.push({
@@ -147,10 +142,7 @@ export class StorageLayoutPanel {
     return entries;
   }
 
-  private buildHtml(
-    contractName: string,
-    layout: StorageEntry[],
-  ): string {
+  private buildHtml(contractName: string, layout: StorageEntry[]): string {
     // Group entries by slot
     const slotMap = new Map<string, StorageEntry[]>();
     for (const entry of layout) {
@@ -187,10 +179,7 @@ export class StorageLayoutPanel {
       .join("\n");
 
     const totalSlots = slotMap.size;
-    const totalBytes = layout.reduce(
-      (sum, e) => sum + (parseInt(e.numberOfBytes) || 32),
-      0,
-    );
+    const totalBytes = layout.reduce((sum, e) => sum + (parseInt(e.numberOfBytes) || 32), 0);
 
     return `<!DOCTYPE html>
 <html>

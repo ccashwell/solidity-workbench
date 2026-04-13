@@ -1,12 +1,8 @@
-import {
-  InlayHint,
-  InlayHintKind,
-  Position,
-  Range,
-} from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
-import { SymbolIndex } from "../analyzer/symbol-index.js";
-import { SolidityParser } from "../parser/solidity-parser.js";
+import type { InlayHint, Range } from "vscode-languageserver/node.js";
+import { InlayHintKind, Position } from "vscode-languageserver/node.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
+import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SolidityParser } from "../parser/solidity-parser.js";
 
 /**
  * Provides inlay hints — inline annotations that show:
@@ -47,12 +43,7 @@ export class InlayHintsProvider {
    * Find function call sites and provide parameter name inlay hints.
    * e.g., `transfer(addr, 100)` → `transfer(‸to: addr, ‸amount: 100)`
    */
-  private findCallSiteHints(
-    line: string,
-    lineNum: number,
-    uri: string,
-    hints: InlayHint[],
-  ): void {
+  private findCallSiteHints(line: string, lineNum: number, uri: string, hints: InlayHint[]): void {
     // Match function calls: identifier(args)
     const callRe = /\b(\w+)\s*\(([^)]*)\)/g;
     let match: RegExpExecArray | null;
@@ -67,7 +58,9 @@ export class InlayHintsProvider {
 
       // Look up the function in the symbol index
       const symbols = this.symbolIndex.findSymbols(funcName);
-      const funcSymbol = symbols.find((s) => s.kind === "function" || s.kind === "event" || s.kind === "error");
+      const funcSymbol = symbols.find(
+        (s) => s.kind === "function" || s.kind === "event" || s.kind === "error",
+      );
       if (!funcSymbol) continue;
 
       // Get the function's parameter names from the contract
@@ -111,13 +104,9 @@ export class InlayHintsProvider {
           ? this.symbolIndex.getContract(sym.containerName)
           : undefined;
         if (contract) {
-          const func = contract.contract.functions.find(
-            (f) => f.name === funcName,
-          );
+          const func = contract.contract.functions.find((f) => f.name === funcName);
           if (func) {
-            return func.parameters
-              .map((p) => p.name)
-              .filter((n): n is string => !!n);
+            return func.parameters.map((p) => p.name).filter((n): n is string => !!n);
           }
         }
       }
@@ -148,9 +137,24 @@ export class InlayHintsProvider {
 
   private isKeyword(word: string): boolean {
     const keywords = new Set([
-      "if", "else", "for", "while", "do", "return", "require", "assert",
-      "revert", "emit", "new", "delete", "type", "try", "catch",
-      "mapping", "assembly", "unchecked",
+      "if",
+      "else",
+      "for",
+      "while",
+      "do",
+      "return",
+      "require",
+      "assert",
+      "revert",
+      "emit",
+      "new",
+      "delete",
+      "type",
+      "try",
+      "catch",
+      "mapping",
+      "assembly",
+      "unchecked",
     ]);
     return keywords.has(word);
   }

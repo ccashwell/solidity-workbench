@@ -1,13 +1,9 @@
-import {
-  Definition,
-  Location,
-  Position,
-  Range,
-} from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
+import type { Definition, Position} from "vscode-languageserver/node.js";
+import { Location, Range } from "vscode-languageserver/node.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
-import { SymbolIndex } from "../analyzer/symbol-index.js";
-import { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
 /**
  * Provides go-to-definition, go-to-type-definition, and find-references.
@@ -24,10 +20,7 @@ export class DefinitionProvider {
     private workspace: WorkspaceManager,
   ) {}
 
-  provideDefinition(
-    document: TextDocument,
-    position: Position,
-  ): Definition | null {
+  provideDefinition(document: TextDocument, position: Position): Definition | null {
     const text = document.getText();
     const word = this.getWordAtPosition(text, position);
     if (!word) return null;
@@ -65,18 +58,13 @@ export class DefinitionProvider {
     // Multiple definitions — prefer the one in the same file, then declarations
     const sameFile = symbols.filter((s) => s.filePath === document.uri);
     if (sameFile.length > 0) {
-      return sameFile.map((s) =>
-        Location.create(s.filePath, s.nameRange),
-      );
+      return sameFile.map((s) => Location.create(s.filePath, s.nameRange));
     }
 
     return symbols.map((s) => Location.create(s.filePath, s.nameRange));
   }
 
-  provideTypeDefinition(
-    document: TextDocument,
-    position: Position,
-  ): Definition | null {
+  provideTypeDefinition(document: TextDocument, position: Position): Definition | null {
     const text = document.getText();
     const word = this.getWordAtPosition(text, position);
     if (!word) return null;
@@ -84,15 +72,20 @@ export class DefinitionProvider {
     // Look up the symbol to find its type
     const symbols = this.symbolIndex.findSymbols(word);
     for (const sym of symbols) {
-      if (sym.kind === "stateVariable" || sym.kind === "parameter" || sym.kind === "localVariable") {
+      if (
+        sym.kind === "stateVariable" ||
+        sym.kind === "parameter" ||
+        sym.kind === "localVariable"
+      ) {
         // The detail field contains the type name for variables
         if (sym.detail) {
-          const typeName = sym.detail.replace(/\[\]$/, "").replace(/\s+memory$/, "").replace(/\s+storage$/, "");
+          const typeName = sym.detail
+            .replace(/\[\]$/, "")
+            .replace(/\s+memory$/, "")
+            .replace(/\s+storage$/, "");
           const typeSymbols = this.symbolIndex.findSymbols(typeName);
           if (typeSymbols.length > 0) {
-            return typeSymbols.map((s) =>
-              Location.create(s.filePath, s.nameRange),
-            );
+            return typeSymbols.map((s) => Location.create(s.filePath, s.nameRange));
           }
         }
       }
@@ -101,10 +94,7 @@ export class DefinitionProvider {
     return null;
   }
 
-  provideReferences(
-    document: TextDocument,
-    position: Position,
-  ): Location[] {
+  provideReferences(document: TextDocument, position: Position): Location[] {
     const text = document.getText();
     const word = this.getWordAtPosition(text, position);
     if (!word) return [];
@@ -126,10 +116,7 @@ export class DefinitionProvider {
     return references;
   }
 
-  private resolveImportAtPosition(
-    text: string,
-    position: Position,
-  ): string | null {
+  private resolveImportAtPosition(text: string, position: Position): string | null {
     const line = text.split("\n")[position.line] ?? "";
 
     // Check if cursor is on an import path
@@ -169,10 +156,7 @@ export class DefinitionProvider {
     return null;
   }
 
-  private resolveMemberDefinition(
-    typeName: string,
-    memberName: string,
-  ): Definition | null {
+  private resolveMemberDefinition(typeName: string, memberName: string): Definition | null {
     const chain = this.symbolIndex.getInheritanceChain(typeName);
     for (const contract of chain) {
       // Search functions

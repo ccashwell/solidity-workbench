@@ -20,9 +20,7 @@ import { SolidityDebugProvider } from "./debugger/debug-adapter.js";
 
 let client: LanguageClient;
 
-export async function activate(
-  context: vscode.ExtensionContext,
-): Promise<void> {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
   // ── LSP Server ───────────────────────────────────────────────────
 
   const serverModule = context.asAbsolutePath(
@@ -54,12 +52,7 @@ export async function activate(
     outputChannelName: "Solforge",
   };
 
-  client = new LanguageClient(
-    "solforge",
-    "Solforge Language Server",
-    serverOptions,
-    clientOptions,
-  );
+  client = new LanguageClient("solforge", "Solforge Language Server", serverOptions, clientOptions);
 
   // Start the client (which also starts the server)
   await client.start();
@@ -111,9 +104,7 @@ export async function activate(
   context.subscriptions.push({ dispose: () => slither.dispose() });
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.slither", () =>
-      slither.analyze(),
-    ),
+    vscode.commands.registerCommand("solforge.slither", () => slither.analyze()),
   );
 
   // Auto-run slither on save if enabled
@@ -130,10 +121,7 @@ export async function activate(
 
   // ── Status Bar ────────────────────────────────────────────────────
 
-  const statusBar = vscode.window.createStatusBarItem(
-    vscode.StatusBarAlignment.Left,
-    100,
-  );
+  const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   statusBar.text = "$(beaker) Solforge";
   statusBar.tooltip = "Solforge — Solidity IDE";
   statusBar.command = "solforge.build";

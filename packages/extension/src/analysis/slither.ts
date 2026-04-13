@@ -21,8 +21,7 @@ export class SlitherIntegration {
   private outputChannel: vscode.OutputChannel;
 
   constructor() {
-    this.diagnosticCollection =
-      vscode.languages.createDiagnosticCollection("slither");
+    this.diagnosticCollection = vscode.languages.createDiagnosticCollection("slither");
     this.outputChannel = vscode.window.createOutputChannel("Slither");
   }
 
@@ -51,7 +50,8 @@ export class SlitherIntegration {
         slitherPath,
         [
           ".",
-          "--json", "-",
+          "--json",
+          "-",
           "--foundry-compile-all",
           "--exclude-informational",
           "--exclude-optimization",
@@ -70,17 +70,12 @@ export class SlitherIntegration {
         this.processResults(err.stdout, workspaceFolder.uri);
       } else {
         this.outputChannel.appendLine(`Slither error: ${err.message}`);
-        vscode.window.showErrorMessage(
-          `Slither analysis failed: ${err.message}`,
-        );
+        vscode.window.showErrorMessage(`Slither analysis failed: ${err.message}`);
       }
     }
   }
 
-  private processResults(
-    jsonOutput: string,
-    workspaceUri: vscode.Uri,
-  ): void {
+  private processResults(jsonOutput: string, workspaceUri: vscode.Uri): void {
     try {
       const data = JSON.parse(jsonOutput);
       if (!data.results?.detectors) {
@@ -130,10 +125,7 @@ export class SlitherIntegration {
                 );
                 const relLine = (e.source_mapping.lines?.[0] ?? 1) - 1;
                 return new vscode.DiagnosticRelatedInformation(
-                  new vscode.Location(
-                    relUri,
-                    new vscode.Range(relLine, 0, relLine, 1000),
-                  ),
+                  new vscode.Location(relUri, new vscode.Range(relLine, 0, relLine, 1000)),
                   e.name ?? "related",
                 );
               });
@@ -147,10 +139,7 @@ export class SlitherIntegration {
 
       // Set diagnostics
       for (const [filePath, diagnostics] of diagnosticMap) {
-        this.diagnosticCollection.set(
-          vscode.Uri.parse(filePath),
-          diagnostics,
-        );
+        this.diagnosticCollection.set(vscode.Uri.parse(filePath), diagnostics);
       }
 
       this.outputChannel.appendLine(

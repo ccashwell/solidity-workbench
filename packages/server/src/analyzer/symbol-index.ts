@@ -1,13 +1,14 @@
+import type {
+  WorkspaceSymbol} from "vscode-languageserver/node.js";
 import {
   Location,
   SymbolInformation,
-  SymbolKind as LSPSymbolKind,
-  WorkspaceSymbol,
+  SymbolKind as LSPSymbolKind
 } from "vscode-languageserver/node.js";
 import { URI } from "vscode-uri";
-import type { SolSymbol, SymbolKind, ContractDefinition } from "@solforge/common";
-import { SolidityParser } from "../parser/solidity-parser.js";
-import { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { SolSymbol, SymbolKind, ContractDefinition, FunctionDefinition } from "@solforge/common";
+import type { SolidityParser } from "../parser/solidity-parser.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
 /**
  * Maintains a cross-file symbol index for the workspace.
@@ -24,8 +25,7 @@ export class SymbolIndex {
   private symbolsByFile: Map<string, SolSymbol[]> = new Map();
 
   /** Contract definitions indexed by name — for inheritance resolution */
-  private contractsByName: Map<string, { uri: string; contract: ContractDefinition }> =
-    new Map();
+  private contractsByName: Map<string, { uri: string; contract: ContractDefinition }> = new Map();
 
   constructor(parser: SolidityParser, workspace: WorkspaceManager) {
     this.parser = parser;
@@ -86,11 +86,12 @@ export class SymbolIndex {
       // Contract itself
       newSymbols.push({
         name: contract.name,
-        kind: contract.kind === "interface"
-          ? "interface"
-          : contract.kind === "library"
-            ? "library"
-            : "contract",
+        kind:
+          contract.kind === "interface"
+            ? "interface"
+            : contract.kind === "library"
+              ? "library"
+              : "contract",
         filePath: uri,
         range: contract.range,
         nameRange: contract.nameRange,
@@ -283,16 +284,13 @@ export class SymbolIndex {
     return chain;
   }
 
-  private buildFunctionSignature(func: import("@solforge/common").FunctionDefinition): string {
+  private buildFunctionSignature(func: FunctionDefinition): string {
     const params = func.parameters
       .map((p) => `${p.typeName}${p.name ? " " + p.name : ""}`)
       .join(", ");
-    const returns = func.returnParameters
-      .map((p) => p.typeName)
-      .join(", ");
+    const returns = func.returnParameters.map((p) => p.typeName).join(", ");
     const vis = func.visibility !== "public" ? ` ${func.visibility}` : "";
-    const mut =
-      func.mutability !== "nonpayable" ? ` ${func.mutability}` : "";
+    const mut = func.mutability !== "nonpayable" ? ` ${func.mutability}` : "";
     const ret = returns ? ` returns (${returns})` : "";
     return `(${params})${vis}${mut}${ret}`;
   }

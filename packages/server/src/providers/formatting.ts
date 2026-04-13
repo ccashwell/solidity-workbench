@@ -1,11 +1,12 @@
+import type {
+  FormattingOptions,
+  Range} from "vscode-languageserver/node.js";
 import {
   DocumentFormattingParams,
-  FormattingOptions,
-  Range,
   TextEdit,
 } from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
-import { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -20,10 +21,7 @@ import * as os from "node:os";
 export class FormattingProvider {
   constructor(private workspace: WorkspaceManager) {}
 
-  async format(
-    document: TextDocument,
-    options: FormattingOptions,
-  ): Promise<TextEdit[]> {
+  async format(document: TextDocument, options: FormattingOptions): Promise<TextEdit[]> {
     return this.formatDocument(document);
   }
 
@@ -47,10 +45,7 @@ export class FormattingProvider {
     try {
       fs.writeFileSync(tmpFile, text, "utf-8");
 
-      const result = await this.workspace.runForge([
-        "fmt",
-        tmpFile,
-      ]);
+      const result = await this.workspace.runForge(["fmt", tmpFile]);
 
       if (result.exitCode !== 0) {
         // forge fmt failed — return no edits rather than corrupting the file

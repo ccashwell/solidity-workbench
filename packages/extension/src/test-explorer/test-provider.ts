@@ -21,10 +21,7 @@ export class FoundryTestProvider {
   private testItems: Map<string, vscode.TestItem> = new Map();
 
   activate(context: vscode.ExtensionContext): void {
-    this.controller = vscode.tests.createTestController(
-      "solforge-foundry-tests",
-      "Foundry Tests",
-    );
+    this.controller = vscode.tests.createTestController("solforge-foundry-tests", "Foundry Tests");
     context.subscriptions.push(this.controller);
 
     // Set up run profiles
@@ -35,10 +32,8 @@ export class FoundryTestProvider {
       true, // default
     );
 
-    this.controller.createRunProfile(
-      "Debug",
-      vscode.TestRunProfileKind.Debug,
-      (request, token) => this.debugTests(request, token),
+    this.controller.createRunProfile("Debug", vscode.TestRunProfileKind.Debug, (request, token) =>
+      this.debugTests(request, token),
     );
 
     // Auto-discover tests when files change
@@ -81,10 +76,7 @@ export class FoundryTestProvider {
   /**
    * Parse a test file to extract test contracts and test functions.
    */
-  private async parseTestFile(
-    fileUri: vscode.Uri,
-    workspaceUri: vscode.Uri,
-  ): Promise<void> {
+  private async parseTestFile(fileUri: vscode.Uri, workspaceUri: vscode.Uri): Promise<void> {
     const doc = await vscode.workspace.openTextDocument(fileUri);
     const text = doc.getText();
     const relativePath = path.relative(workspaceUri.fsPath, fileUri.fsPath);
@@ -99,11 +91,7 @@ export class FoundryTestProvider {
 
       let contractItem = this.testItems.get(contractId);
       if (!contractItem) {
-        contractItem = this.controller.createTestItem(
-          contractId,
-          contractName,
-          fileUri,
-        );
+        contractItem = this.controller.createTestItem(contractId, contractName, fileUri);
         this.controller.items.add(contractItem);
         this.testItems.set(contractId, contractItem);
       }
@@ -125,8 +113,7 @@ export class FoundryTestProvider {
       const body = text.slice(bodyStart, bodyEnd);
 
       // Find all test/testFuzz/testFork/testFail functions
-      const funcRe =
-        /function\s+((?:test|testFuzz|testFork|testFail)_\w+)\s*\(/g;
+      const funcRe = /function\s+((?:test|testFuzz|testFork|testFail)_\w+)\s*\(/g;
       let funcMatch: RegExpExecArray | null;
 
       // Clear old children
@@ -140,11 +127,7 @@ export class FoundryTestProvider {
         const textBeforeFunc = text.slice(0, bodyStart + funcMatch.index);
         const lineNumber = textBeforeFunc.split("\n").length - 1;
 
-        const testItem = this.controller.createTestItem(
-          testId,
-          testName,
-          fileUri,
-        );
+        const testItem = this.controller.createTestItem(testId, testName, fileUri);
         testItem.range = new vscode.Range(
           new vscode.Position(lineNumber, 0),
           new vscode.Position(lineNumber, funcMatch[0].length),
@@ -249,20 +232,14 @@ export class FoundryTestProvider {
         iconPath: new vscode.ThemeIcon("debug"),
       });
       terminal.show();
-      terminal.sendText(
-        `forge test --match-test ${testName} -vvvvv`,
-      );
+      terminal.sendText(`forge test --match-test ${testName} -vvvvv`);
     }
   }
 
   /**
    * Parse forge test --json output and update test results.
    */
-  private processTestOutput(
-    run: vscode.TestRun,
-    item: vscode.TestItem,
-    stdout: string,
-  ): void {
+  private processTestOutput(run: vscode.TestRun, item: vscode.TestItem, stdout: string): void {
     try {
       // forge test --json outputs JSONL (one JSON per line)
       // or a single JSON object depending on version
@@ -281,11 +258,7 @@ export class FoundryTestProvider {
     }
   }
 
-  private processTestJson(
-    run: vscode.TestRun,
-    parentItem: vscode.TestItem,
-    data: any,
-  ): void {
+  private processTestJson(run: vscode.TestRun, parentItem: vscode.TestItem, data: any): void {
     // Handle both per-contract and per-test result formats
     if (data.test_results) {
       for (const [name, result] of Object.entries(data.test_results) as any) {
@@ -294,9 +267,7 @@ export class FoundryTestProvider {
         if (result.status === "Success") {
           run.passed(childItem, result.duration?.secs ? result.duration.secs * 1000 : undefined);
         } else if (result.status === "Failure") {
-          const message = new vscode.TestMessage(
-            result.reason ?? "Test failed",
-          );
+          const message = new vscode.TestMessage(result.reason ?? "Test failed");
           if (result.counterexample) {
             message.message += `\n\nCounterexample: ${JSON.stringify(result.counterexample)}`;
           }
@@ -308,10 +279,7 @@ export class FoundryTestProvider {
     }
   }
 
-  private findChildByName(
-    parent: vscode.TestItem,
-    name: string,
-  ): vscode.TestItem | undefined {
+  private findChildByName(parent: vscode.TestItem, name: string): vscode.TestItem | undefined {
     let found: vscode.TestItem | undefined;
     parent.children.forEach((child) => {
       if (child.label === name || child.id.endsWith(`::${name}`)) {

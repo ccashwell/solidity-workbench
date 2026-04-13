@@ -31,12 +31,7 @@ const execFileAsync = promisify(execFile);
 export class SolidityDebugProvider implements vscode.DebugConfigurationProvider {
   activate(context: vscode.ExtensionContext): void {
     // Register debug configuration provider
-    context.subscriptions.push(
-      vscode.debug.registerDebugConfigurationProvider(
-        "solforge",
-        this,
-      ),
-    );
+    context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider("solforge", this));
 
     // Register debug adapter descriptor factory
     context.subscriptions.push(
@@ -54,15 +49,11 @@ export class SolidityDebugProvider implements vscode.DebugConfigurationProvider 
     );
 
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.debugScript", () =>
-        this.debugScript(),
-      ),
+      vscode.commands.registerCommand("solforge.debugScript", () => this.debugScript()),
     );
 
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.debugTransaction", () =>
-        this.debugTransaction(),
-      ),
+      vscode.commands.registerCommand("solforge.debugTransaction", () => this.debugTransaction()),
     );
   }
 
@@ -200,9 +191,7 @@ export class SolidityDebugProvider implements vscode.DebugConfigurationProvider 
    * Parse a forge trace and create a structured debug view.
    * This processes the -vvvvv trace output into a navigable format.
    */
-  async parseTrace(
-    testName: string,
-  ): Promise<TraceEntry[] | null> {
+  async parseTrace(testName: string): Promise<TraceEntry[] | null> {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) return null;
 
@@ -234,9 +223,7 @@ export class SolidityDebugProvider implements vscode.DebugConfigurationProvider 
     for (const line of lines) {
       // Parse trace lines like:
       // [123456] ContractName::functionName(args) [call/staticcall/delegatecall]
-      const traceMatch = line.match(
-        /\[(\d+)\]\s+(\w+)::(\w+)\((.*?)\)\s*(?:\[(\w+)\])?/,
-      );
+      const traceMatch = line.match(/\[(\d+)\]\s+(\w+)::(\w+)\((.*?)\)\s*(?:\[(\w+)\])?/);
 
       if (traceMatch) {
         entries.push({
@@ -257,9 +244,7 @@ export class SolidityDebugProvider implements vscode.DebugConfigurationProvider 
     const pos = editor.selection.active;
     for (let line = pos.line; line >= 0; line--) {
       const text = editor.document.lineAt(line).text;
-      const match = text.match(
-        /function\s+((?:test|testFuzz|testFork|testFail)_\w+)\s*\(/,
-      );
+      const match = text.match(/function\s+((?:test|testFuzz|testFork|testFail)_\w+)\s*\(/);
       if (match) return match[1];
       if (/^\s*(?:contract|interface|library)\s/.test(text)) break;
     }
@@ -267,9 +252,7 @@ export class SolidityDebugProvider implements vscode.DebugConfigurationProvider 
   }
 }
 
-class SolidityDebugAdapterFactory
-  implements vscode.DebugAdapterDescriptorFactory
-{
+class SolidityDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory {
   createDebugAdapterDescriptor(
     _session: vscode.DebugSession,
   ): vscode.ProviderResult<vscode.DebugAdapterDescriptor> {

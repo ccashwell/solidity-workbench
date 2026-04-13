@@ -10,17 +10,13 @@ import * as vscode from "vscode";
 
 let anvilTerminal: vscode.Terminal | undefined;
 
-export function registerAnvilCommands(
-  context: vscode.ExtensionContext,
-): void {
+export function registerAnvilCommands(context: vscode.ExtensionContext): void {
   // ── anvil start ─────────────────────────────────────────────────
 
   context.subscriptions.push(
     vscode.commands.registerCommand("solforge.anvil.start", async () => {
       if (anvilTerminal && !anvilTerminal.exitStatus) {
-        vscode.window.showInformationMessage(
-          "Anvil is already running. Stop it first.",
-        );
+        vscode.window.showInformationMessage("Anvil is already running. Stop it first.");
         anvilTerminal.show();
         return;
       }
@@ -29,8 +25,7 @@ export function registerAnvilCommands(
       const forkUrl = await vscode.window.showInputBox({
         title: "Fork RPC URL (optional)",
         placeHolder: "https://eth-mainnet.g.alchemy.com/v2/...",
-        prompt:
-          "Enter an RPC URL to fork from, or leave empty for a fresh chain",
+        prompt: "Enter an RPC URL to fork from, or leave empty for a fresh chain",
       });
 
       const args = ["anvil"];

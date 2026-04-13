@@ -1,15 +1,11 @@
-import {
-  CodeAction,
-  CodeActionKind,
-  TextEdit,
-  Diagnostic,
-} from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
+import type { CodeAction, Diagnostic } from "vscode-languageserver/node.js";
+import { CodeActionKind, TextEdit } from "vscode-languageserver/node.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import * as path from "node:path";
-import { SymbolIndex } from "../analyzer/symbol-index.js";
-import { WorkspaceManager } from "../workspace/workspace-manager.js";
-import { SolidityParser } from "../parser/solidity-parser.js";
+import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { SolidityParser } from "../parser/solidity-parser.js";
 
 /**
  * Auto-import code action provider.
@@ -37,10 +33,7 @@ export class AutoImportProvider {
   /**
    * Provide auto-import code actions for unresolved identifiers.
    */
-  provideImportActions(
-    document: TextDocument,
-    diagnostics: Diagnostic[],
-  ): CodeAction[] {
+  provideImportActions(document: TextDocument, diagnostics: Diagnostic[]): CodeAction[] {
     const actions: CodeAction[] = [];
     const text = document.getText();
     const uri = document.uri;
@@ -67,9 +60,7 @@ export class AutoImportProvider {
       // Find candidate imports
       const candidates = this.findImportCandidates(symbolName, uri, existingImports);
       for (const candidate of candidates) {
-        actions.push(
-          this.createImportAction(uri, text, symbolName, candidate),
-        );
+        actions.push(this.createImportAction(uri, text, symbolName, candidate));
       }
     }
 
@@ -105,11 +96,7 @@ export class AutoImportProvider {
       // Check if already imported
       if (existingImports.has(sym.filePath)) continue;
 
-      const importPath = this.computeImportPath(
-        currentUri,
-        sym.filePath,
-        symbolName,
-      );
+      const importPath = this.computeImportPath(currentUri, sym.filePath, symbolName);
       if (importPath) {
         candidates.push({
           symbolName,
@@ -133,20 +120,14 @@ export class AutoImportProvider {
    * Compute the shortest correct import path from one file to another.
    * Prefers remapped paths over relative paths.
    */
-  private computeImportPath(
-    fromUri: string,
-    toUri: string,
-    symbolName: string,
-  ): string | null {
+  private computeImportPath(fromUri: string, toUri: string, symbolName: string): string | null {
     const fromPath = URI.parse(fromUri).fsPath;
     const toPath = URI.parse(toUri).fsPath;
 
     // 1. Try to match a remapping
     const remappings = this.workspace.getRemappings();
     for (const r of remappings) {
-      const remapTarget = path.isAbsolute(r.path)
-        ? r.path
-        : path.join(this.workspace.root, r.path);
+      const remapTarget = path.isAbsolute(r.path) ? r.path : path.join(this.workspace.root, r.path);
 
       if (toPath.startsWith(remapTarget)) {
         const relative = toPath.slice(remapTarget.length);
@@ -185,12 +166,7 @@ export class AutoImportProvider {
       kind: CodeActionKind.QuickFix,
       edit: {
         changes: {
-          [uri]: [
-            TextEdit.insert(
-              { line: insertLine, character: 0 },
-              importStatement,
-            ),
-          ],
+          [uri]: [TextEdit.insert({ line: insertLine, character: 0 }, importStatement)],
         },
       },
       isPreferred: true,
@@ -236,10 +212,7 @@ export class AutoImportProvider {
     return imported;
   }
 
-  private extractSymbolFromDiagnostic(
-    diag: Diagnostic,
-    text: string,
-  ): string | null {
+  private extractSymbolFromDiagnostic(diag: Diagnostic, text: string): string | null {
     // Try to extract from the diagnostic message
     const match = (diag.message as string).match(
       /(?:Undeclared identifier|not found)[.\s]*"?(\w+)"?/i,
@@ -310,7 +283,9 @@ export class AutoImportProvider {
 
   private isBuiltinType(name: string): boolean {
     const builtins = new Set([
-      "Error", "Panic", "Test", // common but might actually need import
+      "Error",
+      "Panic",
+      "Test", // common but might actually need import
     ]);
     return builtins.has(name);
   }

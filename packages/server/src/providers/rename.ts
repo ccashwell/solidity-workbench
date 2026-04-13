@@ -1,15 +1,16 @@
-import {
+import type {
   Position,
   Range,
   WorkspaceEdit,
-  TextEdit,
-  TextDocuments,
+  TextDocuments} from "vscode-languageserver/node.js";
+import {
+  TextEdit
 } from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
+import type { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import * as fs from "node:fs";
-import { SymbolIndex } from "../analyzer/symbol-index.js";
-import { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
 /**
  * Provides cross-file rename refactoring for Solidity symbols.
@@ -85,9 +86,7 @@ export class RenameProvider {
     for (const doc of this.documents.all()) {
       const edits = this.findOccurrencesInText(doc.getText(), oldName, doc.uri);
       if (edits.length > 0) {
-        changes[doc.uri] = edits.map((range) =>
-          TextEdit.replace(range, newName),
-        );
+        changes[doc.uri] = edits.map((range) => TextEdit.replace(range, newName));
       }
     }
 
@@ -101,9 +100,7 @@ export class RenameProvider {
         const fileText = fs.readFileSync(filePath, "utf-8");
         const edits = this.findOccurrencesInText(fileText, oldName, uri);
         if (edits.length > 0) {
-          changes[uri] = edits.map((range) =>
-            TextEdit.replace(range, newName),
-          );
+          changes[uri] = edits.map((range) => TextEdit.replace(range, newName));
         }
       } catch {
         // File might not exist or be unreadable
@@ -119,11 +116,7 @@ export class RenameProvider {
    * Find all occurrences of a symbol name in text, using word-boundary matching.
    * Returns ranges for each occurrence.
    */
-  private findOccurrencesInText(
-    text: string,
-    symbolName: string,
-    uri: string,
-  ): Range[] {
+  private findOccurrencesInText(text: string, symbolName: string, uri: string): Range[] {
     const ranges: Range[] = [];
     const lines = text.split("\n");
 
@@ -205,22 +198,74 @@ export class RenameProvider {
 
   private isSolidityKeyword(word: string): boolean {
     const keywords = new Set([
-      "pragma", "import", "contract", "interface", "library", "abstract",
-      "function", "modifier", "event", "error", "struct", "enum",
-      "mapping", "constructor", "receive", "fallback",
-      "public", "private", "internal", "external",
-      "pure", "view", "payable",
-      "virtual", "override", "immutable", "constant",
-      "memory", "storage", "calldata",
-      "if", "else", "for", "while", "do", "break", "continue", "return",
-      "try", "catch", "revert", "require", "assert",
-      "emit", "new", "delete", "type",
-      "assembly", "unchecked",
-      "using", "is", "as",
-      "true", "false", "this", "super",
-      "bool", "address", "string", "bytes",
-      "uint", "int", "uint256", "int256",
-      "msg", "block", "tx", "abi",
+      "pragma",
+      "import",
+      "contract",
+      "interface",
+      "library",
+      "abstract",
+      "function",
+      "modifier",
+      "event",
+      "error",
+      "struct",
+      "enum",
+      "mapping",
+      "constructor",
+      "receive",
+      "fallback",
+      "public",
+      "private",
+      "internal",
+      "external",
+      "pure",
+      "view",
+      "payable",
+      "virtual",
+      "override",
+      "immutable",
+      "constant",
+      "memory",
+      "storage",
+      "calldata",
+      "if",
+      "else",
+      "for",
+      "while",
+      "do",
+      "break",
+      "continue",
+      "return",
+      "try",
+      "catch",
+      "revert",
+      "require",
+      "assert",
+      "emit",
+      "new",
+      "delete",
+      "type",
+      "assembly",
+      "unchecked",
+      "using",
+      "is",
+      "as",
+      "true",
+      "false",
+      "this",
+      "super",
+      "bool",
+      "address",
+      "string",
+      "bytes",
+      "uint",
+      "int",
+      "uint256",
+      "int256",
+      "msg",
+      "block",
+      "tx",
+      "abi",
     ]);
     return keywords.has(word);
   }

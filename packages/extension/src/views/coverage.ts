@@ -29,18 +29,14 @@ export class CoverageProvider {
     this.coveredDecoration = vscode.window.createTextEditorDecorationType({
       isWholeLine: true,
       gutterIconPath: undefined, // set dynamically
-      backgroundColor: new vscode.ThemeColor(
-        "diffEditor.insertedTextBackground",
-      ),
+      backgroundColor: new vscode.ThemeColor("diffEditor.insertedTextBackground"),
       overviewRulerColor: new vscode.ThemeColor("testing.iconPassed"),
       overviewRulerLane: vscode.OverviewRulerLane.Left,
     });
 
     this.uncoveredDecoration = vscode.window.createTextEditorDecorationType({
       isWholeLine: true,
-      backgroundColor: new vscode.ThemeColor(
-        "diffEditor.removedTextBackground",
-      ),
+      backgroundColor: new vscode.ThemeColor("diffEditor.removedTextBackground"),
       overviewRulerColor: new vscode.ThemeColor("testing.iconFailed"),
       overviewRulerLane: vscode.OverviewRulerLane.Left,
     });
@@ -52,10 +48,7 @@ export class CoverageProvider {
       overviewRulerLane: vscode.OverviewRulerLane.Left,
     });
 
-    this.statusBarItem = vscode.window.createStatusBarItem(
-      vscode.StatusBarAlignment.Right,
-      90,
-    );
+    this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 90);
   }
 
   activate(context: vscode.ExtensionContext): void {
@@ -65,15 +58,11 @@ export class CoverageProvider {
     context.subscriptions.push(this.statusBarItem);
 
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.coverage", () =>
-        this.runCoverage(),
-      ),
+      vscode.commands.registerCommand("solforge.coverage", () => this.runCoverage()),
     );
 
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.coverageClear", () =>
-        this.clearCoverage(),
-      ),
+      vscode.commands.registerCommand("solforge.coverageClear", () => this.clearCoverage()),
     );
 
     // Update decorations when active editor changes
@@ -99,15 +88,11 @@ export class CoverageProvider {
       },
       async () => {
         try {
-          const result = await execFileAsync(
-            forgePath,
-            ["coverage", "--report", "summary"],
-            {
-              cwd: workspaceFolder.uri.fsPath,
-              maxBuffer: 50 * 1024 * 1024,
-              timeout: 600_000, // 10 minutes — coverage can be slow
-            },
-          );
+          const result = await execFileAsync(forgePath, ["coverage", "--report", "summary"], {
+            cwd: workspaceFolder.uri.fsPath,
+            maxBuffer: 50 * 1024 * 1024,
+            timeout: 600_000, // 10 minutes — coverage can be slow
+          });
 
           this.parseSummaryOutput(result.stdout);
           this.updateStatusBar();
@@ -120,9 +105,7 @@ export class CoverageProvider {
             "Coverage data loaded. Open Solidity files to see coverage highlights.",
           );
         } catch (err: any) {
-          vscode.window.showErrorMessage(
-            `forge coverage failed: ${err.stderr || err.message}`,
-          );
+          vscode.window.showErrorMessage(`forge coverage failed: ${err.stderr || err.message}`);
         }
       },
     );
@@ -198,8 +181,7 @@ export class CoverageProvider {
       coveredCount += cov.linePercent;
     }
 
-    const avgCoverage =
-      totalLines > 0 ? (coveredCount / totalLines).toFixed(1) : "0";
+    const avgCoverage = totalLines > 0 ? (coveredCount / totalLines).toFixed(1) : "0";
 
     this.statusBarItem.text = `$(shield) ${avgCoverage}% coverage`;
     this.statusBarItem.tooltip = `Solforge: ${this.coverageData.size} files analyzed`;

@@ -77,10 +77,7 @@ export function parseRemapping(raw: string): Remapping {
   };
 }
 
-export function resolveImportPath(
-  importPath: string,
-  remappings: Remapping[],
-): string | null {
+export function resolveImportPath(importPath: string, remappings: Remapping[]): string | null {
   for (const r of remappings) {
     if (importPath.startsWith(r.prefix)) {
       return r.path + importPath.slice(r.prefix.length);

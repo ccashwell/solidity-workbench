@@ -1,13 +1,9 @@
-import {
-  Hover,
-  MarkupContent,
-  MarkupKind,
-  Position,
-} from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
+import type { Hover, Position } from "vscode-languageserver/node.js";
+import { MarkupContent, MarkupKind } from "vscode-languageserver/node.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { NatspecComment, SolSymbol } from "@solforge/common";
-import { SymbolIndex } from "../analyzer/symbol-index.js";
-import { SolidityParser } from "../parser/solidity-parser.js";
+import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SolidityParser } from "../parser/solidity-parser.js";
 
 /**
  * Provides hover information for Solidity symbols.
@@ -42,8 +38,7 @@ export class HoverProvider {
     if (symbols.length === 0) return null;
 
     // Prefer the symbol from the current file
-    const sym =
-      symbols.find((s) => s.filePath === document.uri) ?? symbols[0];
+    const sym = symbols.find((s) => s.filePath === document.uri) ?? symbols[0];
 
     return this.buildHover(sym);
   }
@@ -129,21 +124,32 @@ export class HoverProvider {
   private getBuiltinHover(word: string): Hover | null {
     const builtins: Record<string, string> = {
       msg: "```solidity\nstruct {\n  address sender;\n  uint256 value;\n  bytes data;\n  bytes4 sig;\n}\n```\nTransaction message context.",
-      block: "```solidity\nstruct {\n  uint256 timestamp;\n  uint256 number;\n  uint256 chainid;\n  address payable coinbase;\n  uint256 prevrandao;\n  uint256 gaslimit;\n  uint256 basefee;\n}\n```\nCurrent block properties.",
+      block:
+        "```solidity\nstruct {\n  uint256 timestamp;\n  uint256 number;\n  uint256 chainid;\n  address payable coinbase;\n  uint256 prevrandao;\n  uint256 gaslimit;\n  uint256 basefee;\n}\n```\nCurrent block properties.",
       tx: "```solidity\nstruct {\n  address origin;\n  uint256 gasprice;\n}\n```\nTransaction properties.",
-      require: "```solidity\nrequire(bool condition, string memory message)\n```\nReverts if condition is false with the given message.",
-      assert: "```solidity\nassert(bool condition)\n```\nReverts with Panic(1) if condition is false. Use for invariants.",
-      revert: "```solidity\nrevert(string memory reason)\nrevert CustomError(args...)\n```\nAborts execution and reverts state changes.",
-      keccak256: "```solidity\nkeccak256(bytes memory) returns (bytes32)\n```\nComputes the Keccak-256 hash.",
-      sha256: "```solidity\nsha256(bytes memory) returns (bytes32)\n```\nComputes the SHA-256 hash.",
-      ecrecover: "```solidity\necrecover(bytes32 hash, uint8 v, bytes32 r, bytes32 s) returns (address)\n```\nRecovers the signer address from a signature.",
-      addmod: "```solidity\naddmod(uint256 x, uint256 y, uint256 k) returns (uint256)\n```\nComputes (x + y) % k with arbitrary precision.",
-      mulmod: "```solidity\nmulmod(uint256 x, uint256 y, uint256 k) returns (uint256)\n```\nComputes (x * y) % k with arbitrary precision.",
-      selfdestruct: "```solidity\nselfdestruct(address payable recipient)\n```\n**Deprecated.** Sends remaining Ether to recipient.",
+      require:
+        "```solidity\nrequire(bool condition, string memory message)\n```\nReverts if condition is false with the given message.",
+      assert:
+        "```solidity\nassert(bool condition)\n```\nReverts with Panic(1) if condition is false. Use for invariants.",
+      revert:
+        "```solidity\nrevert(string memory reason)\nrevert CustomError(args...)\n```\nAborts execution and reverts state changes.",
+      keccak256:
+        "```solidity\nkeccak256(bytes memory) returns (bytes32)\n```\nComputes the Keccak-256 hash.",
+      sha256:
+        "```solidity\nsha256(bytes memory) returns (bytes32)\n```\nComputes the SHA-256 hash.",
+      ecrecover:
+        "```solidity\necrecover(bytes32 hash, uint8 v, bytes32 r, bytes32 s) returns (address)\n```\nRecovers the signer address from a signature.",
+      addmod:
+        "```solidity\naddmod(uint256 x, uint256 y, uint256 k) returns (uint256)\n```\nComputes (x + y) % k with arbitrary precision.",
+      mulmod:
+        "```solidity\nmulmod(uint256 x, uint256 y, uint256 k) returns (uint256)\n```\nComputes (x * y) % k with arbitrary precision.",
+      selfdestruct:
+        "```solidity\nselfdestruct(address payable recipient)\n```\n**Deprecated.** Sends remaining Ether to recipient.",
       this: "```solidity\naddress(this)\n```\nThe current contract instance. Converts to `address`.",
       super: "The parent contract in the inheritance hierarchy.",
       gasleft: "```solidity\ngasleft() returns (uint256)\n```\nRemaining gas.",
-      blockhash: "```solidity\nblockhash(uint256 blockNumber) returns (bytes32)\n```\nHash of the given block (only works for the last 256 blocks).",
+      blockhash:
+        "```solidity\nblockhash(uint256 blockNumber) returns (bytes32)\n```\nHash of the given block (only works for the last 256 blocks).",
     };
 
     const doc = builtins[word];

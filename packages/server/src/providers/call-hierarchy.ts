@@ -1,17 +1,18 @@
-import {
+import type {
   CallHierarchyIncomingCall,
   CallHierarchyItem,
   CallHierarchyOutgoingCall,
   Position,
-  Range,
+  Range} from "vscode-languageserver/node.js";
+import {
   SymbolKind,
 } from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
+import type { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import * as fs from "node:fs";
-import { SymbolIndex } from "../analyzer/symbol-index.js";
-import { WorkspaceManager } from "../workspace/workspace-manager.js";
-import { SolidityParser } from "../parser/solidity-parser.js";
+import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { SolidityParser } from "../parser/solidity-parser.js";
 
 /**
  * Call Hierarchy provider — traces call chains through the codebase.
@@ -45,18 +46,13 @@ export class CallHierarchyProvider {
   /**
    * Prepare: identify the function at the cursor position.
    */
-  prepareCallHierarchy(
-    document: TextDocument,
-    position: Position,
-  ): CallHierarchyItem[] {
+  prepareCallHierarchy(document: TextDocument, position: Position): CallHierarchyItem[] {
     const text = document.getText();
     const word = this.getWordAtPosition(text, position);
     if (!word) return [];
 
     const symbols = this.symbolIndex.findSymbols(word);
-    const funcSymbols = symbols.filter(
-      (s) => s.kind === "function" || s.kind === "modifier",
-    );
+    const funcSymbols = symbols.filter((s) => s.kind === "function" || s.kind === "modifier");
 
     if (funcSymbols.length === 0) return [];
 
@@ -73,9 +69,7 @@ export class CallHierarchyProvider {
   /**
    * Get incoming calls — who calls this function?
    */
-  async getIncomingCalls(
-    item: CallHierarchyItem,
-  ): Promise<CallHierarchyIncomingCall[]> {
+  async getIncomingCalls(item: CallHierarchyItem): Promise<CallHierarchyIncomingCall[]> {
     await this.ensureIndexed();
 
     const key = this.makeKey(item.uri, item.name);
@@ -94,7 +88,8 @@ export class CallHierarchyProvider {
 
       if (!entry) {
         const callerSymbols = this.symbolIndex.findSymbols(site.callerName);
-        const callerSym = callerSymbols.find((s) => s.filePath === site.callerUri) ?? callerSymbols[0];
+        const callerSym =
+          callerSymbols.find((s) => s.filePath === site.callerUri) ?? callerSymbols[0];
         if (!callerSym) continue;
 
         entry = {
@@ -123,9 +118,7 @@ export class CallHierarchyProvider {
   /**
    * Get outgoing calls — what does this function call?
    */
-  async getOutgoingCalls(
-    item: CallHierarchyItem,
-  ): Promise<CallHierarchyOutgoingCall[]> {
+  async getOutgoingCalls(item: CallHierarchyItem): Promise<CallHierarchyOutgoingCall[]> {
     await this.ensureIndexed();
 
     const key = this.makeKey(item.uri, item.name);
@@ -276,16 +269,32 @@ export class CallHierarchyProvider {
 
   private isCallKeyword(name: string): boolean {
     const keywords = new Set([
-      "if", "else", "for", "while", "do", "return", "require", "assert",
-      "revert", "emit", "new", "delete", "type", "try", "catch",
-      "mapping", "assembly", "unchecked", "super", "this",
+      "if",
+      "else",
+      "for",
+      "while",
+      "do",
+      "return",
+      "require",
+      "assert",
+      "revert",
+      "emit",
+      "new",
+      "delete",
+      "type",
+      "try",
+      "catch",
+      "mapping",
+      "assembly",
+      "unchecked",
+      "super",
+      "this",
     ]);
     return keywords.has(name);
   }
 
   private isSolidityType(name: string): boolean {
-    return /^(uint|int|bytes|bool|address|string)\d*$/.test(name) ||
-      name === "byte";
+    return /^(uint|int|bytes|bool|address|string)\d*$/.test(name) || name === "byte";
   }
 
   private getWordAtPosition(text: string, position: Position): string | null {

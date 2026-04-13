@@ -1,14 +1,15 @@
-import {
+import type {
   SignatureHelp,
   SignatureInformation,
+  Position} from "vscode-languageserver/node.js";
+import {
   ParameterInformation,
-  MarkupKind,
-  Position,
+  MarkupKind
 } from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
-import type { FunctionDefinition, NatspecComment } from "@solforge/common";
-import { SymbolIndex } from "../analyzer/symbol-index.js";
-import { SolidityParser } from "../parser/solidity-parser.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
+import type { FunctionDefinition, NatspecComment, EventDefinition, ErrorDefinition } from "@solforge/common";
+import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SolidityParser } from "../parser/solidity-parser.js";
 
 /**
  * Provides signature help — the parameter hints shown while typing
@@ -29,10 +30,7 @@ export class SignatureHelpProvider {
     private parser: SolidityParser,
   ) {}
 
-  provideSignatureHelp(
-    document: TextDocument,
-    position: Position,
-  ): SignatureHelp | null {
+  provideSignatureHelp(document: TextDocument, position: Position): SignatureHelp | null {
     const text = document.getText();
     const offset = document.offsetAt(position);
 
@@ -92,7 +90,7 @@ export class SignatureHelpProvider {
     if (i < 0 || text[i] !== "(") return null;
 
     // Walk backward past whitespace to find the function name
-    let nameEnd = i;
+    const nameEnd = i;
     i--;
     while (i >= 0 && /\s/.test(text[i])) i--;
     if (i < 0) return null;
@@ -106,7 +104,7 @@ export class SignatureHelpProvider {
     // Check for container (e.g., `Contract.func(`)
     let containerName: string | undefined;
     if (nameStart > 1 && text[nameStart - 1] === ".") {
-      let containerEnd = nameStart - 2;
+      const containerEnd = nameStart - 2;
       let containerStart = containerEnd;
       while (containerStart > 0 && /[\w$]/.test(text[containerStart - 1])) containerStart--;
       containerName = text.slice(containerStart, containerEnd + 1);
@@ -170,10 +168,7 @@ export class SignatureHelpProvider {
     return signatures;
   }
 
-  private buildSignature(
-    func: FunctionDefinition,
-    containerName: string,
-  ): SignatureInformation {
+  private buildSignature(func: FunctionDefinition, containerName: string): SignatureInformation {
     const params: ParameterInformation[] = func.parameters.map((p) => {
       const label = `${p.typeName}${p.storageLocation ? " " + p.storageLocation : ""}${p.name ? " " + p.name : ""}`;
       const doc = func.natspec?.params?.[p.name ?? ""];
@@ -184,9 +179,10 @@ export class SignatureHelpProvider {
     });
 
     const paramStr = params.map((p) => p.label).join(", ");
-    const returnsStr = func.returnParameters.length > 0
-      ? ` returns (${func.returnParameters.map((p) => `${p.typeName}${p.name ? " " + p.name : ""}`).join(", ")})`
-      : "";
+    const returnsStr =
+      func.returnParameters.length > 0
+        ? ` returns (${func.returnParameters.map((p) => `${p.typeName}${p.name ? " " + p.name : ""}`).join(", ")})`
+        : "";
     const vis = func.visibility !== "public" ? ` ${func.visibility}` : "";
     const mut = func.mutability !== "nonpayable" ? ` ${func.mutability}` : "";
 
@@ -204,7 +200,7 @@ export class SignatureHelpProvider {
   }
 
   private buildEventSignature(
-    event: import("@solforge/common").EventDefinition,
+    event: EventDefinition,
     containerName: string,
   ): SignatureInformation {
     const params = event.parameters.map((p) => {
@@ -222,7 +218,7 @@ export class SignatureHelpProvider {
   }
 
   private buildErrorSignature(
-    error: import("@solforge/common").ErrorDefinition,
+    error: ErrorDefinition,
     containerName: string,
   ): SignatureInformation {
     const params = error.parameters.map((p) => {
@@ -255,10 +251,7 @@ export class SignatureHelpProvider {
   /**
    * Find the best overload — prefer the one where activeParameter is within bounds.
    */
-  private findBestOverload(
-    signatures: SignatureInformation[],
-    activeParameter: number,
-  ): number {
+  private findBestOverload(signatures: SignatureInformation[], activeParameter: number): number {
     for (let i = 0; i < signatures.length; i++) {
       if ((signatures[i].parameters?.length ?? 0) > activeParameter) {
         return i;
@@ -288,9 +281,7 @@ export class SignatureHelpProvider {
           kind: MarkupKind.Markdown,
           value: "Triggers Panic(1) if `condition` is false. Use for invariants.",
         },
-        parameters: [
-          ParameterInformation.create("bool condition", "Invariant to assert"),
-        ],
+        parameters: [ParameterInformation.create("bool condition", "Invariant to assert")],
       },
       revert: {
         label: "revert(string memory reason)",
@@ -298,9 +289,7 @@ export class SignatureHelpProvider {
           kind: MarkupKind.Markdown,
           value: "Aborts execution and reverts state changes.",
         },
-        parameters: [
-          ParameterInformation.create("string memory reason", "Revert reason"),
-        ],
+        parameters: [ParameterInformation.create("string memory reason", "Revert reason")],
       },
       keccak256: {
         label: "keccak256(bytes memory data) returns (bytes32)",
@@ -308,15 +297,11 @@ export class SignatureHelpProvider {
           kind: MarkupKind.Markdown,
           value: "Computes the Keccak-256 hash of the input.",
         },
-        parameters: [
-          ParameterInformation.create("bytes memory data", "Data to hash"),
-        ],
+        parameters: [ParameterInformation.create("bytes memory data", "Data to hash")],
       },
       sha256: {
         label: "sha256(bytes memory data) returns (bytes32)",
-        parameters: [
-          ParameterInformation.create("bytes memory data", "Data to hash"),
-        ],
+        parameters: [ParameterInformation.create("bytes memory data", "Data to hash")],
       },
       ecrecover: {
         label: "ecrecover(bytes32 hash, uint8 v, bytes32 r, bytes32 s) returns (address)",
@@ -361,9 +346,7 @@ export class SignatureHelpProvider {
           kind: MarkupKind.Markdown,
           value: "Returns the hash of the given block. Only works for the 256 most recent blocks.",
         },
-        parameters: [
-          ParameterInformation.create("uint256 blockNumber"),
-        ],
+        parameters: [ParameterInformation.create("uint256 blockNumber")],
       },
     };
 

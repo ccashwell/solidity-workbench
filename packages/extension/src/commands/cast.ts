@@ -11,9 +11,7 @@ import * as vscode from "vscode";
  * - Look up ENS names
  * - Query chain data (balance, nonce, storage)
  */
-export function registerCastCommands(
-  context: vscode.ExtensionContext,
-): void {
+export function registerCastCommands(context: vscode.ExtensionContext): void {
   // ── cast sig — get function selector ──────────────────────────────
 
   context.subscriptions.push(

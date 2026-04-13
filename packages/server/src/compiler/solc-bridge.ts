@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
 /**
  * Bridge to the Solidity compiler (solc) for type-resolved AST.
@@ -62,7 +62,8 @@ export class SolcBridge {
     const result = await this.workspace.runForge([
       "build",
       "--format-json",
-      "--match-path", filePath,
+      "--match-path",
+      filePath,
     ]);
 
     if (result.exitCode !== 0) return null;
@@ -84,10 +85,7 @@ export class SolcBridge {
   /**
    * Get type information for a node at a given byte offset.
    */
-  getTypeAtOffset(
-    filePath: string,
-    offset: number,
-  ): SolcTypeDescription | null {
+  getTypeAtOffset(filePath: string, offset: number): SolcTypeDescription | null {
     const ast = this.cachedAst.get(filePath);
     if (!ast) return null;
 
@@ -127,11 +125,12 @@ export class SolcBridge {
   /**
    * Get the storage layout for a contract.
    */
-  async getStorageLayout(
-    contractName: string,
-  ): Promise<StorageLayoutEntry[] | null> {
+  async getStorageLayout(contractName: string): Promise<StorageLayoutEntry[] | null> {
     const result = await this.workspace.runForge([
-      "inspect", contractName, "storage-layout", "--json",
+      "inspect",
+      contractName,
+      "storage-layout",
+      "--json",
     ]);
 
     if (result.exitCode !== 0) return null;
@@ -147,11 +146,12 @@ export class SolcBridge {
   /**
    * Get method identifiers (function selectors) for a contract.
    */
-  async getMethodIdentifiers(
-    contractName: string,
-  ): Promise<Record<string, string> | null> {
+  async getMethodIdentifiers(contractName: string): Promise<Record<string, string> | null> {
     const result = await this.workspace.runForge([
-      "inspect", contractName, "method-identifiers", "--json",
+      "inspect",
+      contractName,
+      "method-identifiers",
+      "--json",
     ]);
 
     if (result.exitCode !== 0) return null;
@@ -167,9 +167,7 @@ export class SolcBridge {
    * Get the ABI for a contract.
    */
   async getAbi(contractName: string): Promise<any[] | null> {
-    const result = await this.workspace.runForge([
-      "inspect", contractName, "abi",
-    ]);
+    const result = await this.workspace.runForge(["inspect", contractName, "abi"]);
 
     if (result.exitCode !== 0) return null;
 

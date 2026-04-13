@@ -32,10 +32,7 @@ import { AutoImportProvider } from "./providers/auto-import.js";
 import { CallHierarchyProvider } from "./providers/call-hierarchy.js";
 import { TypeHierarchyProvider } from "./providers/type-hierarchy.js";
 import { SolcBridge } from "./compiler/solc-bridge.js";
-import {
-  SolSemanticTokenTypes,
-  SolSemanticTokenModifiers,
-} from "@solforge/common";
+import { SolSemanticTokenTypes, SolSemanticTokenModifiers } from "@solforge/common";
 
 // Create the LSP connection and document manager
 const connection = createConnection(ProposedFeatures.all);
@@ -78,11 +75,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   completionProvider = new CompletionProvider(symbolIndex, workspaceManager);
   definitionProvider = new DefinitionProvider(symbolIndex, workspaceManager);
   hoverProvider = new HoverProvider(symbolIndex, parser);
-  diagnosticsProvider = new DiagnosticsProvider(
-    workspaceManager,
-    connection,
-    documents,
-  );
+  diagnosticsProvider = new DiagnosticsProvider(workspaceManager, connection, documents);
   diagnosticsProvider.setParser(parser);
   semanticTokensProvider = new SemanticTokensProvider(parser);
   codeActionsProvider = new CodeActionsProvider(symbolIndex, parser);
@@ -98,9 +91,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   typeHierarchyProvider = new TypeHierarchyProvider(symbolIndex, parser);
   solcBridge = new SolcBridge(workspaceManager);
 
-  connection.console.log(
-    `Solforge LSP server initializing for workspace: ${rootUri}`,
-  );
+  connection.console.log(`Solforge LSP server initializing for workspace: ${rootUri}`);
 
   return {
     capabilities: {
@@ -130,12 +121,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       },
 
       codeActionProvider: {
-        codeActionKinds: [
-          "quickfix",
-          "refactor",
-          "refactor.extract",
-          "source.organizeImports",
-        ],
+        codeActionKinds: ["quickfix", "refactor", "refactor.extract", "source.organizeImports"],
       },
 
       documentFormattingProvider: true,
@@ -171,10 +157,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 
 connection.onInitialized(async () => {
   // Register for configuration changes
-  connection.client.register(
-    DidChangeConfigurationNotification.type,
-    undefined,
-  );
+  connection.client.register(DidChangeConfigurationNotification.type, undefined);
 
   // Index the workspace
   await workspaceManager.initialize();
@@ -220,11 +203,9 @@ connection.onCompletion(async (params): Promise<CompletionItem[]> => {
   return completionProvider.provideCompletions(doc, params.position);
 });
 
-connection.onCompletionResolve(
-  async (item: CompletionItem): Promise<CompletionItem> => {
-    return completionProvider.resolveCompletion(item);
-  },
-);
+connection.onCompletionResolve(async (item: CompletionItem): Promise<CompletionItem> => {
+  return completionProvider.resolveCompletion(item);
+});
 
 connection.onDefinition(async (params) => {
   const doc = documents.get(params.textDocument.uri);

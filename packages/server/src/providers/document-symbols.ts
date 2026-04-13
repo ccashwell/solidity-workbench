@@ -1,10 +1,7 @@
-import {
-  DocumentSymbol,
-  SymbolKind,
-  Range,
-} from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
-import { SolidityParser } from "../parser/solidity-parser.js";
+import type { DocumentSymbol} from "vscode-languageserver/node.js";
+import { SymbolKind, Range } from "vscode-languageserver/node.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
+import type { SolidityParser } from "../parser/solidity-parser.js";
 import type {
   ContractDefinition,
   FunctionDefinition,
@@ -130,10 +127,7 @@ export class DocumentSymbolProvider {
       children.push({
         name: svar.name,
         detail: svar.typeName,
-        kind:
-          svar.mutability === "constant"
-            ? SymbolKind.Constant
-            : SymbolKind.Field,
+        kind: svar.mutability === "constant" ? SymbolKind.Constant : SymbolKind.Field,
         range: svar.range,
         selectionRange: svar.nameRange,
       });
@@ -164,9 +158,7 @@ export class DocumentSymbolProvider {
     if (func.isVirtual) parts.push("virtual");
     if (func.isOverride) parts.push("override");
 
-    const params = func.parameters
-      .map((p) => p.typeName)
-      .join(", ");
+    const params = func.parameters.map((p) => p.typeName).join(", ");
 
     return `(${params})${parts.length > 0 ? " " + parts.join(" ") : ""}`;
   }

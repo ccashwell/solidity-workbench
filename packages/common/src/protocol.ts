@@ -83,38 +83,38 @@ export interface InheritanceGraphResult {
  */
 export const SolSemanticTokenTypes = [
   // Standard LSP types we use
-  "namespace",      // pragma, import paths
-  "type",           // contract/interface/library names in type position
-  "class",          // contract/interface/library definitions
-  "interface",      // interface definitions
-  "struct",         // struct definitions
-  "enum",           // enum definitions
-  "typeParameter",  // (reserved)
-  "parameter",      // function/event/error parameters
-  "variable",       // local variables
-  "property",       // struct members, state variables
-  "function",       // function definitions and calls
-  "method",         // contract function calls (external)
-  "macro",          // modifiers
-  "keyword",        // Solidity keywords
-  "modifier",       // visibility/mutability keywords
-  "comment",        // natspec comments
-  "string",         // string literals
-  "number",         // number literals
-  "operator",       // operators
-  "decorator",      // annotations / natspec tags
-  "event",          // event definitions and emissions
+  "namespace", // pragma, import paths
+  "type", // contract/interface/library names in type position
+  "class", // contract/interface/library definitions
+  "interface", // interface definitions
+  "struct", // struct definitions
+  "enum", // enum definitions
+  "typeParameter", // (reserved)
+  "parameter", // function/event/error parameters
+  "variable", // local variables
+  "property", // struct members, state variables
+  "function", // function definitions and calls
+  "method", // contract function calls (external)
+  "macro", // modifiers
+  "keyword", // Solidity keywords
+  "modifier", // visibility/mutability keywords
+  "comment", // natspec comments
+  "string", // string literals
+  "number", // number literals
+  "operator", // operators
+  "decorator", // annotations / natspec tags
+  "event", // event definitions and emissions
 ] as const;
 
 export const SolSemanticTokenModifiers = [
   "declaration",
   "definition",
-  "readonly",       // constants, immutables
-  "static",         // library functions
-  "deprecated",     // (for future lint integration)
-  "abstract",       // abstract contracts/functions
-  "virtual",        // virtual functions
-  "override",       // override functions
-  "documentation",  // natspec
+  "readonly", // constants, immutables
+  "static", // library functions
+  "deprecated", // (for future lint integration)
+  "abstract", // abstract contracts/functions
+  "virtual", // virtual functions
+  "override", // override functions
+  "documentation", // natspec
   "defaultLibrary", // built-in globals (msg, block, tx, abi, etc.)
 ] as const;

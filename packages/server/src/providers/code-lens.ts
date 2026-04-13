@@ -1,12 +1,10 @@
-import {
-  CodeLens,
-  Command,
-  Range,
-} from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
-import { SymbolIndex } from "../analyzer/symbol-index.js";
-import { SolidityParser } from "../parser/solidity-parser.js";
-import { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { CodeLens, Range } from "vscode-languageserver/node.js";
+import { Command } from "vscode-languageserver/node.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
+import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { ParameterDeclaration } from "@solforge/common";
+import type { SolidityParser } from "../parser/solidity-parser.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
 /**
  * Provides code lenses — actionable annotations above code elements.
@@ -183,9 +181,9 @@ export class CodeLensProvider {
   }
 
   private isTestFunction(name: string): boolean {
-    return /^(test|testFuzz|testFork|testFail)_/.test(name) ||
-      name === "setUp" ||
-      name === "invariant";
+    return (
+      /^(test|testFuzz|testFork|testFail)_/.test(name) || name === "setUp" || name === "invariant"
+    );
   }
 
   /**
@@ -197,7 +195,7 @@ export class CodeLensProvider {
    */
   private computeSelector(
     name: string,
-    params: import("@solforge/common").ParameterDeclaration[],
+    params: ParameterDeclaration[],
   ): string | null {
     const types = params.map((p) => this.canonicalType(p.typeName));
     const sig = `${name}(${types.join(",")})`;
@@ -208,7 +206,7 @@ export class CodeLensProvider {
 
   private computeEventTopic(
     name: string,
-    params: import("@solforge/common").ParameterDeclaration[],
+    params: ParameterDeclaration[],
   ): string | null {
     const types = params.map((p) => this.canonicalType(p.typeName));
     return `${name}(${types.join(",")})`;

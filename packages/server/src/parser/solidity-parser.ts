@@ -145,10 +145,8 @@ export class SolidityParser {
 
     // Match: import "path"; import {A, B} from "path"; import "path" as Alias;
     const reSimple = /^import\s+["'](.+?)["']\s*(?:as\s+(\w+))?\s*;/;
-    const reNamed =
-      /^import\s+\{([^}]+)\}\s+from\s+["'](.+?)["']\s*;/;
-    const reWildcard =
-      /^import\s+\*\s+as\s+(\w+)\s+from\s+["'](.+?)["']\s*;/;
+    const reNamed = /^import\s+\{([^}]+)\}\s+from\s+["'](.+?)["']\s*;/;
+    const reWildcard = /^import\s+\*\s+as\s+(\w+)\s+from\s+["'](.+?)["']\s*;/;
 
     for (let i = 0; i < lines.length; i++) {
       const trimmed = lines[i].trim();
@@ -233,7 +231,8 @@ export class SolidityParser {
       const braceStart = match.index + fullMatch.length - 1;
       const braceEnd = this.findMatchingBraceIndex(text, braceStart);
       const bodyText = text.slice(braceStart + 1, braceEnd);
-      const bodyStartLine = startLine + fullMatch.slice(0, fullMatch.indexOf("{")).split("\n").length - 1;
+      const bodyStartLine =
+        startLine + fullMatch.slice(0, fullMatch.indexOf("{")).split("\n").length - 1;
 
       const nameStart = match.index + fullMatch.indexOf(name);
       const nameBeforeMatch = text.slice(0, nameStart);
@@ -269,10 +268,7 @@ export class SolidityParser {
     return contracts;
   }
 
-  private extractFunctions(
-    bodyText: string,
-    lineOffset: number,
-  ): FunctionDefinition[] {
+  private extractFunctions(bodyText: string, lineOffset: number): FunctionDefinition[] {
     const functions: FunctionDefinition[] = [];
 
     // Match function declarations
@@ -286,20 +282,14 @@ export class SolidityParser {
       const isReceive = fullMatch.trimStart().startsWith("receive");
       const isFallback = fullMatch.trimStart().startsWith("fallback");
 
-      const name = isCtor
-        ? null
-        : isReceive
-          ? null
-          : isFallback
-            ? null
-            : match[2];
+      const name = isCtor ? null : isReceive ? null : isFallback ? null : match[2];
       const kind = isCtor
-        ? "constructor" as const
+        ? ("constructor" as const)
         : isReceive
-          ? "receive" as const
+          ? ("receive" as const)
           : isFallback
-            ? "fallback" as const
-            : "function" as const;
+            ? ("fallback" as const)
+            : ("function" as const);
 
       const paramsStr = match[3] ?? "";
       const modifiersStr = match[4] ?? "";
@@ -424,14 +414,11 @@ export class SolidityParser {
     return enums;
   }
 
-  private extractStateVariables(
-    bodyText: string,
-    lineOffset: number,
-  ): StateVariableDeclaration[] {
+  private extractStateVariables(bodyText: string, lineOffset: number): StateVariableDeclaration[] {
     const vars: StateVariableDeclaration[] = [];
     // Match state variable patterns: type visibility? mutability? name (= value)?;
     const re =
-      /(?:mapping\s*\([^)]+\)|[\w\[\]]+(?:\s*\.\s*\w+)*)\s+(?:(public|private|internal|external)\s+)?(?:(constant|immutable)\s+)?(\w+)\s*(?:=[^;]*)?\s*;/g;
+      /(?:mapping\s*\([^)]+\)|[\w[\]]+(?:\s*\.\s*\w+)*)\s+(?:(public|private|internal|external)\s+)?(?:(constant|immutable)\s+)?(\w+)\s*(?:=[^;]*)?\s*;/g;
 
     let match: RegExpExecArray | null;
     while ((match = re.exec(bodyText)) !== null) {
@@ -465,10 +452,7 @@ export class SolidityParser {
     return vars;
   }
 
-  private extractModifiers(
-    bodyText: string,
-    lineOffset: number,
-  ): ModifierDefinition[] {
+  private extractModifiers(bodyText: string, lineOffset: number): ModifierDefinition[] {
     const modifiers: ModifierDefinition[] = [];
     const re = /modifier\s+(\w+)\s*\(([^)]*)\)/g;
 
@@ -501,9 +485,11 @@ export class SolidityParser {
       .map((p) => {
         const parts = p.split(/\s+/);
         const indexed = parts.includes("indexed");
-        const storageLocation = parts.find((x) =>
-          ["memory", "storage", "calldata"].includes(x),
-        ) as "memory" | "storage" | "calldata" | undefined;
+        const storageLocation = parts.find((x) => ["memory", "storage", "calldata"].includes(x)) as
+          | "memory"
+          | "storage"
+          | "calldata"
+          | undefined;
 
         // Filter out keywords to find type and name
         const meaningful = parts.filter(

@@ -1,8 +1,5 @@
-import {
-  Diagnostic,
-  DiagnosticSeverity,
-  Range,
-} from "vscode-languageserver/node.js";
+import type { Diagnostic} from "vscode-languageserver/node.js";
+import { DiagnosticSeverity, Range } from "vscode-languageserver/node.js";
 import type { SoliditySourceUnit, ContractDefinition, FunctionDefinition } from "@solforge/common";
 
 /**
@@ -60,10 +57,7 @@ export class SolidityLinter {
    * or an interface call) followed by a state variable write (sstore),
    * flag it as a potential reentrancy.
    */
-  private checkReentrancy(
-    contract: ContractDefinition,
-    lines: string[],
-  ): Diagnostic[] {
+  private checkReentrancy(contract: ContractDefinition, lines: string[]): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
     const stateVarNames = new Set(contract.stateVariables.map((v) => v.name));
 
@@ -124,10 +118,7 @@ export class SolidityLinter {
   /**
    * Detect unchecked low-level call return values.
    */
-  private checkUncheckedCalls(
-    contract: ContractDefinition,
-    lines: string[],
-  ): Diagnostic[] {
+  private checkUncheckedCalls(contract: ContractDefinition, lines: string[]): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
 
     for (const func of contract.functions) {
@@ -152,7 +143,8 @@ export class SolidityLinter {
               start: { line: absLine, character: 0 },
               end: { line: absLine, character: lines[absLine]?.length ?? 0 },
             },
-            message: "Low-level call return value not checked. Use (bool success, ) = addr.call(...) and check success.",
+            message:
+              "Low-level call return value not checked. Use (bool success, ) = addr.call(...) and check success.",
             source: "solforge",
             code: "unchecked-call",
           });
@@ -166,10 +158,7 @@ export class SolidityLinter {
   /**
    * Detect address parameters without zero-address validation.
    */
-  private checkMissingZeroCheck(
-    contract: ContractDefinition,
-    lines: string[],
-  ): Diagnostic[] {
+  private checkMissingZeroCheck(contract: ContractDefinition, lines: string[]): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
 
     for (const func of contract.functions) {
@@ -215,10 +204,7 @@ export class SolidityLinter {
   /**
    * State-changing functions should emit events for off-chain indexing.
    */
-  private checkMissingEvents(
-    contract: ContractDefinition,
-    lines: string[],
-  ): Diagnostic[] {
+  private checkMissingEvents(contract: ContractDefinition, lines: string[]): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
     const stateVarNames = new Set(contract.stateVariables.map((v) => v.name));
 
@@ -294,10 +280,7 @@ export class SolidityLinter {
   /**
    * Detect storage variable reads inside loops (gas optimization).
    */
-  private checkStorageInLoop(
-    contract: ContractDefinition,
-    lines: string[],
-  ): Diagnostic[] {
+  private checkStorageInLoop(contract: ContractDefinition, lines: string[]): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
     const stateVarNames = new Set(contract.stateVariables.map((v) => v.name));
 
@@ -332,10 +315,7 @@ export class SolidityLinter {
 
           // Check for state variable access in loop
           for (const varName of stateVarNames) {
-            if (
-              new RegExp(`\\b${varName}\\b`).test(line) &&
-              !line.startsWith("//")
-            ) {
+            if (new RegExp(`\\b${varName}\\b`).test(line) && !line.startsWith("//")) {
               diagnostics.push({
                 severity: DiagnosticSeverity.Hint,
                 range: {
@@ -370,7 +350,8 @@ export class SolidityLinter {
             start: { line: i, character: lines[i].indexOf("delegatecall") },
             end: { line: i, character: lines[i].indexOf("delegatecall") + 12 },
           },
-          message: "delegatecall detected. Ensure the target address is trusted and not user-controlled.",
+          message:
+            "delegatecall detected. Ensure the target address is trusted and not user-controlled.",
           source: "solforge",
           code: "dangerous-delegatecall",
         });

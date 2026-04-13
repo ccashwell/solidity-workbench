@@ -1,11 +1,8 @@
-import {
-  TypeHierarchyItem,
-  Position,
-  SymbolKind,
-} from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
-import { SymbolIndex } from "../analyzer/symbol-index.js";
-import { SolidityParser } from "../parser/solidity-parser.js";
+import type { TypeHierarchyItem, Position} from "vscode-languageserver/node.js";
+import { SymbolKind } from "vscode-languageserver/node.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
+import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { ContractDefinition } from "@solforge/common";
 
 /**
@@ -28,10 +25,7 @@ export class TypeHierarchyProvider {
   /**
    * Prepare: identify the contract/interface at the cursor.
    */
-  prepareTypeHierarchy(
-    document: TextDocument,
-    position: Position,
-  ): TypeHierarchyItem[] {
+  prepareTypeHierarchy(document: TextDocument, position: Position): TypeHierarchyItem[] {
     const text = document.getText();
     const word = this.getWordAtPosition(text, position);
     if (!word) return [];
@@ -81,10 +75,7 @@ export class TypeHierarchyProvider {
     return subtypes;
   }
 
-  private contractToItem(
-    contract: ContractDefinition,
-    uri: string,
-  ): TypeHierarchyItem {
+  private contractToItem(contract: ContractDefinition, uri: string): TypeHierarchyItem {
     const kind =
       contract.kind === "interface"
         ? SymbolKind.Interface
@@ -92,9 +83,10 @@ export class TypeHierarchyProvider {
           ? SymbolKind.Module
           : SymbolKind.Class;
 
-    const detail = contract.baseContracts.length > 0
-      ? `is ${contract.baseContracts.map((b) => b.baseName).join(", ")}`
-      : contract.kind;
+    const detail =
+      contract.baseContracts.length > 0
+        ? `is ${contract.baseContracts.map((b) => b.baseName).join(", ")}`
+        : contract.kind;
 
     return {
       name: contract.name,

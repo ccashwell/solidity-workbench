@@ -12,9 +12,7 @@ import * as vscode from "vscode";
  * - Multi-chain script execution
  * - Environment variable / .env file support
  */
-export function registerScriptCommands(
-  context: vscode.ExtensionContext,
-): void {
+export function registerScriptCommands(context: vscode.ExtensionContext): void {
   // ── forge script (simulate) ───────────────────────────────────────
 
   context.subscriptions.push(
@@ -32,9 +30,7 @@ export function registerScriptCommands(
       terminal.show();
 
       // Dry run first (no --broadcast flag)
-      terminal.sendText(
-        `${forgePath} script ${scriptFile} --rpc-url ${rpcUrl} -vvvv`,
-      );
+      terminal.sendText(`${forgePath} script ${scriptFile} --rpc-url ${rpcUrl} -vvvv`);
     }),
   );
 
@@ -64,9 +60,7 @@ export function registerScriptCommands(
       terminal.show();
 
       if (confirm === "Simulate First") {
-        terminal.sendText(
-          `${forgePath} script ${scriptFile} --rpc-url ${rpcUrl} -vvvv`,
-        );
+        terminal.sendText(`${forgePath} script ${scriptFile} --rpc-url ${rpcUrl} -vvvv`);
         // After simulation, user can re-run with broadcast
         vscode.window.showInformationMessage(
           "Simulation complete. Run 'Solforge: Broadcast Script' to send transactions.",
@@ -75,10 +69,26 @@ export function registerScriptCommands(
         // Ask for private key source
         const keySource = await vscode.window.showQuickPick(
           [
-            { label: "$(key) Ledger", description: "--ledger", detail: "Sign with Ledger hardware wallet" },
-            { label: "$(lock) Keystore", description: "--keystore", detail: "Sign with encrypted keystore file" },
-            { label: "$(terminal) Private Key", description: "--private-key", detail: "Enter private key (not recommended for production)" },
-            { label: "$(shield) Interactive", description: "--interactive", detail: "Enter private key interactively (hidden)" },
+            {
+              label: "$(key) Ledger",
+              description: "--ledger",
+              detail: "Sign with Ledger hardware wallet",
+            },
+            {
+              label: "$(lock) Keystore",
+              description: "--keystore",
+              detail: "Sign with encrypted keystore file",
+            },
+            {
+              label: "$(terminal) Private Key",
+              description: "--private-key",
+              detail: "Enter private key (not recommended for production)",
+            },
+            {
+              label: "$(shield) Interactive",
+              description: "--interactive",
+              detail: "Enter private key interactively (hidden)",
+            },
           ],
           { placeHolder: "How do you want to sign transactions?" },
         );
@@ -136,9 +146,7 @@ export function registerScriptCommands(
       const terminal = getOrCreateScriptTerminal();
       terminal.show();
 
-      terminal.sendText(
-        `${forgePath} script ${scriptFile} --rpc-url ${rpcUrl} --resume -vvvv`,
-      );
+      terminal.sendText(`${forgePath} script ${scriptFile} --rpc-url ${rpcUrl} --resume -vvvv`);
     }),
   );
 }
@@ -154,10 +162,7 @@ async function pickScriptFile(): Promise<string | undefined> {
   }
 
   // Otherwise, find script files in the workspace
-  const scripts = await vscode.workspace.findFiles(
-    "**/*.s.sol",
-    "**/node_modules/**",
-  );
+  const scripts = await vscode.workspace.findFiles("**/*.s.sol", "**/node_modules/**");
 
   if (scripts.length === 0) {
     vscode.window.showWarningMessage("No script files (*.s.sol) found.");

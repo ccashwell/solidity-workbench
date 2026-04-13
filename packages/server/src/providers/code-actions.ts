@@ -1,14 +1,16 @@
-import {
+import type {
   CodeAction,
-  CodeActionKind,
   CodeActionContext,
-  Range,
+  Range} from "vscode-languageserver/node.js";
+import {
+  CodeActionKind,
   TextEdit,
   WorkspaceEdit,
 } from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
-import { SymbolIndex } from "../analyzer/symbol-index.js";
-import { SolidityParser } from "../parser/solidity-parser.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
+import type { ContractDefinition, FunctionDefinition } from "@solforge/common";
+import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SolidityParser } from "../parser/solidity-parser.js";
 
 /**
  * Provides code actions (quick fixes and refactorings) for Solidity.
@@ -67,13 +69,10 @@ export class CodeActionsProvider {
       trimmed.startsWith("interface ") ||
       trimmed.startsWith("library ")
     ) {
-      const prevLine = range.start.line > 0
-        ? (text.split("\n")[range.start.line - 1] ?? "").trim()
-        : "";
+      const prevLine =
+        range.start.line > 0 ? (text.split("\n")[range.start.line - 1] ?? "").trim() : "";
       if (!prevLine.startsWith("///") && !prevLine.startsWith("/**") && !prevLine.endsWith("*/")) {
-        actions.push(
-          this.createAddNatspecAction(uri, range.start.line, trimmed),
-        );
+        actions.push(this.createAddNatspecAction(uri, range.start.line, trimmed));
       }
     }
 
@@ -89,18 +88,10 @@ export class CodeActionsProvider {
           for (const base of contract.baseContracts) {
             const baseContract = this.symbolIndex.getContract(base.baseName);
             if (baseContract && baseContract.contract.kind === "interface") {
-              const missing = this.findUnimplementedMethods(
-                contract,
-                baseContract.contract,
-              );
+              const missing = this.findUnimplementedMethods(contract, baseContract.contract);
               if (missing.length > 0) {
                 actions.push(
-                  this.createImplementInterfaceAction(
-                    uri,
-                    contract,
-                    base.baseName,
-                    missing,
-                  ),
+                  this.createImplementInterfaceAction(uri, contract, base.baseName, missing),
                 );
               }
             }
@@ -118,12 +109,7 @@ export class CodeActionsProvider {
       kind: CodeActionKind.QuickFix,
       edit: {
         changes: {
-          [uri]: [
-            TextEdit.insert(
-              { line: 0, character: 0 },
-              "// SPDX-License-Identifier: MIT\n",
-            ),
-          ],
+          [uri]: [TextEdit.insert({ line: 0, character: 0 }, "// SPDX-License-Identifier: MIT\n")],
         },
       },
       isPreferred: true,
@@ -142,11 +128,7 @@ export class CodeActionsProvider {
     };
   }
 
-  private createAddNatspecAction(
-    uri: string,
-    line: number,
-    declaration: string,
-  ): CodeAction {
+  private createAddNatspecAction(uri: string, line: number, declaration: string): CodeAction {
     // Generate a natspec stub based on the declaration
     const stub = this.generateNatspecStub(declaration);
     const indent = declaration.match(/^\s*/)?.[0] ?? "";
@@ -203,22 +185,18 @@ export class CodeActionsProvider {
   }
 
   private findUnimplementedMethods(
-    contract: import("@solforge/common").ContractDefinition,
-    iface: import("@solforge/common").ContractDefinition,
-  ): import("@solforge/common").FunctionDefinition[] {
-    const implemented = new Set(
-      contract.functions.map((f) => f.name).filter(Boolean),
-    );
-    return iface.functions.filter(
-      (f) => f.name && !implemented.has(f.name),
-    );
+    contract: ContractDefinition,
+    iface: ContractDefinition,
+  ): FunctionDefinition[] {
+    const implemented = new Set(contract.functions.map((f) => f.name).filter(Boolean));
+    return iface.functions.filter((f) => f.name && !implemented.has(f.name));
   }
 
   private createImplementInterfaceAction(
     uri: string,
-    contract: import("@solforge/common").ContractDefinition,
+    contract: ContractDefinition,
     interfaceName: string,
-    missing: import("@solforge/common").FunctionDefinition[],
+    missing: FunctionDefinition[],
   ): CodeAction {
     const stubs = missing.map((func) => {
       const params = func.parameters
@@ -227,9 +205,10 @@ export class CodeActionsProvider {
             `${p.typeName}${p.storageLocation ? " " + p.storageLocation : ""}${p.name ? " " + p.name : ""}`,
         )
         .join(", ");
-      const returns = func.returnParameters.length > 0
-        ? ` returns (${func.returnParameters.map((p) => `${p.typeName}${p.storageLocation ? " " + p.storageLocation : ""}${p.name ? " " + p.name : ""}`).join(", ")})`
-        : "";
+      const returns =
+        func.returnParameters.length > 0
+          ? ` returns (${func.returnParameters.map((p) => `${p.typeName}${p.storageLocation ? " " + p.storageLocation : ""}${p.name ? " " + p.name : ""}`).join(", ")})`
+          : "";
       const mut = func.mutability !== "nonpayable" ? ` ${func.mutability}` : "";
       return `    function ${func.name}(${params}) external${mut} override${returns} {\n        // TODO: implement\n    }`;
     });
@@ -242,10 +221,7 @@ export class CodeActionsProvider {
       edit: {
         changes: {
           [uri]: [
-            TextEdit.insert(
-              { line: insertLine, character: 0 },
-              "\n" + stubs.join("\n\n") + "\n",
-            ),
+            TextEdit.insert({ line: insertLine, character: 0 }, "\n" + stubs.join("\n\n") + "\n"),
           ],
         },
       },

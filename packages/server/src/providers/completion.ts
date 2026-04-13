@@ -1,14 +1,16 @@
-import {
+import type {
   CompletionItem,
+  Position} from "vscode-languageserver/node.js";
+import {
   CompletionItemKind,
   InsertTextFormat,
-  Position,
   MarkupContent,
   MarkupKind,
 } from "vscode-languageserver/node.js";
-import { TextDocument } from "vscode-languageserver-textdocument";
-import { SymbolIndex } from "../analyzer/symbol-index.js";
-import { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { TextDocument } from "vscode-languageserver-textdocument";
+import type { SymbolKind } from "@solforge/common";
+import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
 /**
  * Provides context-aware completions for Solidity.
@@ -25,10 +27,7 @@ export class CompletionProvider {
     private workspace: WorkspaceManager,
   ) {}
 
-  provideCompletions(
-    document: TextDocument,
-    position: Position,
-  ): CompletionItem[] {
+  provideCompletions(document: TextDocument, position: Position): CompletionItem[] {
     const text = document.getText();
     const offset = document.offsetAt(position);
     const lineText = text.split("\n")[position.line] ?? "";
@@ -78,8 +77,7 @@ export class CompletionProvider {
   }
 
   private isInImportPath(textBefore: string): boolean {
-    return /import\s+.*["'][^"']*$/.test(textBefore) ||
-      /from\s+["'][^"']*$/.test(textBefore);
+    return /import\s+.*["'][^"']*$/.test(textBefore) || /from\s+["'][^"']*$/.test(textBefore);
   }
 
   private isInNatspecComment(text: string, offset: number): boolean {
@@ -198,18 +196,58 @@ export class CompletionProvider {
 
   private provideKeywordCompletions(textBefore: string): CompletionItem[] {
     const keywords = [
-      "pragma", "import", "contract", "interface", "library", "abstract",
-      "function", "modifier", "event", "error", "struct", "enum",
-      "mapping", "constructor", "receive", "fallback",
-      "public", "private", "internal", "external",
-      "pure", "view", "payable",
-      "virtual", "override", "immutable", "constant",
-      "memory", "storage", "calldata",
-      "if", "else", "for", "while", "do", "break", "continue", "return",
-      "try", "catch", "revert", "require", "assert",
-      "emit", "new", "delete", "type",
-      "assembly", "unchecked",
-      "using", "is", "as",
+      "pragma",
+      "import",
+      "contract",
+      "interface",
+      "library",
+      "abstract",
+      "function",
+      "modifier",
+      "event",
+      "error",
+      "struct",
+      "enum",
+      "mapping",
+      "constructor",
+      "receive",
+      "fallback",
+      "public",
+      "private",
+      "internal",
+      "external",
+      "pure",
+      "view",
+      "payable",
+      "virtual",
+      "override",
+      "immutable",
+      "constant",
+      "memory",
+      "storage",
+      "calldata",
+      "if",
+      "else",
+      "for",
+      "while",
+      "do",
+      "break",
+      "continue",
+      "return",
+      "try",
+      "catch",
+      "revert",
+      "require",
+      "assert",
+      "emit",
+      "new",
+      "delete",
+      "type",
+      "assembly",
+      "unchecked",
+      "using",
+      "is",
+      "as",
     ];
 
     return keywords.map((kw) => ({
@@ -221,12 +259,31 @@ export class CompletionProvider {
   private provideTypeCompletions(): CompletionItem[] {
     const types = [
       // Value types
-      "bool", "address", "string", "bytes",
-      "uint8", "uint16", "uint32", "uint64", "uint128", "uint256",
-      "int8", "int16", "int32", "int64", "int128", "int256",
-      "bytes1", "bytes2", "bytes4", "bytes8", "bytes16", "bytes32",
+      "bool",
+      "address",
+      "string",
+      "bytes",
+      "uint8",
+      "uint16",
+      "uint32",
+      "uint64",
+      "uint128",
+      "uint256",
+      "int8",
+      "int16",
+      "int32",
+      "int64",
+      "int128",
+      "int256",
+      "bytes1",
+      "bytes2",
+      "bytes4",
+      "bytes8",
+      "bytes16",
+      "bytes32",
       // Aliases
-      "uint", "int",
+      "uint",
+      "int",
     ];
 
     const items: CompletionItem[] = types.map((t) => ({
@@ -247,10 +304,7 @@ export class CompletionProvider {
     return items;
   }
 
-  private provideSymbolCompletions(
-    uri: string,
-    textBefore: string,
-  ): CompletionItem[] {
+  private provideSymbolCompletions(uri: string, textBefore: string): CompletionItem[] {
     const fileSymbols = this.symbolIndex.getFileSymbols(uri);
     return fileSymbols.map((sym) => ({
       label: sym.name,
@@ -265,14 +319,16 @@ export class CompletionProvider {
       {
         label: "function",
         kind: CompletionItemKind.Snippet,
-        insertText: "function ${1:name}(${2:params}) ${3:public} ${4:returns (${5:type})} {\n\t$0\n}",
+        insertText:
+          "function ${1:name}(${2:params}) ${3:public} ${4:returns (${5:type})} {\n\t$0\n}",
         insertTextFormat: InsertTextFormat.Snippet,
         detail: "Function declaration",
       },
       {
         label: "modifier",
         kind: CompletionItemKind.Snippet,
-        insertText: "modifier ${1:name}(${2:params}) {\n\t${3:require(${4:condition}, \"${5:message}\");}\n\t_;\n}",
+        insertText:
+          'modifier ${1:name}(${2:params}) {\n\t${3:require(${4:condition}, "${5:message}");}\n\t_;\n}',
         insertTextFormat: InsertTextFormat.Snippet,
         detail: "Modifier declaration",
       },
@@ -307,7 +363,7 @@ export class CompletionProvider {
       {
         label: "require",
         kind: CompletionItemKind.Snippet,
-        insertText: "require(${1:condition}, \"${2:message}\");",
+        insertText: 'require(${1:condition}, "${2:message}");',
         insertTextFormat: InsertTextFormat.Snippet,
         detail: "Require statement",
       },
@@ -321,7 +377,8 @@ export class CompletionProvider {
       {
         label: "forloop",
         kind: CompletionItemKind.Snippet,
-        insertText: "for (uint256 ${1:i}; ${1:i} < ${2:length}; ${3:unchecked { ++${1:i}; \\}}) {\n\t$0\n}",
+        insertText:
+          "for (uint256 ${1:i}; ${1:i} < ${2:length}; ${3:unchecked { ++${1:i}; \\}}) {\n\t$0\n}",
         insertTextFormat: InsertTextFormat.Snippet,
         detail: "For loop with unchecked increment",
       },
@@ -385,9 +442,21 @@ export class CompletionProvider {
     return [
       { label: "encode", kind: CompletionItemKind.Method, detail: "(…) → bytes memory" },
       { label: "encodePacked", kind: CompletionItemKind.Method, detail: "(…) → bytes memory" },
-      { label: "encodeWithSelector", kind: CompletionItemKind.Method, detail: "(bytes4, …) → bytes memory" },
-      { label: "encodeWithSignature", kind: CompletionItemKind.Method, detail: "(string, …) → bytes memory" },
-      { label: "encodeCall", kind: CompletionItemKind.Method, detail: "(function, …) → bytes memory" },
+      {
+        label: "encodeWithSelector",
+        kind: CompletionItemKind.Method,
+        detail: "(bytes4, …) → bytes memory",
+      },
+      {
+        label: "encodeWithSignature",
+        kind: CompletionItemKind.Method,
+        detail: "(string, …) → bytes memory",
+      },
+      {
+        label: "encodeCall",
+        kind: CompletionItemKind.Method,
+        detail: "(function, …) → bytes memory",
+      },
       { label: "decode", kind: CompletionItemKind.Method, detail: "(bytes, (types)) → (…)" },
     ];
   }
@@ -409,8 +478,16 @@ export class CompletionProvider {
       { label: "code", kind: CompletionItemKind.Property, detail: "bytes memory" },
       { label: "codehash", kind: CompletionItemKind.Property, detail: "bytes32" },
       { label: "call", kind: CompletionItemKind.Method, detail: "(bytes) → (bool, bytes memory)" },
-      { label: "delegatecall", kind: CompletionItemKind.Method, detail: "(bytes) → (bool, bytes memory)" },
-      { label: "staticcall", kind: CompletionItemKind.Method, detail: "(bytes) → (bool, bytes memory)" },
+      {
+        label: "delegatecall",
+        kind: CompletionItemKind.Method,
+        detail: "(bytes) → (bool, bytes memory)",
+      },
+      {
+        label: "staticcall",
+        kind: CompletionItemKind.Method,
+        detail: "(bytes) → (bool, bytes memory)",
+      },
       { label: "transfer", kind: CompletionItemKind.Method, detail: "(uint256)" },
       { label: "send", kind: CompletionItemKind.Method, detail: "(uint256) → bool" },
     ];
@@ -422,23 +499,34 @@ export class CompletionProvider {
     return false;
   }
 
-  private symbolToCompletionKind(
-    kind: import("@solforge/common").SymbolKind,
-  ): CompletionItemKind {
+  private symbolToCompletionKind(kind: SymbolKind): CompletionItemKind {
     switch (kind) {
-      case "contract": return CompletionItemKind.Class;
-      case "interface": return CompletionItemKind.Interface;
-      case "library": return CompletionItemKind.Module;
-      case "function": return CompletionItemKind.Function;
-      case "modifier": return CompletionItemKind.Method;
-      case "event": return CompletionItemKind.Event;
-      case "error": return CompletionItemKind.Struct;
-      case "struct": return CompletionItemKind.Struct;
-      case "enum": return CompletionItemKind.Enum;
-      case "stateVariable": return CompletionItemKind.Field;
-      case "localVariable": return CompletionItemKind.Variable;
-      case "parameter": return CompletionItemKind.Variable;
-      case "userDefinedValueType": return CompletionItemKind.TypeParameter;
+      case "contract":
+        return CompletionItemKind.Class;
+      case "interface":
+        return CompletionItemKind.Interface;
+      case "library":
+        return CompletionItemKind.Module;
+      case "function":
+        return CompletionItemKind.Function;
+      case "modifier":
+        return CompletionItemKind.Method;
+      case "event":
+        return CompletionItemKind.Event;
+      case "error":
+        return CompletionItemKind.Struct;
+      case "struct":
+        return CompletionItemKind.Struct;
+      case "enum":
+        return CompletionItemKind.Enum;
+      case "stateVariable":
+        return CompletionItemKind.Field;
+      case "localVariable":
+        return CompletionItemKind.Variable;
+      case "parameter":
+        return CompletionItemKind.Variable;
+      case "userDefinedValueType":
+        return CompletionItemKind.TypeParameter;
     }
   }
 }
