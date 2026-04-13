@@ -6,24 +6,34 @@ import {
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { WorkspaceManager } from "../workspace/workspace-manager.js";
+import { SolidityLinter } from "./linter.js";
+import type { SolidityParser } from "../parser/solidity-parser.js";
 
 /**
- * Provides diagnostics (errors/warnings) from two sources:
+ * Provides diagnostics (errors/warnings) from three sources:
  *
  * 1. **Fast path** (on every change): Parser-based syntax errors
- * 2. **Full path** (on save): `forge build --format-json` for compiler errors
+ * 2. **Lint path** (on change, debounced): Custom security/best-practice rules
+ * 3. **Full path** (on save): `forge build --format-json` for compiler errors
  *
- * The dual-path approach gives instant feedback for typos and syntax errors
- * while still showing full compiler diagnostics after save.
+ * The triple-path approach gives instant feedback for typos and syntax,
+ * security warnings from our linter, and full compiler diagnostics on save.
  */
 export class DiagnosticsProvider {
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
+  private linter = new SolidityLinter();
+  private parser: SolidityParser | undefined;
 
   constructor(
     private workspace: WorkspaceManager,
     private connection: Connection,
     private documents: TextDocuments<TextDocument>,
   ) {}
+
+  /** Set the parser reference for lint integration */
+  setParser(parser: SolidityParser): void {
+    this.parser = parser;
+  }
 
   /**
    * Fast diagnostics from parser — runs on every change with debouncing.
@@ -37,6 +47,15 @@ export class DiagnosticsProvider {
       uri,
       setTimeout(() => {
         const diagnostics = this.extractSyntaxDiagnostics(text);
+
+        // Add linter diagnostics from parsed AST
+        if (this.parser) {
+          const result = this.parser.get(uri);
+          if (result) {
+            diagnostics.push(...this.linter.lint(result.sourceUnit, text));
+          }
+        }
+
         this.connection.sendDiagnostics({ uri, diagnostics });
       }, 300),
     );

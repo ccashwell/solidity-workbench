@@ -9,10 +9,14 @@ import {
 import { registerFoundryCommands } from "./commands/foundry.js";
 import { registerAnvilCommands } from "./commands/anvil.js";
 import { registerCastCommands } from "./commands/cast.js";
+import { registerScriptCommands } from "./commands/script.js";
+import { registerDeployCommands } from "./commands/deploy.js";
 import { FoundryTestProvider } from "./test-explorer/test-provider.js";
 import { GasProfilerProvider } from "./views/gas-profiler.js";
 import { CoverageProvider } from "./views/coverage.js";
+import { StorageLayoutPanel } from "./views/storage-layout.js";
 import { SlitherIntegration } from "./analysis/slither.js";
+import { SolidityDebugProvider } from "./debugger/debug-adapter.js";
 
 let client: LanguageClient;
 
@@ -65,6 +69,8 @@ export async function activate(
   registerFoundryCommands(context);
   registerAnvilCommands(context);
   registerCastCommands(context);
+  registerScriptCommands(context);
+  registerDeployCommands(context);
 
   // Restart server command
   context.subscriptions.push(
@@ -88,6 +94,16 @@ export async function activate(
 
   const coverage = new CoverageProvider();
   coverage.activate(context);
+
+  // ── Storage Layout ────────────────────────────────────────────────
+
+  const storageLayout = new StorageLayoutPanel();
+  storageLayout.activate(context);
+
+  // ── Debugger ──────────────────────────────────────────────────────
+
+  const debugProvider = new SolidityDebugProvider();
+  debugProvider.activate(context);
 
   // ── Static Analysis ───────────────────────────────────────────────
 

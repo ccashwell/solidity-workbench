@@ -174,13 +174,13 @@ export class SignatureHelpProvider {
     func: FunctionDefinition,
     containerName: string,
   ): SignatureInformation {
-    const params = func.parameters.map((p) => {
+    const params: ParameterInformation[] = func.parameters.map((p) => {
       const label = `${p.typeName}${p.storageLocation ? " " + p.storageLocation : ""}${p.name ? " " + p.name : ""}`;
       const doc = func.natspec?.params?.[p.name ?? ""];
-      return ParameterInformation.create(
+      return {
         label,
-        doc ? { kind: MarkupKind.Markdown, value: doc } : undefined,
-      );
+        documentation: doc ? { kind: MarkupKind.Markdown, value: doc } : undefined,
+      };
     });
 
     const paramStr = params.map((p) => p.label).join(", ");

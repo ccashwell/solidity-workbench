@@ -29,6 +29,8 @@ import { RenameProvider } from "./providers/rename.js";
 import { CodeLensProvider } from "./providers/code-lens.js";
 import { ReferencesProvider } from "./providers/references.js";
 import { AutoImportProvider } from "./providers/auto-import.js";
+import { CallHierarchyProvider } from "./providers/call-hierarchy.js";
+import { TypeHierarchyProvider } from "./providers/type-hierarchy.js";
 import { SolcBridge } from "./compiler/solc-bridge.js";
 import {
   SolSemanticTokenTypes,
@@ -59,6 +61,8 @@ let renameProvider: RenameProvider;
 let codeLensProvider: CodeLensProvider;
 let referencesProvider: ReferencesProvider;
 let autoImportProvider: AutoImportProvider;
+let callHierarchyProvider: CallHierarchyProvider;
+let typeHierarchyProvider: TypeHierarchyProvider;
 let solcBridge: SolcBridge;
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
@@ -79,6 +83,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
     connection,
     documents,
   );
+  diagnosticsProvider.setParser(parser);
   semanticTokensProvider = new SemanticTokensProvider(parser);
   codeActionsProvider = new CodeActionsProvider(symbolIndex, parser);
   formattingProvider = new FormattingProvider(workspaceManager);
@@ -89,6 +94,8 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   codeLensProvider = new CodeLensProvider(symbolIndex, parser, workspaceManager);
   referencesProvider = new ReferencesProvider(symbolIndex, workspaceManager, parser, documents);
   autoImportProvider = new AutoImportProvider(symbolIndex, workspaceManager, parser);
+  callHierarchyProvider = new CallHierarchyProvider(symbolIndex, workspaceManager, parser);
+  typeHierarchyProvider = new TypeHierarchyProvider(symbolIndex, parser);
   solcBridge = new SolcBridge(workspaceManager);
 
   connection.console.log(
@@ -326,6 +333,38 @@ connection.onCodeLens(async (params) => {
 
 connection.onCodeLensResolve(async (codeLens) => {
   return codeLensProvider.resolveCodeLens(codeLens);
+});
+
+// ── Call Hierarchy ───────────────────────────────────────────────────
+
+connection.languages.callHierarchy.onPrepare(async (params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  return callHierarchyProvider.prepareCallHierarchy(doc, params.position);
+});
+
+connection.languages.callHierarchy.onIncomingCalls(async (params) => {
+  return callHierarchyProvider.getIncomingCalls(params.item);
+});
+
+connection.languages.callHierarchy.onOutgoingCalls(async (params) => {
+  return callHierarchyProvider.getOutgoingCalls(params.item);
+});
+
+// ── Type Hierarchy ──────────────────────────────────────────────────
+
+connection.languages.typeHierarchy.onPrepare(async (params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  return typeHierarchyProvider.prepareTypeHierarchy(doc, params.position);
+});
+
+connection.languages.typeHierarchy.onSupertypes(async (params) => {
+  return typeHierarchyProvider.getSupertypes(params.item);
+});
+
+connection.languages.typeHierarchy.onSubtypes(async (params) => {
+  return typeHierarchyProvider.getSubtypes(params.item);
 });
 
 // ── Start ────────────────────────────────────────────────────────────

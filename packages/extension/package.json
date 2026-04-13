@@ -195,6 +195,121 @@
       {
         "command": "solforge.cast.storage",
         "title": "Solforge: Read Storage Slot (cast storage)"
+      },
+      {
+        "command": "solforge.script.simulate",
+        "title": "Solforge: Run Script — Simulate (forge script)"
+      },
+      {
+        "command": "solforge.script.broadcast",
+        "title": "Solforge: Run Script — Broadcast (forge script --broadcast)"
+      },
+      {
+        "command": "solforge.script.resume",
+        "title": "Solforge: Resume Script Broadcast (forge script --resume)"
+      },
+      {
+        "command": "solforge.deploy.create",
+        "title": "Solforge: Deploy Contract (forge create)"
+      },
+      {
+        "command": "solforge.deploy.verify",
+        "title": "Solforge: Verify Contract on Etherscan"
+      },
+      {
+        "command": "solforge.deploy.verifyCheck",
+        "title": "Solforge: Check Verification Status"
+      },
+      {
+        "command": "solforge.debugTest",
+        "title": "Solforge: Debug Test (forge test --debug)"
+      },
+      {
+        "command": "solforge.debugScript",
+        "title": "Solforge: Debug Script (forge debug)"
+      },
+      {
+        "command": "solforge.debugTransaction",
+        "title": "Solforge: Debug Transaction"
+      },
+      {
+        "command": "solforge.inspectStoragePanel",
+        "title": "Solforge: Storage Layout Visualization"
+      }
+    ],
+    "breakpoints": [
+      { "language": "solidity" }
+    ],
+    "debuggers": [
+      {
+        "type": "solforge",
+        "label": "Solforge Debugger",
+        "languages": ["solidity"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["mode"],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "description": "Debug mode: test, script, or transaction",
+                "enum": ["test", "script", "transaction"]
+              },
+              "testFunction": {
+                "type": "string",
+                "description": "Test function name for mode=test"
+              },
+              "scriptFile": {
+                "type": "string",
+                "description": "Script file path for mode=script"
+              },
+              "txHash": {
+                "type": "string",
+                "description": "Transaction hash for mode=transaction"
+              },
+              "rpcUrl": {
+                "type": "string",
+                "description": "RPC URL for mode=transaction",
+                "default": "http://127.0.0.1:8545"
+              }
+            }
+          }
+        },
+        "configurationSnippets": [
+          {
+            "label": "Solforge: Debug Test",
+            "description": "Debug a Foundry test function",
+            "body": {
+              "type": "solforge",
+              "request": "launch",
+              "name": "Debug Forge Test",
+              "mode": "test",
+              "testFunction": "${1:test_myFunction}"
+            }
+          },
+          {
+            "label": "Solforge: Debug Script",
+            "description": "Debug a Foundry script",
+            "body": {
+              "type": "solforge",
+              "request": "launch",
+              "name": "Debug Forge Script",
+              "mode": "script",
+              "scriptFile": "^\"${2:\\${file\\}}\""
+            }
+          },
+          {
+            "label": "Solforge: Debug Transaction",
+            "description": "Replay and debug a transaction",
+            "body": {
+              "type": "solforge",
+              "request": "launch",
+              "name": "Debug Transaction",
+              "mode": "transaction",
+              "txHash": "${1:0x...}",
+              "rpcUrl": "${2:http://127.0.0.1:8545}"
+            }
+          }
+        ]
       }
     ],
     "views": {
