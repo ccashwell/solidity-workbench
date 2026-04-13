@@ -23,6 +23,13 @@ import { SemanticTokensProvider } from "./providers/semantic-tokens.js";
 import { CodeActionsProvider } from "./providers/code-actions.js";
 import { FormattingProvider } from "./providers/formatting.js";
 import { DocumentSymbolProvider } from "./providers/document-symbols.js";
+import { InlayHintsProvider } from "./providers/inlay-hints.js";
+import { SignatureHelpProvider } from "./providers/signature-help.js";
+import { RenameProvider } from "./providers/rename.js";
+import { CodeLensProvider } from "./providers/code-lens.js";
+import { ReferencesProvider } from "./providers/references.js";
+import { AutoImportProvider } from "./providers/auto-import.js";
+import { SolcBridge } from "./compiler/solc-bridge.js";
 import {
   SolSemanticTokenTypes,
   SolSemanticTokenModifiers,
@@ -46,6 +53,13 @@ let semanticTokensProvider: SemanticTokensProvider;
 let codeActionsProvider: CodeActionsProvider;
 let formattingProvider: FormattingProvider;
 let documentSymbolProvider: DocumentSymbolProvider;
+let inlayHintsProvider: InlayHintsProvider;
+let signatureHelpProvider: SignatureHelpProvider;
+let renameProvider: RenameProvider;
+let codeLensProvider: CodeLensProvider;
+let referencesProvider: ReferencesProvider;
+let autoImportProvider: AutoImportProvider;
+let solcBridge: SolcBridge;
 
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   const workspaceFolders = params.workspaceFolders ?? [];
@@ -69,6 +83,13 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   codeActionsProvider = new CodeActionsProvider(symbolIndex, parser);
   formattingProvider = new FormattingProvider(workspaceManager);
   documentSymbolProvider = new DocumentSymbolProvider(parser);
+  inlayHintsProvider = new InlayHintsProvider(symbolIndex, parser);
+  signatureHelpProvider = new SignatureHelpProvider(symbolIndex, parser);
+  renameProvider = new RenameProvider(symbolIndex, workspaceManager, documents);
+  codeLensProvider = new CodeLensProvider(symbolIndex, parser, workspaceManager);
+  referencesProvider = new ReferencesProvider(symbolIndex, workspaceManager, parser, documents);
+  autoImportProvider = new AutoImportProvider(symbolIndex, workspaceManager, parser);
+  solcBridge = new SolcBridge(workspaceManager);
 
   connection.console.log(
     `Solforge LSP server initializing for workspace: ${rootUri}`,
@@ -172,6 +193,11 @@ documents.onDidChangeContent(async (change) => {
 documents.onDidSave(async (event) => {
   // Trigger forge build for full diagnostics on save
   await diagnosticsProvider.provideFullDiagnostics(event.document.uri);
+
+  // Update the rich AST from solc (type-resolved analysis)
+  solcBridge.buildAndExtractAst().catch((err) => {
+    connection.console.error(`solc AST extraction failed: ${err}`);
+  });
 });
 
 documents.onDidClose((event) => {
@@ -208,7 +234,7 @@ connection.onTypeDefinition(async (params) => {
 connection.onReferences(async (params) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return [];
-  return definitionProvider.provideReferences(doc, params.position);
+  return referencesProvider.provideReferences(doc, params.position, params.context);
 });
 
 connection.onHover(async (params): Promise<Hover | null> => {
@@ -230,7 +256,10 @@ connection.onWorkspaceSymbol(async (params) => {
 connection.onCodeAction(async (params): Promise<CodeAction[]> => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return [];
-  return codeActionsProvider.provideCodeActions(doc, params.range, params.context);
+  const actions = codeActionsProvider.provideCodeActions(doc, params.range, params.context);
+  // Append auto-import actions from diagnostics
+  const importActions = autoImportProvider.provideImportActions(doc, params.context.diagnostics);
+  return [...actions, ...importActions];
 });
 
 connection.onDocumentFormatting(async (params) => {
@@ -255,6 +284,48 @@ connection.languages.semanticTokens.onRange(async (params) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return { data: [] };
   return semanticTokensProvider.provideSemanticTokensRange(doc, params.range);
+});
+
+// ── Inlay Hints ──────────────────────────────────────────────────────
+
+connection.languages.inlayHint.on(async (params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  return inlayHintsProvider.provideInlayHints(doc, params.range);
+});
+
+// ── Signature Help ───────────────────────────────────────────────────
+
+connection.onSignatureHelp(async (params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  return signatureHelpProvider.provideSignatureHelp(doc, params.position);
+});
+
+// ── Rename ───────────────────────────────────────────────────────────
+
+connection.onPrepareRename(async (params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  return renameProvider.prepareRename(doc, params.position);
+});
+
+connection.onRenameRequest(async (params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  return renameProvider.provideRename(doc, params.position, params.newName);
+});
+
+// ── Code Lens ────────────────────────────────────────────────────────
+
+connection.onCodeLens(async (params) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  return codeLensProvider.provideCodeLenses(doc);
+});
+
+connection.onCodeLensResolve(async (codeLens) => {
+  return codeLensProvider.resolveCodeLens(codeLens);
 });
 
 // ── Start ────────────────────────────────────────────────────────────

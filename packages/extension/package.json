@@ -147,8 +147,84 @@
       {
         "command": "solforge.restartServer",
         "title": "Solforge: Restart Language Server"
+      },
+      {
+        "command": "solforge.coverage",
+        "title": "Solforge: Run Coverage (forge coverage)"
+      },
+      {
+        "command": "solforge.coverageClear",
+        "title": "Solforge: Clear Coverage Highlights"
+      },
+      {
+        "command": "solforge.slither",
+        "title": "Solforge: Run Slither Analysis"
+      },
+      {
+        "command": "solforge.cast.sig",
+        "title": "Solforge: Get Function Selector (cast sig)"
+      },
+      {
+        "command": "solforge.cast.4byte",
+        "title": "Solforge: Decode Selector (cast 4byte)"
+      },
+      {
+        "command": "solforge.cast.calldataDecode",
+        "title": "Solforge: Decode Calldata (cast calldata-decode)"
+      },
+      {
+        "command": "solforge.cast.abiEncode",
+        "title": "Solforge: ABI Encode (cast abi-encode)"
+      },
+      {
+        "command": "solforge.cast.keccak",
+        "title": "Solforge: Keccak256 Hash (cast keccak)"
+      },
+      {
+        "command": "solforge.cast.toWei",
+        "title": "Solforge: Convert to Wei (cast to-wei)"
+      },
+      {
+        "command": "solforge.cast.fromWei",
+        "title": "Solforge: Convert from Wei (cast from-wei)"
+      },
+      {
+        "command": "solforge.cast.balance",
+        "title": "Solforge: Check Balance (cast balance)"
+      },
+      {
+        "command": "solforge.cast.storage",
+        "title": "Solforge: Read Storage Slot (cast storage)"
       }
     ],
+    "views": {
+      "test": [
+        {
+          "id": "solforge-gas-profiler",
+          "name": "Gas Profiler",
+          "when": "workspaceFolderCount > 0"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "solforge.testFunction",
+          "when": "resourceLangId == solidity && resourceFilename =~ /\\.t\\.sol$/",
+          "group": "solforge@1"
+        },
+        {
+          "command": "solforge.cast.keccak",
+          "when": "resourceLangId == solidity && editorHasSelection",
+          "group": "solforge@2"
+        },
+        {
+          "command": "solforge.cast.sig",
+          "when": "resourceLangId == solidity && editorHasSelection",
+          "group": "solforge@3"
+        }
+      ]
+    },
     "taskDefinitions": [
       {
         "type": "forge",

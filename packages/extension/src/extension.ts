@@ -8,7 +8,11 @@ import {
 } from "vscode-languageclient/node";
 import { registerFoundryCommands } from "./commands/foundry.js";
 import { registerAnvilCommands } from "./commands/anvil.js";
+import { registerCastCommands } from "./commands/cast.js";
 import { FoundryTestProvider } from "./test-explorer/test-provider.js";
+import { GasProfilerProvider } from "./views/gas-profiler.js";
+import { CoverageProvider } from "./views/coverage.js";
+import { SlitherIntegration } from "./analysis/slither.js";
 
 let client: LanguageClient;
 
@@ -40,6 +44,7 @@ export async function activate(
         vscode.workspace.createFileSystemWatcher("**/*.sol"),
         vscode.workspace.createFileSystemWatcher("**/foundry.toml"),
         vscode.workspace.createFileSystemWatcher("**/remappings.txt"),
+        vscode.workspace.createFileSystemWatcher("**/.gas-snapshot"),
       ],
     },
     outputChannelName: "Solforge",
@@ -59,6 +64,7 @@ export async function activate(
 
   registerFoundryCommands(context);
   registerAnvilCommands(context);
+  registerCastCommands(context);
 
   // Restart server command
   context.subscriptions.push(
@@ -71,10 +77,40 @@ export async function activate(
   // ── Test Explorer ─────────────────────────────────────────────────
 
   const testProvider = new FoundryTestProvider();
-  context.subscriptions.push(
-    vscode.tests.createTestController("solforge-tests", "Solforge Tests"),
-  );
   testProvider.activate(context);
+
+  // ── Gas Profiler ──────────────────────────────────────────────────
+
+  const gasProfiler = new GasProfilerProvider();
+  gasProfiler.activate(context);
+
+  // ── Coverage ──────────────────────────────────────────────────────
+
+  const coverage = new CoverageProvider();
+  coverage.activate(context);
+
+  // ── Static Analysis ───────────────────────────────────────────────
+
+  const slither = new SlitherIntegration();
+  context.subscriptions.push({ dispose: () => slither.dispose() });
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("solforge.slither", () =>
+      slither.analyze(),
+    ),
+  );
+
+  // Auto-run slither on save if enabled
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument((doc) => {
+      if (doc.languageId === "solidity") {
+        const config = vscode.workspace.getConfiguration("solforge");
+        if (config.get<boolean>("slither.enabled")) {
+          slither.analyze();
+        }
+      }
+    }),
+  );
 
   // ── Status Bar ────────────────────────────────────────────────────
 
