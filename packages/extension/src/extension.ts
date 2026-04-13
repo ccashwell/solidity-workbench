@@ -17,6 +17,8 @@ import { CoverageProvider } from "./views/coverage.js";
 import { StorageLayoutPanel } from "./views/storage-layout.js";
 import { SlitherIntegration } from "./analysis/slither.js";
 import { SolidityDebugProvider } from "./debugger/debug-adapter.js";
+import { ChiselIntegration } from "./views/chisel.js";
+import { FoundryTomlProvider } from "./views/foundry-toml-schema.js";
 
 let client: LanguageClient;
 
@@ -97,6 +99,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const debugProvider = new SolidityDebugProvider();
   debugProvider.activate(context);
+
+  // ── Chisel REPL ───────────────────────────────────────────────────
+
+  const chisel = new ChiselIntegration();
+  chisel.activate(context);
+
+  // ── Foundry.toml IntelliSense ─────────────────────────────────────
+
+  const foundryToml = new FoundryTomlProvider();
+  foundryToml.activate(context);
 
   // ── Static Analysis ───────────────────────────────────────────────
 

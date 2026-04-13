@@ -126,6 +126,15 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
     }),
   );
 
+  // ── copy selector ──────────────────────────────────────────────
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("solforge.copySelector", async (selector: string) => {
+      await vscode.env.clipboard.writeText(selector);
+      vscode.window.showInformationMessage(`Copied: ${selector}`);
+    }),
+  );
+
   // ── forge inspect (storage layout) ─────────────────────────────
 
   context.subscriptions.push(

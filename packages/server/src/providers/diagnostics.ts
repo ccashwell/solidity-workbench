@@ -1,14 +1,29 @@
-import type {
-  Connection,
-  Diagnostic,
-  TextDocuments} from "vscode-languageserver/node.js";
-import {
-  DiagnosticSeverity
-} from "vscode-languageserver/node.js";
+import type { Connection, Diagnostic, TextDocuments } from "vscode-languageserver/node.js";
+import { DiagnosticSeverity } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
+import * as fs from "node:fs";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import { SolidityLinter } from "./linter.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
+
+/**
+ * Convert a byte offset in a text string to a 0-based line/character position.
+ */
+function byteOffsetToPosition(text: string, offset: number): { line: number; character: number } {
+  const lines = text.split("\n");
+  let remaining = offset;
+  for (let i = 0; i < lines.length; i++) {
+    // +1 accounts for the newline character that was split out
+    const lineLen = lines[i].length + 1;
+    if (remaining < lineLen) {
+      return { line: i, character: remaining };
+    }
+    remaining -= lineLen;
+  }
+  // If offset is beyond the text, return end of file
+  const lastLine = lines.length - 1;
+  return { line: lastLine, character: lines[lastLine].length };
+}
 
 /**
  * Provides diagnostics (errors/warnings) from three sources:
@@ -196,8 +211,22 @@ export class DiagnosticsProvider {
     try {
       const output = JSON.parse(stdout);
       if (output.errors) {
+        // Cache file texts so we only read each file once
+        const fileTextCache = new Map<string, string>();
         for (const error of output.errors) {
-          this.parseSolcError(error, diagnosticsByFile);
+          let fileText: string | undefined;
+          if (error.sourceLocation?.file) {
+            const filePath = `${this.workspace.root}/${error.sourceLocation.file}`;
+            if (!fileTextCache.has(filePath)) {
+              try {
+                fileTextCache.set(filePath, fs.readFileSync(filePath, "utf-8"));
+              } catch {
+                /* file not readable */
+              }
+            }
+            fileText = fileTextCache.get(filePath);
+          }
+          this.parseSolcError(error, diagnosticsByFile, fileText);
         }
       }
       return diagnosticsByFile;
@@ -248,7 +277,11 @@ export class DiagnosticsProvider {
     return diagnosticsByFile;
   }
 
-  private parseSolcError(error: any, diagnosticsByFile: Map<string, Diagnostic[]>): void {
+  private parseSolcError(
+    error: any,
+    diagnosticsByFile: Map<string, Diagnostic[]>,
+    fileText?: string,
+  ): void {
     if (!error.sourceLocation) return;
 
     const file = error.sourceLocation.file;
@@ -257,8 +290,20 @@ export class DiagnosticsProvider {
     const fileUri = `file://${this.workspace.root}/${file}`;
     const diags = diagnosticsByFile.get(fileUri) ?? [];
 
-    // solc provides byte offset, we need line/col
-    // For now use start=0,0 — the full implementation maps byte offsets
+    // Convert solc byte offsets to line/col using the file text
+    let start = { line: 0, character: 0 };
+    let end = { line: 0, character: 0 };
+    if (fileText) {
+      if (typeof error.sourceLocation.start === "number") {
+        start = byteOffsetToPosition(fileText, error.sourceLocation.start);
+      }
+      if (typeof error.sourceLocation.end === "number") {
+        end = byteOffsetToPosition(fileText, error.sourceLocation.end);
+      } else {
+        end = start;
+      }
+    }
+
     diags.push({
       severity:
         error.severity === "error"
@@ -266,10 +311,7 @@ export class DiagnosticsProvider {
           : error.severity === "warning"
             ? DiagnosticSeverity.Warning
             : DiagnosticSeverity.Information,
-      range: {
-        start: { line: 0, character: 0 },
-        end: { line: 0, character: 0 },
-      },
+      range: { start, end },
       message: error.message || error.formattedMessage || "Unknown error",
       source: "solc",
       code: error.errorCode,

@@ -1,12 +1,13 @@
-import type { Definition, Position} from "vscode-languageserver/node.js";
-import { Location, Range } from "vscode-languageserver/node.js";
+import type { Definition, Position } from "vscode-languageserver/node.js";
+import { Location } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import { getWordAtPosition } from "../utils/text.js";
 
 /**
- * Provides go-to-definition, go-to-type-definition, and find-references.
+ * Provides go-to-definition and go-to-type-definition.
  *
  * Strategy:
  * 1. Get the word at the cursor position
@@ -22,7 +23,7 @@ export class DefinitionProvider {
 
   provideDefinition(document: TextDocument, position: Position): Definition | null {
     const text = document.getText();
-    const word = this.getWordAtPosition(text, position);
+    const word = getWordAtPosition(text, position)?.text ?? null;
     if (!word) return null;
 
     // Check if this is an import path — navigate to the file
@@ -66,7 +67,7 @@ export class DefinitionProvider {
 
   provideTypeDefinition(document: TextDocument, position: Position): Definition | null {
     const text = document.getText();
-    const word = this.getWordAtPosition(text, position);
+    const word = getWordAtPosition(text, position)?.text ?? null;
     if (!word) return null;
 
     // Look up the symbol to find its type
@@ -92,28 +93,6 @@ export class DefinitionProvider {
     }
 
     return null;
-  }
-
-  provideReferences(document: TextDocument, position: Position): Location[] {
-    const text = document.getText();
-    const word = this.getWordAtPosition(text, position);
-    if (!word) return [];
-
-    // Search all indexed files for occurrences of this word
-    // This is a simple textual search — the rich AST from solc would
-    // give us semantically accurate references
-    const references: Location[] = [];
-
-    for (const uri of this.workspace.getAllFileUris()) {
-      const symbols = this.symbolIndex.getFileSymbols(uri);
-      for (const sym of symbols) {
-        if (sym.name === word) {
-          references.push(Location.create(sym.filePath, sym.nameRange));
-        }
-      }
-    }
-
-    return references;
   }
 
   private resolveImportAtPosition(text: string, position: Position): string | null {
@@ -187,20 +166,6 @@ export class DefinitionProvider {
       }
     }
     return null;
-  }
-
-  private getWordAtPosition(text: string, position: Position): string | null {
-    const lines = text.split("\n");
-    if (position.line >= lines.length) return null;
-    const line = lines[position.line];
-
-    let start = position.character;
-    let end = position.character;
-    while (start > 0 && /[\w$]/.test(line[start - 1])) start--;
-    while (end < line.length && /[\w$]/.test(line[end])) end++;
-
-    if (start === end) return null;
-    return line.slice(start, end);
   }
 
   private getWordAfterDot(line: string, dotPosition: number): string {

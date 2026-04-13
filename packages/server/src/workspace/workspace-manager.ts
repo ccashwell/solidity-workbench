@@ -2,14 +2,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Connection } from "vscode-languageserver/node.js";
 import { URI } from "vscode-uri";
-import type {
-  FoundryProfile,
-  Remapping} from "@solforge/common";
-import {
-  FoundryConfig,
-  parseRemapping,
-  resolveImportPath,
-} from "@solforge/common";
+import { parse as parseToml } from "toml";
+import type { FoundryProfile, Remapping } from "@solforge/common";
+import { FoundryConfig, parseRemapping, resolveImportPath } from "@solforge/common";
 
 /**
  * Manages workspace state: foundry.toml, remappings, source directories,
@@ -120,8 +115,8 @@ export class WorkspaceManager {
           }
         }
       }
-    } catch {
-      // remappings.txt is optional
+    } catch (err) {
+      this.connection.console.warn(`Failed to read remappings.txt: ${err}`);
     }
 
     // 3. Auto-detect remappings from lib/ directory (forge-style)
@@ -143,8 +138,8 @@ export class WorkspaceManager {
             }
           }
         }
-      } catch {
-        // lib directory might not exist
+      } catch (err) {
+        this.connection.console.warn(`Failed to scan lib directory ${libDir}: ${err}`);
       }
     }
 
@@ -178,8 +173,8 @@ export class WorkspaceManager {
           this.sourceFiles.set(uri, fullPath);
         }
       }
-    } catch {
-      // Directory may not be readable
+    } catch (err) {
+      this.connection.console.warn(`Failed to walk directory ${dir}: ${err}`);
     }
   }
 
@@ -256,95 +251,35 @@ export class WorkspaceManager {
   }
 
   /**
-   * Minimal foundry.toml parser extracting [profile.default] fields.
+   * Parse foundry.toml using a proper TOML parser.
    */
   private parseFoundryToml(content: string): FoundryProfile {
-    const profile: FoundryProfile = {};
-    let inDefaultProfile = false;
+    try {
+      const parsed = parseToml(content);
+      const defaultProfile = parsed?.profile?.default ?? parsed?.default ?? parsed;
 
-    for (const line of content.split("\n")) {
-      const trimmed = line.trim();
-
-      // Track section headers
-      if (trimmed.startsWith("[")) {
-        inDefaultProfile = trimmed === "[profile.default]" || trimmed === "[default]";
-        continue;
+      const profile: FoundryProfile = {};
+      if (defaultProfile.src) profile.src = defaultProfile.src;
+      if (defaultProfile.test) profile.test = defaultProfile.test;
+      if (defaultProfile.script) profile.script = defaultProfile.script;
+      if (defaultProfile.out) profile.out = defaultProfile.out;
+      if (defaultProfile.libs) profile.libs = defaultProfile.libs;
+      if (defaultProfile.remappings) profile.remappings = defaultProfile.remappings;
+      if (defaultProfile.solc_version || defaultProfile.solc) {
+        profile.solc_version = defaultProfile.solc_version ?? defaultProfile.solc;
       }
-
-      if (!inDefaultProfile) continue;
-      if (!trimmed || trimmed.startsWith("#")) continue;
-
-      const eqIdx = trimmed.indexOf("=");
-      if (eqIdx === -1) continue;
-
-      const key = trimmed.slice(0, eqIdx).trim();
-      let value = trimmed.slice(eqIdx + 1).trim();
-
-      // Strip inline comments
-      const commentIdx = value.indexOf(" #");
-      if (commentIdx !== -1) value = value.slice(0, commentIdx).trim();
-
-      // Strip quotes
-      if (
-        (value.startsWith('"') && value.endsWith('"')) ||
-        (value.startsWith("'") && value.endsWith("'"))
-      ) {
-        value = value.slice(1, -1);
+      if (defaultProfile.evm_version) profile.evm_version = defaultProfile.evm_version;
+      if (defaultProfile.optimizer !== undefined) profile.optimizer = defaultProfile.optimizer;
+      if (defaultProfile.optimizer_runs !== undefined) {
+        profile.optimizer_runs = defaultProfile.optimizer_runs;
       }
+      if (defaultProfile.via_ir !== undefined) profile.via_ir = defaultProfile.via_ir;
+      if (defaultProfile.fmt) profile.fmt = defaultProfile.fmt;
 
-      switch (key) {
-        case "src":
-          profile.src = value;
-          break;
-        case "test":
-          profile.test = value;
-          break;
-        case "script":
-          profile.script = value;
-          break;
-        case "out":
-          profile.out = value;
-          break;
-        case "libs":
-          profile.libs = this.parseTomlArray(value);
-          break;
-        case "remappings":
-          profile.remappings = this.parseTomlArray(value);
-          break;
-        case "solc_version":
-        case "solc":
-          profile.solc_version = value;
-          break;
-        case "evm_version":
-          profile.evm_version = value;
-          break;
-        case "optimizer":
-          profile.optimizer = value === "true";
-          break;
-        case "optimizer_runs":
-          profile.optimizer_runs = parseInt(value, 10);
-          break;
-        case "via_ir":
-          profile.via_ir = value === "true";
-          break;
-      }
+      return profile;
+    } catch (err) {
+      this.connection.console.error(`Failed to parse foundry.toml: ${err}`);
+      return {};
     }
-
-    return profile;
-  }
-
-  private parseTomlArray(value: string): string[] {
-    if (!value.startsWith("[") || !value.endsWith("]")) return [];
-    const inner = value.slice(1, -1);
-    return inner
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .map((s) => {
-        if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-          return s.slice(1, -1);
-        }
-        return s;
-      });
   }
 }

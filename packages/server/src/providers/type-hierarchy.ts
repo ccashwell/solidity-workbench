@@ -1,9 +1,10 @@
-import type { TypeHierarchyItem, Position} from "vscode-languageserver/node.js";
+import type { TypeHierarchyItem, Position } from "vscode-languageserver/node.js";
 import { SymbolKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { ContractDefinition } from "@solforge/common";
+import { getWordAtPosition } from "../utils/text.js";
 
 /**
  * Type Hierarchy provider — visualizes the inheritance tree.
@@ -27,7 +28,7 @@ export class TypeHierarchyProvider {
    */
   prepareTypeHierarchy(document: TextDocument, position: Position): TypeHierarchyItem[] {
     const text = document.getText();
-    const word = this.getWordAtPosition(text, position);
+    const word = getWordAtPosition(text, position)?.text ?? null;
     if (!word) return [];
 
     const entry = this.symbolIndex.getContract(word);
@@ -96,17 +97,5 @@ export class TypeHierarchyProvider {
       selectionRange: contract.nameRange,
       detail,
     };
-  }
-
-  private getWordAtPosition(text: string, position: Position): string | null {
-    const lines = text.split("\n");
-    if (position.line >= lines.length) return null;
-    const line = lines[position.line];
-    let start = position.character;
-    let end = position.character;
-    while (start > 0 && /[\w$]/.test(line[start - 1])) start--;
-    while (end < line.length && /[\w$]/.test(line[end])) end++;
-    if (start === end) return null;
-    return line.slice(start, end);
   }
 }

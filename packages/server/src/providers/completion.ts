@@ -1,6 +1,4 @@
-import type {
-  CompletionItem,
-  Position} from "vscode-languageserver/node.js";
+import type { CompletionItem, Position } from "vscode-languageserver/node.js";
 import {
   CompletionItemKind,
   InsertTextFormat,
@@ -493,10 +491,22 @@ export class CompletionProvider {
     ];
   }
 
-  private isAddressLike(_target: string, _text: string): boolean {
-    // Heuristic: could check type information from symbol table
-    // For now, we check if the name suggests an address
-    return false;
+  private isAddressLike(target: string, text: string): boolean {
+    // Check symbol index for the variable's type
+    const symbols = this.symbolIndex.findSymbols(target);
+    for (const sym of symbols) {
+      if (sym.detail === "address" || sym.detail === "address payable") return true;
+    }
+    // Heuristic: common address variable names
+    const lowerTarget = target.toLowerCase();
+    return (
+      lowerTarget.includes("addr") ||
+      lowerTarget === "sender" ||
+      lowerTarget === "recipient" ||
+      lowerTarget === "owner" ||
+      lowerTarget === "to" ||
+      lowerTarget === "from"
+    );
   }
 
   private symbolToCompletionKind(kind: SymbolKind): CompletionItemKind {

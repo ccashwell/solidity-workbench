@@ -5,6 +5,7 @@ import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { ParameterDeclaration } from "@solforge/common";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import { keccak256 } from "js-sha3";
 
 /**
  * Provides code lenses — actionable annotations above code elements.
@@ -189,27 +190,17 @@ export class CodeLensProvider {
   /**
    * Compute the 4-byte function selector.
    * selector = keccak256(signature)[0:4]
-   *
-   * We compute a simplified version using the canonical parameter types.
-   * For a production implementation, this would use keccak256.
    */
-  private computeSelector(
-    name: string,
-    params: ParameterDeclaration[],
-  ): string | null {
+  private computeSelector(name: string, params: ParameterDeclaration[]): string {
     const types = params.map((p) => this.canonicalType(p.typeName));
     const sig = `${name}(${types.join(",")})`;
-    // Return the signature string — actual keccak256 would need a crypto library
-    // For display purposes, showing the signature is still useful
-    return `${name}(${types.join(",")})`;
+    return "0x" + keccak256(sig).slice(0, 8);
   }
 
-  private computeEventTopic(
-    name: string,
-    params: ParameterDeclaration[],
-  ): string | null {
+  private computeEventTopic(name: string, params: ParameterDeclaration[]): string {
     const types = params.map((p) => this.canonicalType(p.typeName));
-    return `${name}(${types.join(",")})`;
+    const sig = `${name}(${types.join(",")})`;
+    return "0x" + keccak256(sig);
   }
 
   /**

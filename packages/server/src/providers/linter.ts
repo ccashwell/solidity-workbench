@@ -1,4 +1,4 @@
-import type { Diagnostic} from "vscode-languageserver/node.js";
+import type { Diagnostic } from "vscode-languageserver/node.js";
 import { DiagnosticSeverity, Range } from "vscode-languageserver/node.js";
 import type { SoliditySourceUnit, ContractDefinition, FunctionDefinition } from "@solforge/common";
 
@@ -47,7 +47,18 @@ export class SolidityLinter {
       );
     }
 
-    return diagnostics;
+    // Filter out suppressed diagnostics
+    return diagnostics.filter((d) => {
+      if (d.range.start.line === 0) return true;
+      const prevLine = lines[d.range.start.line - 1]?.trim() ?? "";
+      if (prevLine.includes("solforge-disable-next-line")) {
+        // Check if specific rule is mentioned
+        if (d.code && prevLine.includes(String(d.code))) return false;
+        // If no specific rule, suppress all
+        if (!prevLine.includes("solforge-disable-next-line ")) return false;
+      }
+      return true;
+    });
   }
 
   /**
@@ -63,6 +74,12 @@ export class SolidityLinter {
 
     for (const func of contract.functions) {
       if (!func.body) continue;
+
+      // Skip functions with reentrancy guards
+      const hasReentrancyGuard = func.modifiers.some(
+        (m) => m.toLowerCase().includes("nonreentrant") || m.toLowerCase().includes("reentrancy"),
+      );
+      if (hasReentrancyGuard) continue;
 
       const bodyLines = this.getFunctionBodyLines(func, lines);
       if (!bodyLines) continue;
@@ -184,7 +201,7 @@ export class SolidityLinter {
           bodyText.includes(`address(0) == ${param.name}`) ||
           bodyText.includes(`${param.name} != address(0x0)`) ||
           bodyText.includes(`_checkNonZero(${param.name})`) ||
-          bodyText.includes(`require(${param.name}`);
+          (bodyText.includes(`require(${param.name}`) && bodyText.includes("address(0)"));
 
         if (!hasCheck) {
           diagnostics.push({

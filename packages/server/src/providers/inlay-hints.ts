@@ -3,6 +3,7 @@ import { InlayHintKind, Position } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
+import { CALL_LIKE_KEYWORDS } from "../utils/text.js";
 
 /**
  * Provides inlay hints — inline annotations that show:
@@ -54,7 +55,7 @@ export class InlayHintsProvider {
       const argsStart = match.index + funcName.length + 1; // +1 for (
 
       // Skip keywords that look like function calls
-      if (this.isKeyword(funcName)) continue;
+      if (CALL_LIKE_KEYWORDS.has(funcName)) continue;
 
       // Look up the function in the symbol index
       const symbols = this.symbolIndex.findSymbols(funcName);
@@ -133,29 +134,5 @@ export class InlayHintsProvider {
 
     if (current.trim()) args.push(current);
     return args;
-  }
-
-  private isKeyword(word: string): boolean {
-    const keywords = new Set([
-      "if",
-      "else",
-      "for",
-      "while",
-      "do",
-      "return",
-      "require",
-      "assert",
-      "revert",
-      "emit",
-      "new",
-      "delete",
-      "type",
-      "try",
-      "catch",
-      "mapping",
-      "assembly",
-      "unchecked",
-    ]);
-    return keywords.has(word);
   }
 }

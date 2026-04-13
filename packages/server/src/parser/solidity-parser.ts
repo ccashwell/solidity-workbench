@@ -1,3 +1,6 @@
+import * as parser from "@solidity-parser/parser";
+import type { ASTNode } from "@solidity-parser/parser/src/ast-types";
+import { getWordTextAtPosition } from "../utils/text.js";
 import type {
   SoliditySourceUnit,
   ContractDefinition,
@@ -14,41 +17,61 @@ import type {
   Visibility,
   Mutability,
   ContractKind,
-  NatspecComment,
   ParameterDeclaration,
 } from "@solforge/common";
 
 /**
- * Wraps @solidity-parser/parser to produce our typed AST.
- * Maintains a cache of parsed files for fast access.
+ * Production Solidity parser wrapping @solidity-parser/parser (ANTLR4-based).
  *
- * This is the "fast path" parser — it runs on every keystroke with
- * error recovery. The "rich path" (solc AST) runs on save for
- * type-resolved features.
+ * Handles all Solidity syntax correctly including:
+ * - Multiline contract declarations
+ * - Nested mappings
+ * - Complex function signatures with tuple returns
+ * - Constructor initializer lists
+ * - Free functions, custom errors, user-defined value types
+ * - Error recovery for incomplete/broken code
  */
 export class SolidityParser {
   private cache: Map<string, ParseResult> = new Map();
 
   /**
    * Parse a Solidity source file and cache the result.
-   * Returns the parsed source unit or null if parsing failed completely.
    */
   parse(uri: string, text: string): ParseResult {
     try {
-      // We use @solidity-parser/parser at runtime.
-      // For the initial scaffold, we implement a lightweight regex-based
-      // extractor that covers the 80% case. The full ANTLR parser
-      // integration comes when we wire up the real dependency.
-      const result = this.extractStructure(uri, text);
+      const ast = parser.parse(text, {
+        tolerant: true,
+        loc: true,
+        range: true,
+      });
+
+      const errors: ParseError[] = [];
+      if ("errors" in ast && Array.isArray((ast as any).errors)) {
+        for (const err of (ast as any).errors) {
+          errors.push({
+            message: err.message ?? String(err),
+            range: this.locToRange(err.loc),
+          });
+        }
+      }
+
+      const sourceUnit = this.mapSourceUnit(uri, ast);
+      const result: ParseResult = { sourceUnit, errors };
       this.cache.set(uri, result);
       return result;
-    } catch (err) {
+    } catch (err: unknown) {
+      const parseErr = err as {
+        message?: string;
+        loc?: { start: { line: number; column: number }; end: { line: number; column: number } };
+      };
       const errorResult: ParseResult = {
         sourceUnit: this.emptySourceUnit(uri),
         errors: [
           {
-            message: `Parse error: ${err}`,
-            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+            message: parseErr.message ?? `Parse error: ${err}`,
+            range: parseErr.loc
+              ? this.locToRange(parseErr.loc)
+              : { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
           },
         ],
       };
@@ -57,527 +80,373 @@ export class SolidityParser {
     }
   }
 
-  /**
-   * Get the cached parse result for a file.
-   */
   get(uri: string): ParseResult | undefined {
     return this.cache.get(uri);
   }
 
-  /**
-   * Get the word at a given position in a document.
-   */
   getWordAtPosition(text: string, line: number, character: number): string | null {
-    const lines = text.split("\n");
-    if (line >= lines.length) return null;
-    const lineText = lines[line];
-    if (character >= lineText.length) return null;
-
-    // Find word boundaries
-    let start = character;
-    let end = character;
-    while (start > 0 && /[\w$]/.test(lineText[start - 1])) start--;
-    while (end < lineText.length && /[\w$]/.test(lineText[end])) end++;
-
-    if (start === end) return null;
-    return lineText.slice(start, end);
+    return getWordTextAtPosition(text, line, character);
   }
 
-  /**
-   * Get the line text at a position.
-   */
   getLineText(text: string, line: number): string {
     const lines = text.split("\n");
     return line < lines.length ? lines[line] : "";
   }
 
-  /**
-   * Structural extraction using regex patterns.
-   * This is a pragmatic approach for the scaffold — reliable enough for
-   * navigation, completions, and outline. The full ANTLR parser replaces
-   * this for production use.
-   */
-  private extractStructure(uri: string, text: string): ParseResult {
-    const errors: ParseError[] = [];
-    const lines = text.split("\n");
+  // ── AST Mapping ────────────────────────────────────────────────────
 
-    const pragmas = this.extractPragmas(lines);
-    const imports = this.extractImports(lines);
-    const contracts = this.extractContracts(text, lines);
+  private mapSourceUnit(uri: string, ast: any): SoliditySourceUnit {
+    const pragmas: PragmaDirective[] = [];
+    const imports: ImportDirective[] = [];
+    const contracts: ContractDefinition[] = [];
+    const freeFunctions: FunctionDefinition[] = [];
+    const errors: ErrorDefinition[] = [];
+    const userDefinedValueTypes: {
+      type: "UserDefinedValueTypeDefinition";
+      name: string;
+      underlyingType: string;
+      range: SourceRange;
+      nameRange: SourceRange;
+    }[] = [];
+
+    for (const node of ast.children ?? []) {
+      switch (node.type) {
+        case "PragmaDirective":
+          pragmas.push({
+            type: "PragmaDirective",
+            name: node.name,
+            value: node.value,
+            range: this.locToRange(node.loc),
+          });
+          break;
+
+        case "ImportDirective":
+          imports.push(this.mapImport(node));
+          break;
+
+        case "ContractDefinition":
+          contracts.push(this.mapContract(node));
+          break;
+
+        case "FunctionDefinition":
+          freeFunctions.push(this.mapFunction(node));
+          break;
+
+        case "CustomErrorType":
+        case "CustomErrorDefinition":
+          errors.push(this.mapError(node));
+          break;
+
+        case "TypeDefinition":
+          userDefinedValueTypes.push({
+            type: "UserDefinedValueTypeDefinition",
+            name: node.name,
+            underlyingType: this.typeNameToString(node.definition),
+            range: this.locToRange(node.loc),
+            nameRange: this.nameRange(node),
+          });
+          break;
+      }
+    }
 
     return {
-      sourceUnit: {
-        filePath: uri,
-        pragmas,
-        imports,
-        contracts,
-        freeFunctions: [],
-        errors: [],
-        userDefinedValueTypes: [],
-      },
+      filePath: uri,
+      pragmas,
+      imports,
+      contracts,
+      freeFunctions,
       errors,
+      userDefinedValueTypes,
     };
   }
 
-  private extractPragmas(lines: string[]): PragmaDirective[] {
-    const pragmas: PragmaDirective[] = [];
-    const re = /^pragma\s+(\w+)\s+(.+?)\s*;/;
+  private mapImport(node: any): ImportDirective {
+    const imp: ImportDirective = {
+      type: "ImportDirective",
+      path: node.path,
+      range: this.locToRange(node.loc),
+    };
 
-    for (let i = 0; i < lines.length; i++) {
-      const match = lines[i].match(re);
-      if (match) {
-        pragmas.push({
-          type: "PragmaDirective",
-          name: match[1],
-          value: match[2],
-          range: {
-            start: { line: i, character: 0 },
-            end: { line: i, character: lines[i].length },
-          },
-        });
-      }
+    if (node.unitAlias) {
+      imp.unitAlias = node.unitAlias;
     }
-    return pragmas;
-  }
-
-  private extractImports(lines: string[]): ImportDirective[] {
-    const imports: ImportDirective[] = [];
-
-    // Match: import "path"; import {A, B} from "path"; import "path" as Alias;
-    const reSimple = /^import\s+["'](.+?)["']\s*(?:as\s+(\w+))?\s*;/;
-    const reNamed = /^import\s+\{([^}]+)\}\s+from\s+["'](.+?)["']\s*;/;
-    const reWildcard = /^import\s+\*\s+as\s+(\w+)\s+from\s+["'](.+?)["']\s*;/;
-
-    for (let i = 0; i < lines.length; i++) {
-      const trimmed = lines[i].trim();
-      let match: RegExpMatchArray | null;
-
-      if ((match = trimmed.match(reNamed))) {
-        const symbols = match[1].split(",").map((s) => {
-          const parts = s.trim().split(/\s+as\s+/);
-          return { symbol: parts[0].trim(), alias: parts[1]?.trim() };
-        });
-        imports.push({
-          type: "ImportDirective",
-          path: match[2],
-          symbolAliases: symbols,
-          range: {
-            start: { line: i, character: 0 },
-            end: { line: i, character: lines[i].length },
-          },
-        });
-      } else if ((match = trimmed.match(reWildcard))) {
-        imports.push({
-          type: "ImportDirective",
-          path: match[2],
-          unitAlias: match[1],
-          range: {
-            start: { line: i, character: 0 },
-            end: { line: i, character: lines[i].length },
-          },
-        });
-      } else if ((match = trimmed.match(reSimple))) {
-        imports.push({
-          type: "ImportDirective",
-          path: match[1],
-          unitAlias: match[2],
-          range: {
-            start: { line: i, character: 0 },
-            end: { line: i, character: lines[i].length },
-          },
-        });
-      }
+    if (node.symbolAliases) {
+      imp.symbolAliases = node.symbolAliases.map((a: [string, string | null]) => ({
+        symbol: a[0],
+        alias: a[1] ?? undefined,
+      }));
+    }
+    if (node.symbolAliasesIdentifiers) {
+      imp.symbolAliases = node.symbolAliasesIdentifiers.map((a: any) => ({
+        symbol: a.id ?? a[0],
+        alias: a.alias ?? a[1] ?? undefined,
+      }));
     }
 
-    return imports;
+    return imp;
   }
 
-  private extractContracts(text: string, lines: string[]): ContractDefinition[] {
-    const contracts: ContractDefinition[] = [];
+  private mapContract(node: any): ContractDefinition {
+    const kind: ContractKind = node.kind === "abstract" ? "abstract" : (node.kind ?? "contract");
 
-    // Match contract/interface/library/abstract contract declarations
-    const contractRe =
-      /^(abstract\s+)?(?:contract|interface|library)\s+(\w+)(?:\s+is\s+([^{]+))?\s*\{/gm;
-
-    let match: RegExpExecArray | null;
-    while ((match = contractRe.exec(text)) !== null) {
-      const isAbstract = !!match[1];
-      const fullMatch = match[0];
-      const name = match[2];
-      const baseClause = match[3];
-
-      // Determine kind
-      let kind: ContractKind = "contract";
-      if (fullMatch.includes("interface ")) kind = "interface";
-      else if (fullMatch.includes("library ")) kind = "library";
-      else if (isAbstract) kind = "abstract";
-
-      // Find the line number
-      const beforeMatch = text.slice(0, match.index);
-      const startLine = beforeMatch.split("\n").length - 1;
-      const startChar = match.index - beforeMatch.lastIndexOf("\n") - 1;
-
-      // Find matching closing brace
-      const endLine = this.findMatchingBrace(text, match.index + fullMatch.length - 1);
-
-      // Parse base contracts
-      const baseContracts = baseClause
-        ? baseClause.split(",").map((b) => ({
-            baseName: b.trim().split("(")[0].trim(),
-          }))
-        : [];
-
-      // Extract contract body contents
-      const braceStart = match.index + fullMatch.length - 1;
-      const braceEnd = this.findMatchingBraceIndex(text, braceStart);
-      const bodyText = text.slice(braceStart + 1, braceEnd);
-      const bodyStartLine =
-        startLine + fullMatch.slice(0, fullMatch.indexOf("{")).split("\n").length - 1;
-
-      const nameStart = match.index + fullMatch.indexOf(name);
-      const nameBeforeMatch = text.slice(0, nameStart);
-      const nameStartLine = nameBeforeMatch.split("\n").length - 1;
-      const nameStartChar = nameStart - nameBeforeMatch.lastIndexOf("\n") - 1;
-
-      const contract: ContractDefinition = {
-        type: "ContractDefinition",
-        name,
-        kind,
-        baseContracts,
-        stateVariables: this.extractStateVariables(bodyText, bodyStartLine + 1),
-        functions: this.extractFunctions(bodyText, bodyStartLine + 1),
-        modifiers: this.extractModifiers(bodyText, bodyStartLine + 1),
-        events: this.extractEvents(bodyText, bodyStartLine + 1),
-        errors: this.extractErrors(bodyText, bodyStartLine + 1),
-        structs: this.extractStructs(bodyText, bodyStartLine + 1),
-        enums: this.extractEnums(bodyText, bodyStartLine + 1),
-        usingFor: [],
-        range: {
-          start: { line: startLine, character: startChar },
-          end: { line: endLine, character: 0 },
-        },
-        nameRange: {
-          start: { line: nameStartLine, character: nameStartChar },
-          end: { line: nameStartLine, character: nameStartChar + name.length },
-        },
-      };
-
-      contracts.push(contract);
-    }
-
-    return contracts;
-  }
-
-  private extractFunctions(bodyText: string, lineOffset: number): FunctionDefinition[] {
     const functions: FunctionDefinition[] = [];
-
-    // Match function declarations
-    const funcRe =
-      /(?:^|\n)\s*(function\s+(\w+)|constructor|receive|fallback)\s*\(([^)]*)\)([^{;]*)[{;]/g;
-
-    let match: RegExpExecArray | null;
-    while ((match = funcRe.exec(bodyText)) !== null) {
-      const fullMatch = match[0];
-      const isCtor = fullMatch.trimStart().startsWith("constructor");
-      const isReceive = fullMatch.trimStart().startsWith("receive");
-      const isFallback = fullMatch.trimStart().startsWith("fallback");
-
-      const name = isCtor ? null : isReceive ? null : isFallback ? null : match[2];
-      const kind = isCtor
-        ? ("constructor" as const)
-        : isReceive
-          ? ("receive" as const)
-          : isFallback
-            ? ("fallback" as const)
-            : ("function" as const);
-
-      const paramsStr = match[3] ?? "";
-      const modifiersStr = match[4] ?? "";
-      const hasBody = fullMatch.endsWith("{");
-
-      const beforeMatch = bodyText.slice(0, match.index);
-      const line = lineOffset + beforeMatch.split("\n").length - 1;
-
-      const visibility = this.extractVisibility(modifiersStr);
-      const mutability = this.extractMutability(modifiersStr);
-      const isVirtual = /\bvirtual\b/.test(modifiersStr);
-      const isOverride = /\boverride\b/.test(modifiersStr);
-
-      const parameters = this.parseParameters(paramsStr);
-      const returnParams = this.extractReturnParams(modifiersStr);
-
-      functions.push({
-        type: "FunctionDefinition",
-        name,
-        kind,
-        visibility,
-        mutability,
-        parameters,
-        returnParameters: returnParams,
-        modifiers: this.extractModifierNames(modifiersStr),
-        isVirtual,
-        isOverride,
-        body: hasBody,
-        range: {
-          start: { line, character: 0 },
-          end: { line, character: 0 },
-        },
-        nameRange: {
-          start: { line, character: 0 },
-          end: { line, character: name?.length ?? 0 },
-        },
-      });
-    }
-
-    return functions;
-  }
-
-  private extractEvents(bodyText: string, lineOffset: number): EventDefinition[] {
+    const stateVariables: StateVariableDeclaration[] = [];
     const events: EventDefinition[] = [];
-    const re = /event\s+(\w+)\s*\(([^)]*)\)\s*(anonymous)?\s*;/g;
-
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(bodyText)) !== null) {
-      const beforeMatch = bodyText.slice(0, match.index);
-      const line = lineOffset + beforeMatch.split("\n").length - 1;
-      events.push({
-        type: "EventDefinition",
-        name: match[1],
-        parameters: this.parseParameters(match[2]),
-        isAnonymous: !!match[3],
-        range: { start: { line, character: 0 }, end: { line, character: 0 } },
-        nameRange: { start: { line, character: 0 }, end: { line, character: 0 } },
-      });
-    }
-    return events;
-  }
-
-  private extractErrors(bodyText: string, lineOffset: number): ErrorDefinition[] {
-    const errors: ErrorDefinition[] = [];
-    const re = /error\s+(\w+)\s*\(([^)]*)\)\s*;/g;
-
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(bodyText)) !== null) {
-      const beforeMatch = bodyText.slice(0, match.index);
-      const line = lineOffset + beforeMatch.split("\n").length - 1;
-      errors.push({
-        type: "ErrorDefinition",
-        name: match[1],
-        parameters: this.parseParameters(match[2]),
-        range: { start: { line, character: 0 }, end: { line, character: 0 } },
-        nameRange: { start: { line, character: 0 }, end: { line, character: 0 } },
-      });
-    }
-    return errors;
-  }
-
-  private extractStructs(bodyText: string, lineOffset: number): StructDefinition[] {
+    const contractErrors: ErrorDefinition[] = [];
     const structs: StructDefinition[] = [];
-    const re = /struct\s+(\w+)\s*\{([^}]*)\}/g;
-
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(bodyText)) !== null) {
-      const beforeMatch = bodyText.slice(0, match.index);
-      const line = lineOffset + beforeMatch.split("\n").length - 1;
-      const members = this.parseStructMembers(match[2]);
-      structs.push({
-        type: "StructDefinition",
-        name: match[1],
-        members,
-        range: { start: { line, character: 0 }, end: { line, character: 0 } },
-        nameRange: { start: { line, character: 0 }, end: { line, character: 0 } },
-      });
-    }
-    return structs;
-  }
-
-  private extractEnums(bodyText: string, lineOffset: number): EnumDefinition[] {
     const enums: EnumDefinition[] = [];
-    const re = /enum\s+(\w+)\s*\{([^}]*)\}/g;
+    const modifiers: ModifierDefinition[] = [];
+    const usingFor: { type: "UsingForDirective"; libraryName: string; typeName?: string }[] = [];
 
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(bodyText)) !== null) {
-      const beforeMatch = bodyText.slice(0, match.index);
-      const line = lineOffset + beforeMatch.split("\n").length - 1;
-      const members = match[2]
-        .split(",")
-        .map((m) => m.trim())
-        .filter(Boolean);
-      enums.push({
-        type: "EnumDefinition",
-        name: match[1],
-        members,
-        range: { start: { line, character: 0 }, end: { line, character: 0 } },
-        nameRange: { start: { line, character: 0 }, end: { line, character: 0 } },
-      });
+    for (const sub of node.subNodes ?? []) {
+      switch (sub.type) {
+        case "FunctionDefinition":
+          functions.push(this.mapFunction(sub));
+          break;
+        case "StateVariableDeclaration":
+          stateVariables.push(...this.mapStateVars(sub));
+          break;
+        case "EventDefinition":
+          events.push(this.mapEvent(sub));
+          break;
+        case "CustomErrorType":
+        case "CustomErrorDefinition":
+          contractErrors.push(this.mapError(sub));
+          break;
+        case "StructDefinition":
+          structs.push(this.mapStruct(sub));
+          break;
+        case "EnumDefinition":
+          enums.push(this.mapEnum(sub));
+          break;
+        case "ModifierDefinition":
+          modifiers.push(this.mapModifier(sub));
+          break;
+        case "UsingForDeclaration":
+          usingFor.push({
+            type: "UsingForDirective",
+            libraryName: sub.libraryName ?? (sub.functions ? "<operators>" : ""),
+            typeName: sub.typeName ? this.typeNameToString(sub.typeName) : undefined,
+          });
+          break;
+      }
     }
-    return enums;
+
+    const baseContracts = (node.baseContracts ?? []).map((b: any) => ({
+      baseName: b.baseName?.namePath ?? b.baseName ?? String(b),
+    }));
+
+    return {
+      type: "ContractDefinition",
+      name: node.name,
+      kind,
+      baseContracts,
+      stateVariables,
+      functions,
+      modifiers,
+      events,
+      errors: contractErrors,
+      structs,
+      enums,
+      usingFor,
+      range: this.locToRange(node.loc),
+      nameRange: this.nameRange(node),
+    };
   }
 
-  private extractStateVariables(bodyText: string, lineOffset: number): StateVariableDeclaration[] {
+  private mapFunction(node: any): FunctionDefinition {
+    const isReceive = !!node.isReceiveEther;
+    const isFallback = !!node.isFallback;
+    const isConstructor = !isReceive && !isFallback && (!!node.isConstructor || node.name === null);
+
+    let funcKind: "function" | "constructor" | "receive" | "fallback" = "function";
+    if (isReceive) funcKind = "receive";
+    else if (isFallback) funcKind = "fallback";
+    else if (isConstructor) funcKind = "constructor";
+
+    const visibility: Visibility = node.visibility ?? "public";
+    let mutability: Mutability = "nonpayable";
+    if (node.stateMutability === "pure") mutability = "pure";
+    else if (node.stateMutability === "view") mutability = "view";
+    else if (node.stateMutability === "payable") mutability = "payable";
+
+    const parameters = (node.parameters ?? []).map((p: any) => this.mapParameter(p));
+    const returnParameters = (node.returnParameters ?? []).map((p: any) => this.mapParameter(p));
+    const modifierNames = (node.modifiers ?? []).map((m: any) => m.name ?? "");
+
+    return {
+      type: "FunctionDefinition",
+      name: funcKind === "function" ? (node.name ?? null) : null,
+      kind: funcKind,
+      visibility,
+      mutability,
+      parameters,
+      returnParameters,
+      modifiers: modifierNames,
+      isVirtual: node.isVirtual ?? false,
+      isOverride: node.override !== null && node.override !== undefined,
+      body: node.body !== null && node.body !== undefined,
+      range: this.locToRange(node.loc),
+      nameRange: this.nameRange(node),
+    };
+  }
+
+  private mapStateVars(node: any): StateVariableDeclaration[] {
     const vars: StateVariableDeclaration[] = [];
-    // Match state variable patterns: type visibility? mutability? name (= value)?;
-    const re =
-      /(?:mapping\s*\([^)]+\)|[\w[\]]+(?:\s*\.\s*\w+)*)\s+(?:(public|private|internal|external)\s+)?(?:(constant|immutable)\s+)?(\w+)\s*(?:=[^;]*)?\s*;/g;
 
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(bodyText)) !== null) {
-      const fullMatch = match[0];
-      // Skip if this looks like a local variable (inside a function)
-      // or a function parameter — we can't reliably detect this with regex
-      // but we check if it's at the top level of the body
-      const name = match[3];
-      const visibility = (match[1] as Visibility) ?? "internal";
-      const mutability = match[2] as "constant" | "immutable" | undefined;
+    // StateVariableDeclaration can declare multiple variables in some AST shapes,
+    // but typically it's one variable per node.
+    const typeName = this.typeNameToString(node.typeName ?? node.variables?.[0]?.typeName);
+    const variables = node.variables ?? [node];
 
-      // Extract the type name (everything before visibility/name)
-      const typeName = fullMatch
-        .slice(0, fullMatch.indexOf(name))
-        .replace(/\b(public|private|internal|external|constant|immutable)\b/g, "")
-        .trim();
+    for (const v of variables) {
+      let visibility: Visibility = "internal";
+      if (v.visibility) visibility = v.visibility;
 
-      const beforeMatch = bodyText.slice(0, match.index);
-      const line = lineOffset + beforeMatch.split("\n").length - 1;
+      let mutabilityAttr: "constant" | "immutable" | undefined;
+      if (v.isDeclaredConst || v.isImmutable) {
+        mutabilityAttr = v.isImmutable ? "immutable" : "constant";
+      }
 
       vars.push({
         type: "StateVariableDeclaration",
-        typeName,
-        name,
+        typeName: v.typeName ? this.typeNameToString(v.typeName) : typeName,
+        name: v.name ?? v.identifier?.name ?? "",
         visibility,
-        mutability,
-        range: { start: { line, character: 0 }, end: { line, character: 0 } },
-        nameRange: { start: { line, character: 0 }, end: { line, character: 0 } },
+        mutability: mutabilityAttr,
+        range: this.locToRange(v.loc ?? node.loc),
+        nameRange: this.nameRange(v.loc ? v : node),
       });
     }
+
     return vars;
   }
 
-  private extractModifiers(bodyText: string, lineOffset: number): ModifierDefinition[] {
-    const modifiers: ModifierDefinition[] = [];
-    const re = /modifier\s+(\w+)\s*\(([^)]*)\)/g;
+  private mapEvent(node: any): EventDefinition {
+    return {
+      type: "EventDefinition",
+      name: node.name,
+      parameters: (node.parameters ?? []).map((p: any) => this.mapParameter(p)),
+      isAnonymous: node.isAnonymous ?? false,
+      range: this.locToRange(node.loc),
+      nameRange: this.nameRange(node),
+    };
+  }
 
-    let match: RegExpExecArray | null;
-    while ((match = re.exec(bodyText)) !== null) {
-      const beforeMatch = bodyText.slice(0, match.index);
-      const line = lineOffset + beforeMatch.split("\n").length - 1;
-      modifiers.push({
-        type: "ModifierDefinition",
-        name: match[1],
-        parameters: this.parseParameters(match[2]),
-        isVirtual: false,
-        isOverride: false,
-        range: { start: { line, character: 0 }, end: { line, character: 0 } },
-        nameRange: { start: { line, character: 0 }, end: { line, character: 0 } },
-      });
+  private mapError(node: any): ErrorDefinition {
+    return {
+      type: "ErrorDefinition",
+      name: node.name,
+      parameters: (node.parameters ?? []).map((p: any) => this.mapParameter(p)),
+      range: this.locToRange(node.loc),
+      nameRange: this.nameRange(node),
+    };
+  }
+
+  private mapStruct(node: any): StructDefinition {
+    return {
+      type: "StructDefinition",
+      name: node.name,
+      members: (node.members ?? []).map((m: any) => this.mapParameter(m)),
+      range: this.locToRange(node.loc),
+      nameRange: this.nameRange(node),
+    };
+  }
+
+  private mapEnum(node: any): EnumDefinition {
+    return {
+      type: "EnumDefinition",
+      name: node.name,
+      members: (node.members ?? []).map((m: any) => m.name ?? m),
+      range: this.locToRange(node.loc),
+      nameRange: this.nameRange(node),
+    };
+  }
+
+  private mapModifier(node: any): ModifierDefinition {
+    return {
+      type: "ModifierDefinition",
+      name: node.name,
+      parameters: (node.parameters ?? []).map((p: any) => this.mapParameter(p)),
+      isVirtual: node.isVirtual ?? false,
+      isOverride: !!node.override,
+      range: this.locToRange(node.loc),
+      nameRange: this.nameRange(node),
+    };
+  }
+
+  private mapParameter(node: any): ParameterDeclaration {
+    return {
+      type: "ParameterDeclaration",
+      typeName: this.typeNameToString(node.typeName),
+      name: node.name ?? node.identifier?.name ?? undefined,
+      storageLocation: node.storageLocation ?? undefined,
+      indexed: node.isIndexed ?? undefined,
+    };
+  }
+
+  // ── Type name serialization ────────────────────────────────────────
+
+  private typeNameToString(node: any): string {
+    if (!node) return "unknown";
+    if (typeof node === "string") return node;
+
+    switch (node.type) {
+      case "ElementaryTypeName":
+        return (node.name ?? node.stateMutability)
+          ? `${node.name}${node.stateMutability === "payable" ? " payable" : ""}`
+          : (node.name ?? "unknown");
+
+      case "UserDefinedTypeName":
+        return node.namePath ?? node.name ?? "unknown";
+
+      case "Mapping":
+        return `mapping(${this.typeNameToString(node.keyType)} => ${this.typeNameToString(node.valueType)})`;
+
+      case "ArrayTypeName":
+        return node.length
+          ? `${this.typeNameToString(node.baseTypeName)}[${node.length.number ?? node.length}]`
+          : `${this.typeNameToString(node.baseTypeName)}[]`;
+
+      case "FunctionTypeName": {
+        const params = (node.parameterTypes ?? [])
+          .map((p: any) => this.typeNameToString(p.typeName))
+          .join(", ");
+        const ret = (node.returnTypes ?? [])
+          .map((p: any) => this.typeNameToString(p.typeName))
+          .join(", ");
+        return ret ? `function(${params}) returns (${ret})` : `function(${params})`;
+      }
+
+      default:
+        return node.name ?? node.namePath ?? "unknown";
     }
-    return modifiers;
   }
 
-  // ── Helpers ────────────────────────────────────────────────────────
+  // ── Location helpers ───────────────────────────────────────────────
 
-  private parseParameters(paramsStr: string): ParameterDeclaration[] {
-    if (!paramsStr.trim()) return [];
-
-    return paramsStr
-      .split(",")
-      .map((p) => p.trim())
-      .filter(Boolean)
-      .map((p) => {
-        const parts = p.split(/\s+/);
-        const indexed = parts.includes("indexed");
-        const storageLocation = parts.find((x) => ["memory", "storage", "calldata"].includes(x)) as
-          | "memory"
-          | "storage"
-          | "calldata"
-          | undefined;
-
-        // Filter out keywords to find type and name
-        const meaningful = parts.filter(
-          (x) => !["indexed", "memory", "storage", "calldata"].includes(x),
-        );
-
-        return {
-          type: "ParameterDeclaration" as const,
-          typeName: meaningful[0] ?? "unknown",
-          name: meaningful.length > 1 ? meaningful[meaningful.length - 1] : undefined,
-          storageLocation,
-          indexed: indexed || undefined,
-        };
-      });
-  }
-
-  private parseStructMembers(membersStr: string): ParameterDeclaration[] {
-    return membersStr
-      .split(";")
-      .map((m) => m.trim())
-      .filter(Boolean)
-      .map((m) => {
-        const parts = m.split(/\s+/);
-        return {
-          type: "ParameterDeclaration" as const,
-          typeName: parts[0] ?? "unknown",
-          name: parts[parts.length - 1],
-        };
-      });
-  }
-
-  private extractVisibility(modifiers: string): Visibility {
-    if (/\bexternal\b/.test(modifiers)) return "external";
-    if (/\bpublic\b/.test(modifiers)) return "public";
-    if (/\binternal\b/.test(modifiers)) return "internal";
-    if (/\bprivate\b/.test(modifiers)) return "private";
-    return "public"; // default for functions
-  }
-
-  private extractMutability(modifiers: string): Mutability {
-    if (/\bpure\b/.test(modifiers)) return "pure";
-    if (/\bview\b/.test(modifiers)) return "view";
-    if (/\bpayable\b/.test(modifiers)) return "payable";
-    return "nonpayable";
-  }
-
-  private extractModifierNames(modifiers: string): string[] {
-    // Remove known keywords and extract remaining identifiers that look like modifiers
-    const cleaned = modifiers
-      .replace(
-        /\b(public|private|internal|external|pure|view|payable|virtual|override|returns\s*\([^)]*\))\b/g,
-        "",
-      )
-      .trim();
-
-    return cleaned
-      .split(/\s+/)
-      .filter((m) => /^\w+/.test(m))
-      .map((m) => m.replace(/\(.*/, "")); // strip arguments
-  }
-
-  private extractReturnParams(modifiers: string): ParameterDeclaration[] {
-    const returnsMatch = modifiers.match(/returns\s*\(([^)]*)\)/);
-    if (!returnsMatch) return [];
-    return this.parseParameters(returnsMatch[1]);
-  }
-
-  private findMatchingBrace(text: string, openIndex: number): number {
-    let depth = 1;
-    let i = openIndex + 1;
-    while (i < text.length && depth > 0) {
-      if (text[i] === "{") depth++;
-      else if (text[i] === "}") depth--;
-      i++;
+  private locToRange(loc: any): SourceRange {
+    if (!loc) {
+      return { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } };
     }
-    const before = text.slice(0, i);
-    return before.split("\n").length - 1;
+    return {
+      start: { line: (loc.start?.line ?? 1) - 1, character: loc.start?.column ?? 0 },
+      end: { line: (loc.end?.line ?? 1) - 1, character: loc.end?.column ?? 0 },
+    };
   }
 
-  private findMatchingBraceIndex(text: string, openIndex: number): number {
-    let depth = 1;
-    let i = openIndex + 1;
-    while (i < text.length && depth > 0) {
-      if (text[i] === "{") depth++;
-      else if (text[i] === "}") depth--;
-      i++;
+  private nameRange(node: any): SourceRange {
+    // Try to compute a name-specific range from the node's location
+    if (node.loc && node.name) {
+      const startLine = (node.loc.start?.line ?? 1) - 1;
+      const startCol = node.loc.start?.column ?? 0;
+      // Heuristic: the name often starts near the beginning of the node
+      return {
+        start: { line: startLine, character: startCol },
+        end: { line: startLine, character: startCol + (node.name?.length ?? 0) },
+      };
     }
-    return i - 1;
+    return this.locToRange(node.loc);
   }
 
   private emptySourceUnit(uri: string): SoliditySourceUnit {

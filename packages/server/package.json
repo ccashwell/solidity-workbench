@@ -7,11 +7,12 @@
     "build": "tsc -b",
     "watch": "tsc -b -w",
     "clean": "rm -rf dist *.tsbuildinfo",
-    "test": "node --test dist/**/*.test.js"
+    "test": "tsc -b && node --test dist/__tests__/*.test.js"
   },
   "dependencies": {
     "@solforge/common": "workspace:*",
     "@solidity-parser/parser": "^0.18.0",
+    "js-sha3": "^0.9.3",
     "toml": "^3.0.0",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.11",

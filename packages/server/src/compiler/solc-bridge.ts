@@ -55,9 +55,6 @@ export class SolcBridge {
    * Compile a single file using solc standard JSON for quick type info.
    */
   async compileSingle(filePath: string): Promise<SolcOutput | null> {
-    const input = this.buildStandardInput(filePath);
-    const inputJson = JSON.stringify(input);
-
     // Use forge to get the right solc version
     const result = await this.workspace.runForge([
       "build",

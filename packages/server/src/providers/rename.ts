@@ -1,16 +1,10 @@
-import type {
-  Position,
-  Range,
-  WorkspaceEdit,
-  TextDocuments} from "vscode-languageserver/node.js";
-import {
-  TextEdit
-} from "vscode-languageserver/node.js";
+import type { Position, Range, WorkspaceEdit, TextDocuments } from "vscode-languageserver/node.js";
+import { TextEdit } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
-import { URI } from "vscode-uri";
 import * as fs from "node:fs";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import { getWordAtPosition, isInsideString, SOLIDITY_KEYWORDS } from "../utils/text.js";
 
 /**
  * Provides cross-file rename refactoring for Solidity symbols.
@@ -45,14 +39,14 @@ export class RenameProvider {
     position: Position,
   ): { range: Range; placeholder: string } | null {
     const text = document.getText();
-    const word = this.getWordAtPosition(text, position);
+    const word = getWordAtPosition(text, position);
     if (!word) return null;
 
     // Check it's a known symbol
     const symbols = this.symbolIndex.findSymbols(word.text);
     if (symbols.length === 0) {
       // Not a known symbol — might be a local variable or keyword
-      if (this.isSolidityKeyword(word.text)) return null;
+      if (SOLIDITY_KEYWORDS.has(word.text)) return null;
       // Allow renaming even if not in the global index (could be a local)
     }
 
@@ -71,10 +65,10 @@ export class RenameProvider {
     newName: string,
   ): Promise<WorkspaceEdit | null> {
     const text = document.getText();
-    const word = this.getWordAtPosition(text, position);
-    if (!word) return null;
+    const wordResult = getWordAtPosition(text, position);
+    if (!wordResult) return null;
 
-    const oldName = word.text;
+    const oldName = wordResult.text;
     if (oldName === newName) return null;
 
     // Validate the new name is a valid Solidity identifier
@@ -139,7 +133,7 @@ export class RenameProvider {
         const col = match.index;
 
         // Check we're not inside a string literal
-        if (this.isInsideString(line, col)) continue;
+        if (isInsideString(line, col)) continue;
 
         // Check we're not inside a comment on this line
         if (this.isInsideLineComment(line, col)) continue;
@@ -154,119 +148,8 @@ export class RenameProvider {
     return ranges;
   }
 
-  private isInsideString(line: string, position: number): boolean {
-    let inSingle = false;
-    let inDouble = false;
-    for (let i = 0; i < position; i++) {
-      if (line[i] === "'" && !inDouble && (i === 0 || line[i - 1] !== "\\")) {
-        inSingle = !inSingle;
-      } else if (line[i] === '"' && !inSingle && (i === 0 || line[i - 1] !== "\\")) {
-        inDouble = !inDouble;
-      }
-    }
-    return inSingle || inDouble;
-  }
-
   private isInsideLineComment(line: string, position: number): boolean {
     const commentStart = line.indexOf("//");
     return commentStart !== -1 && commentStart < position;
-  }
-
-  private getWordAtPosition(
-    text: string,
-    position: Position,
-  ): { text: string; range: Range } | null {
-    const lines = text.split("\n");
-    if (position.line >= lines.length) return null;
-    const line = lines[position.line];
-
-    let start = position.character;
-    let end = position.character;
-    while (start > 0 && /[\w$]/.test(line[start - 1])) start--;
-    while (end < line.length && /[\w$]/.test(line[end])) end++;
-
-    if (start === end) return null;
-
-    return {
-      text: line.slice(start, end),
-      range: {
-        start: { line: position.line, character: start },
-        end: { line: position.line, character: end },
-      },
-    };
-  }
-
-  private isSolidityKeyword(word: string): boolean {
-    const keywords = new Set([
-      "pragma",
-      "import",
-      "contract",
-      "interface",
-      "library",
-      "abstract",
-      "function",
-      "modifier",
-      "event",
-      "error",
-      "struct",
-      "enum",
-      "mapping",
-      "constructor",
-      "receive",
-      "fallback",
-      "public",
-      "private",
-      "internal",
-      "external",
-      "pure",
-      "view",
-      "payable",
-      "virtual",
-      "override",
-      "immutable",
-      "constant",
-      "memory",
-      "storage",
-      "calldata",
-      "if",
-      "else",
-      "for",
-      "while",
-      "do",
-      "break",
-      "continue",
-      "return",
-      "try",
-      "catch",
-      "revert",
-      "require",
-      "assert",
-      "emit",
-      "new",
-      "delete",
-      "type",
-      "assembly",
-      "unchecked",
-      "using",
-      "is",
-      "as",
-      "true",
-      "false",
-      "this",
-      "super",
-      "bool",
-      "address",
-      "string",
-      "bytes",
-      "uint",
-      "int",
-      "uint256",
-      "int256",
-      "msg",
-      "block",
-      "tx",
-      "abi",
-    ]);
-    return keywords.has(word);
   }
 }

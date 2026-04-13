@@ -1,11 +1,11 @@
 import type { Position, ReferenceContext, TextDocuments } from "vscode-languageserver/node.js";
 import { Location } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
-import { URI } from "vscode-uri";
 import * as fs from "node:fs";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
+import { getWordAtPosition, isInsideString, findLineCommentStart } from "../utils/text.js";
 
 /**
  * Full workspace-wide find-all-references.
@@ -38,7 +38,7 @@ export class ReferencesProvider {
     context: ReferenceContext,
   ): Location[] {
     const text = document.getText();
-    const word = this.getWordAtPosition(text, position);
+    const word = getWordAtPosition(text, position)?.text ?? null;
     if (!word) return [];
 
     const references: Location[] = [];
@@ -130,7 +130,7 @@ export class ReferencesProvider {
       if (trimmed.startsWith("//")) continue;
 
       // For lines with inline comments, only scan the code portion
-      const commentStart = this.findLineCommentStart(line);
+      const commentStart = findLineCommentStart(line);
       const codePortion = commentStart === -1 ? line : line.slice(0, commentStart);
 
       this.matchInSegment(codePortion, 0, symbolName, regex, lineNum, uri, results, seen);
@@ -154,7 +154,7 @@ export class ReferencesProvider {
       const col = colOffset + match.index;
 
       // Skip if inside a string literal
-      if (this.isInsideString(segment, match.index)) continue;
+      if (isInsideString(segment, match.index)) continue;
 
       const key = `${uri}:${lineNum}:${col}`;
       if (seen.has(key)) continue;
@@ -167,52 +167,5 @@ export class ReferencesProvider {
         }),
       );
     }
-  }
-
-  private findLineCommentStart(line: string): number {
-    let inSingle = false;
-    let inDouble = false;
-
-    for (let i = 0; i < line.length - 1; i++) {
-      const ch = line[i];
-      const next = line[i + 1];
-
-      if (ch === "'" && !inDouble && (i === 0 || line[i - 1] !== "\\")) {
-        inSingle = !inSingle;
-      } else if (ch === '"' && !inSingle && (i === 0 || line[i - 1] !== "\\")) {
-        inDouble = !inDouble;
-      } else if (ch === "/" && next === "/" && !inSingle && !inDouble) {
-        return i;
-      }
-    }
-
-    return -1;
-  }
-
-  private isInsideString(line: string, position: number): boolean {
-    let inSingle = false;
-    let inDouble = false;
-    for (let i = 0; i < position; i++) {
-      if (line[i] === "'" && !inDouble && (i === 0 || line[i - 1] !== "\\")) {
-        inSingle = !inSingle;
-      } else if (line[i] === '"' && !inSingle && (i === 0 || line[i - 1] !== "\\")) {
-        inDouble = !inDouble;
-      }
-    }
-    return inSingle || inDouble;
-  }
-
-  private getWordAtPosition(text: string, position: Position): string | null {
-    const lines = text.split("\n");
-    if (position.line >= lines.length) return null;
-    const line = lines[position.line];
-
-    let start = position.character;
-    let end = position.character;
-    while (start > 0 && /[\w$]/.test(line[start - 1])) start--;
-    while (end < line.length && /[\w$]/.test(line[end])) end++;
-
-    if (start === end) return null;
-    return line.slice(start, end);
   }
 }

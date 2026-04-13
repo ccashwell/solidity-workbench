@@ -1,12 +1,16 @@
-import type {
-  WorkspaceSymbol} from "vscode-languageserver/node.js";
+import type { WorkspaceSymbol } from "vscode-languageserver/node.js";
 import {
   Location,
   SymbolInformation,
-  SymbolKind as LSPSymbolKind
+  SymbolKind as LSPSymbolKind,
 } from "vscode-languageserver/node.js";
 import { URI } from "vscode-uri";
-import type { SolSymbol, SymbolKind, ContractDefinition, FunctionDefinition } from "@solforge/common";
+import type {
+  SolSymbol,
+  SymbolKind,
+  ContractDefinition,
+  FunctionDefinition,
+} from "@solforge/common";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
@@ -53,7 +57,7 @@ export class SymbolIndex {
       this.parser.parse(uri, text);
       this.updateFile(uri);
     } catch {
-      // File might not exist or be unreadable
+      /* file unreadable, skip */
     }
   }
 

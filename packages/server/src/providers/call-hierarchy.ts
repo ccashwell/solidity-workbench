@@ -3,16 +3,15 @@ import type {
   CallHierarchyItem,
   CallHierarchyOutgoingCall,
   Position,
-  Range} from "vscode-languageserver/node.js";
-import {
-  SymbolKind,
+  Range,
 } from "vscode-languageserver/node.js";
+import { SymbolKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
-import { URI } from "vscode-uri";
 import * as fs from "node:fs";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
+import { getWordAtPosition, CALL_LIKE_KEYWORDS, isSolidityBuiltinType } from "../utils/text.js";
 
 /**
  * Call Hierarchy provider — traces call chains through the codebase.
@@ -35,7 +34,7 @@ export class CallHierarchyProvider {
   /** callerFunction → [calleeFunction, ...] */
   private outgoingCalls: Map<string, CallSite[]> = new Map();
 
-  private indexed = false;
+  private indexedFiles: Set<string> = new Set();
 
   constructor(
     private symbolIndex: SymbolIndex,
@@ -48,7 +47,7 @@ export class CallHierarchyProvider {
    */
   prepareCallHierarchy(document: TextDocument, position: Position): CallHierarchyItem[] {
     const text = document.getText();
-    const word = this.getWordAtPosition(text, position);
+    const word = getWordAtPosition(text, position)?.text ?? null;
     if (!word) return [];
 
     const symbols = this.symbolIndex.findSymbols(word);
@@ -162,21 +161,32 @@ export class CallHierarchyProvider {
   /**
    * Build the call graph by scanning all workspace files.
    */
-  private async ensureIndexed(): Promise<void> {
-    if (this.indexed) return;
+  invalidateFile(uri: string): void {
+    // Remove all call sites from/to this file
+    for (const [key, sites] of this.incomingCalls) {
+      const filtered = sites.filter((s) => s.callerUri !== uri);
+      if (filtered.length > 0) this.incomingCalls.set(key, filtered);
+      else this.incomingCalls.delete(key);
+    }
+    for (const [key] of this.outgoingCalls) {
+      if (key.startsWith(uri + "#")) this.outgoingCalls.delete(key);
+    }
+    this.indexedFiles.delete(uri);
+  }
 
+  private async ensureIndexed(): Promise<void> {
     const allUris = this.workspace.getAllFileUris();
     for (const uri of allUris) {
+      if (this.indexedFiles.has(uri)) continue;
       try {
         const filePath = this.workspace.uriToPath(uri);
         const text = fs.readFileSync(filePath, "utf-8");
         this.indexCallsInFile(uri, text);
+        this.indexedFiles.add(uri);
       } catch {
         // skip unreadable files
       }
     }
-
-    this.indexed = true;
   }
 
   /**
@@ -205,10 +215,10 @@ export class CallHierarchyProvider {
           const calleeName = match[1];
 
           // Skip keywords and common non-function patterns
-          if (this.isCallKeyword(calleeName)) continue;
+          if (CALL_LIKE_KEYWORDS.has(calleeName)) continue;
 
           // Skip type casts like uint256(...), address(...)
-          if (this.isSolidityType(calleeName)) continue;
+          if (isSolidityBuiltinType(calleeName)) continue;
 
           const callLine = bodyRange.start + bodyText.slice(0, match.index).split("\n").length - 1;
           const callCol = match.index - bodyText.slice(0, match.index).lastIndexOf("\n") - 1;
@@ -265,48 +275,6 @@ export class CallHierarchyProvider {
 
   private makeKey(uri: string, name: string): string {
     return `${uri}#${name}`;
-  }
-
-  private isCallKeyword(name: string): boolean {
-    const keywords = new Set([
-      "if",
-      "else",
-      "for",
-      "while",
-      "do",
-      "return",
-      "require",
-      "assert",
-      "revert",
-      "emit",
-      "new",
-      "delete",
-      "type",
-      "try",
-      "catch",
-      "mapping",
-      "assembly",
-      "unchecked",
-      "super",
-      "this",
-    ]);
-    return keywords.has(name);
-  }
-
-  private isSolidityType(name: string): boolean {
-    return /^(uint|int|bytes|bool|address|string)\d*$/.test(name) || name === "byte";
-  }
-
-  private getWordAtPosition(text: string, position: Position): string | null {
-    const lines = text.split("\n");
-    if (position.line >= lines.length) return null;
-    const line = lines[position.line];
-    let start = position.character;
-    let end = position.character;
-    while (start > 0 && /[\w$]/.test(line[start - 1])) start--;
-    while (end < line.length && /[\w$]/.test(line[end])) end++;
-    if (start === end) return null;
-    return line.slice(start, end);
   }
 }
 

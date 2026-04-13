@@ -175,6 +175,7 @@ documents.onDidChangeContent(async (change) => {
 
   parser.parse(uri, text);
   symbolIndex.updateFile(uri);
+  callHierarchyProvider.invalidateFile(uri);
 
   // Provide fast diagnostics from parser
   await diagnosticsProvider.provideFastDiagnostics(uri, text);

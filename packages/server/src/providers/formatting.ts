@@ -1,10 +1,5 @@
-import type {
-  FormattingOptions,
-  Range} from "vscode-languageserver/node.js";
-import {
-  DocumentFormattingParams,
-  TextEdit,
-} from "vscode-languageserver/node.js";
+import type { FormattingOptions, Range } from "vscode-languageserver/node.js";
+import { DocumentFormattingParams, TextEdit } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import * as fs from "node:fs";
@@ -31,8 +26,36 @@ export class FormattingProvider {
     options: FormattingOptions,
   ): Promise<TextEdit[]> {
     // forge fmt doesn't support range formatting natively,
-    // so we format the whole document
-    return this.formatDocument(document);
+    // so we format the whole document then filter edits to the requested range.
+    const fullEdits = await this.formatDocument(document);
+    if (fullEdits.length === 0) return [];
+
+    // The full edit replaces the entire document. Extract only the lines in range.
+    const formatted = fullEdits[0].newText;
+    const original = document.getText();
+    const origLines = original.split("\n");
+    const fmtLines = formatted.split("\n");
+
+    // Find edits within the range using line-by-line diff
+    const edits: TextEdit[] = [];
+    const startLine = range.start.line;
+    const endLine = Math.min(range.end.line, origLines.length - 1, fmtLines.length - 1);
+
+    for (let i = startLine; i <= endLine; i++) {
+      if (i < origLines.length && i < fmtLines.length && origLines[i] !== fmtLines[i]) {
+        edits.push(
+          TextEdit.replace(
+            {
+              start: { line: i, character: 0 },
+              end: { line: i, character: origLines[i].length },
+            },
+            fmtLines[i],
+          ),
+        );
+      }
+    }
+
+    return edits;
   }
 
   private async formatDocument(document: TextDocument): Promise<TextEdit[]> {
@@ -76,7 +99,7 @@ export class FormattingProvider {
       try {
         fs.unlinkSync(tmpFile);
       } catch {
-        // ignore
+        /* cleanup failed, non-critical */
       }
     }
   }

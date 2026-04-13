@@ -1,13 +1,12 @@
-import type {
-  SignatureHelp,
-  SignatureInformation,
-  Position} from "vscode-languageserver/node.js";
-import {
-  ParameterInformation,
-  MarkupKind
-} from "vscode-languageserver/node.js";
+import type { SignatureHelp, SignatureInformation, Position } from "vscode-languageserver/node.js";
+import { ParameterInformation, MarkupKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
-import type { FunctionDefinition, NatspecComment, EventDefinition, ErrorDefinition } from "@solforge/common";
+import type {
+  FunctionDefinition,
+  NatspecComment,
+  EventDefinition,
+  ErrorDefinition,
+} from "@solforge/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 
@@ -199,10 +198,7 @@ export class SignatureHelpProvider {
     };
   }
 
-  private buildEventSignature(
-    event: EventDefinition,
-    containerName: string,
-  ): SignatureInformation {
+  private buildEventSignature(event: EventDefinition, containerName: string): SignatureInformation {
     const params = event.parameters.map((p) => {
       const label = `${p.typeName}${p.indexed ? " indexed" : ""}${p.name ? " " + p.name : ""}`;
       return ParameterInformation.create(label);
@@ -217,10 +213,7 @@ export class SignatureHelpProvider {
     };
   }
 
-  private buildErrorSignature(
-    error: ErrorDefinition,
-    containerName: string,
-  ): SignatureInformation {
+  private buildErrorSignature(error: ErrorDefinition, containerName: string): SignatureInformation {
     const params = error.parameters.map((p) => {
       const label = `${p.typeName}${p.name ? " " + p.name : ""}`;
       return ParameterInformation.create(label);

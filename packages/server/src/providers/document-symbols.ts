@@ -1,4 +1,4 @@
-import type { DocumentSymbol} from "vscode-languageserver/node.js";
+import type { DocumentSymbol } from "vscode-languageserver/node.js";
 import { SymbolKind, Range } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SolidityParser } from "../parser/solidity-parser.js";
