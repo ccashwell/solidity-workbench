@@ -1,0 +1,461 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Solidity",
+  "scopeName": "source.solidity",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#natspec" },
+    { "include": "#pragma" },
+    { "include": "#import" },
+    { "include": "#contract-definition" },
+    { "include": "#function-definition" },
+    { "include": "#modifier-definition" },
+    { "include": "#event-definition" },
+    { "include": "#error-definition" },
+    { "include": "#struct-definition" },
+    { "include": "#enum-definition" },
+    { "include": "#type-definition" },
+    { "include": "#using-directive" },
+    { "include": "#assembly-block" },
+    { "include": "#control-flow" },
+    { "include": "#expressions" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.double-slash.solidity",
+          "match": "//(?!/).*$"
+        },
+        {
+          "name": "comment.block.solidity",
+          "begin": "/\\*(?!\\*)",
+          "end": "\\*/"
+        }
+      ]
+    },
+    "natspec": {
+      "patterns": [
+        {
+          "name": "comment.block.documentation.solidity",
+          "begin": "/\\*\\*",
+          "end": "\\*/",
+          "patterns": [
+            {
+              "name": "storage.type.annotation.solidity",
+              "match": "@(title|author|notice|dev|param|return|inheritdoc|custom:\\w+)"
+            }
+          ]
+        },
+        {
+          "name": "comment.line.documentation.solidity",
+          "match": "///.*$",
+          "patterns": [
+            {
+              "name": "storage.type.annotation.solidity",
+              "match": "@(title|author|notice|dev|param|return|inheritdoc|custom:\\w+)"
+            }
+          ]
+        }
+      ]
+    },
+    "pragma": {
+      "patterns": [
+        {
+          "name": "meta.pragma.solidity",
+          "match": "\\b(pragma)\\s+(solidity|abicoder|experimental)\\s+(.+?)\\s*;",
+          "captures": {
+            "1": { "name": "keyword.control.pragma.solidity" },
+            "2": { "name": "entity.other.attribute-name.solidity" },
+            "3": { "name": "string.other.pragma-value.solidity" }
+          }
+        }
+      ]
+    },
+    "import": {
+      "patterns": [
+        {
+          "name": "meta.import.solidity",
+          "begin": "\\b(import)\\b",
+          "end": ";",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.import.solidity" }
+          },
+          "patterns": [
+            {
+              "name": "string.quoted.double.import.solidity",
+              "match": "\"[^\"]*\""
+            },
+            {
+              "name": "string.quoted.single.import.solidity",
+              "match": "'[^']*'"
+            },
+            {
+              "name": "keyword.control.from.solidity",
+              "match": "\\b(from|as)\\b"
+            },
+            {
+              "name": "entity.name.type.solidity",
+              "match": "\\b[A-Z]\\w*\\b"
+            }
+          ]
+        }
+      ]
+    },
+    "contract-definition": {
+      "patterns": [
+        {
+          "name": "meta.contract.solidity",
+          "begin": "\\b(abstract\\s+)?(contract|interface|library)\\s+(\\w+)",
+          "end": "(?=\\{)",
+          "beginCaptures": {
+            "1": { "name": "storage.modifier.abstract.solidity" },
+            "2": { "name": "storage.type.contract.solidity" },
+            "3": { "name": "entity.name.type.class.solidity" }
+          },
+          "patterns": [
+            {
+              "name": "storage.modifier.is.solidity",
+              "match": "\\bis\\b"
+            },
+            {
+              "name": "entity.other.inherited-class.solidity",
+              "match": "\\b[A-Z]\\w*\\b"
+            }
+          ]
+        }
+      ]
+    },
+    "function-definition": {
+      "patterns": [
+        {
+          "name": "meta.function.solidity",
+          "begin": "\\b(function)\\s+(\\w+)",
+          "end": "(?=[{;])",
+          "beginCaptures": {
+            "1": { "name": "storage.type.function.solidity" },
+            "2": { "name": "entity.name.function.solidity" }
+          },
+          "patterns": [
+            { "include": "#function-modifiers" },
+            { "include": "#parameters" },
+            { "include": "#return-parameters" },
+            { "include": "#types" }
+          ]
+        },
+        {
+          "name": "meta.function.special.solidity",
+          "begin": "\\b(constructor|receive|fallback)\\b",
+          "end": "(?=[{;])",
+          "beginCaptures": {
+            "1": { "name": "entity.name.function.special.solidity" }
+          },
+          "patterns": [
+            { "include": "#function-modifiers" },
+            { "include": "#parameters" },
+            { "include": "#types" }
+          ]
+        }
+      ]
+    },
+    "modifier-definition": {
+      "patterns": [
+        {
+          "name": "meta.modifier.solidity",
+          "begin": "\\b(modifier)\\s+(\\w+)",
+          "end": "(?=\\{)",
+          "beginCaptures": {
+            "1": { "name": "storage.type.modifier.solidity" },
+            "2": { "name": "entity.name.function.modifier.solidity" }
+          },
+          "patterns": [
+            { "include": "#parameters" },
+            { "include": "#types" }
+          ]
+        }
+      ]
+    },
+    "event-definition": {
+      "patterns": [
+        {
+          "name": "meta.event.solidity",
+          "begin": "\\b(event)\\s+(\\w+)",
+          "end": ";",
+          "beginCaptures": {
+            "1": { "name": "storage.type.event.solidity" },
+            "2": { "name": "entity.name.type.event.solidity" }
+          },
+          "patterns": [
+            { "include": "#parameters" },
+            { "include": "#types" },
+            {
+              "name": "storage.modifier.indexed.solidity",
+              "match": "\\bindexed\\b"
+            },
+            {
+              "name": "storage.modifier.anonymous.solidity",
+              "match": "\\banonymous\\b"
+            }
+          ]
+        }
+      ]
+    },
+    "error-definition": {
+      "patterns": [
+        {
+          "name": "meta.error.solidity",
+          "begin": "\\b(error)\\s+(\\w+)",
+          "end": ";",
+          "beginCaptures": {
+            "1": { "name": "storage.type.error.solidity" },
+            "2": { "name": "entity.name.type.error.solidity" }
+          },
+          "patterns": [
+            { "include": "#parameters" },
+            { "include": "#types" }
+          ]
+        }
+      ]
+    },
+    "struct-definition": {
+      "patterns": [
+        {
+          "name": "meta.struct.solidity",
+          "match": "\\b(struct)\\s+(\\w+)",
+          "captures": {
+            "1": { "name": "storage.type.struct.solidity" },
+            "2": { "name": "entity.name.type.struct.solidity" }
+          }
+        }
+      ]
+    },
+    "enum-definition": {
+      "patterns": [
+        {
+          "name": "meta.enum.solidity",
+          "match": "\\b(enum)\\s+(\\w+)",
+          "captures": {
+            "1": { "name": "storage.type.enum.solidity" },
+            "2": { "name": "entity.name.type.enum.solidity" }
+          }
+        }
+      ]
+    },
+    "type-definition": {
+      "patterns": [
+        {
+          "name": "meta.type-definition.solidity",
+          "match": "\\b(type)\\s+(\\w+)\\s+(is)\\s+(\\w+)",
+          "captures": {
+            "1": { "name": "keyword.other.type.solidity" },
+            "2": { "name": "entity.name.type.solidity" },
+            "3": { "name": "keyword.other.is.solidity" },
+            "4": { "name": "support.type.solidity" }
+          }
+        }
+      ]
+    },
+    "using-directive": {
+      "patterns": [
+        {
+          "name": "meta.using.solidity",
+          "match": "\\b(using)\\s+(\\w+)\\s+(for)\\s+(\\*|\\w+)",
+          "captures": {
+            "1": { "name": "keyword.other.using.solidity" },
+            "2": { "name": "entity.name.type.library.solidity" },
+            "3": { "name": "keyword.other.for.solidity" },
+            "4": { "name": "support.type.solidity" }
+          }
+        }
+      ]
+    },
+    "function-modifiers": {
+      "patterns": [
+        {
+          "name": "storage.modifier.visibility.solidity",
+          "match": "\\b(public|private|internal|external)\\b"
+        },
+        {
+          "name": "storage.modifier.state.solidity",
+          "match": "\\b(pure|view|payable)\\b"
+        },
+        {
+          "name": "storage.modifier.virtual.solidity",
+          "match": "\\b(virtual|override|immutable|constant)\\b"
+        },
+        {
+          "name": "keyword.other.returns.solidity",
+          "match": "\\breturns\\b"
+        }
+      ]
+    },
+    "parameters": {
+      "patterns": [
+        {
+          "name": "storage.modifier.data-location.solidity",
+          "match": "\\b(memory|storage|calldata)\\b"
+        }
+      ]
+    },
+    "return-parameters": {
+      "patterns": [
+        {
+          "name": "keyword.other.returns.solidity",
+          "match": "\\breturns\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.solidity",
+          "match": "\\b(address|bool|string|bytes|byte)\\b"
+        },
+        {
+          "name": "support.type.primitive.solidity",
+          "match": "\\b(uint|int)(8|16|24|32|40|48|56|64|72|80|88|96|104|112|120|128|136|144|152|160|168|176|184|192|200|208|216|224|232|240|248|256)?\\b"
+        },
+        {
+          "name": "support.type.primitive.solidity",
+          "match": "\\bbytes(1|2|3|4|5|6|7|8|9|10|11|12|13|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32)\\b"
+        },
+        {
+          "name": "storage.type.mapping.solidity",
+          "match": "\\bmapping\\b"
+        }
+      ]
+    },
+    "control-flow": {
+      "patterns": [
+        {
+          "name": "keyword.control.solidity",
+          "match": "\\b(if|else|for|while|do|break|continue|return|throw|try|catch)\\b"
+        },
+        {
+          "name": "keyword.control.solidity",
+          "match": "\\b(emit|revert|require|assert|new|delete|unchecked)\\b"
+        },
+        {
+          "name": "keyword.operator.assembly.solidity",
+          "match": "\\b(assembly)\\b"
+        }
+      ]
+    },
+    "expressions": {
+      "patterns": [
+        {
+          "name": "constant.language.boolean.solidity",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "variable.language.this.solidity",
+          "match": "\\b(this|super)\\b"
+        },
+        {
+          "name": "variable.language.builtin.solidity",
+          "match": "\\b(msg|block|tx|abi|type)\\b"
+        },
+        {
+          "name": "support.function.global.solidity",
+          "match": "\\b(keccak256|sha256|ripemd160|ecrecover|addmod|mulmod|selfdestruct|gasleft|blockhash)\\b"
+        },
+        {
+          "name": "constant.numeric.hex.solidity",
+          "match": "\\b0[xX][0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.decimal.solidity",
+          "match": "\\b\\d[\\d_]*(\\.\\d[\\d_]*)?([eE][+-]?\\d+)?\\b"
+        },
+        {
+          "name": "constant.numeric.unit.solidity",
+          "match": "\\b(wei|gwei|ether|seconds|minutes|hours|days|weeks)\\b"
+        },
+        {
+          "name": "string.quoted.double.solidity",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.solidity",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.solidity",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.solidity",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.hex.solidity",
+          "match": "hex\"[0-9a-fA-F_]*\""
+        },
+        {
+          "name": "string.quoted.unicode.solidity",
+          "begin": "unicode\"",
+          "end": "\""
+        },
+        {
+          "name": "keyword.operator.solidity",
+          "match": "=>|->|\\*\\*|&&|\\|\\||!=|==|>=|<=|<<|>>|\\+\\+|--|[+\\-*/%&|^~!<>]"
+        },
+        {
+          "name": "keyword.operator.assignment.solidity",
+          "match": "[+\\-*/%&|^]?="
+        },
+        {
+          "name": "keyword.operator.ternary.solidity",
+          "match": "\\?"
+        }
+      ]
+    },
+    "assembly-block": {
+      "patterns": [
+        {
+          "name": "meta.assembly.solidity",
+          "begin": "\\b(assembly)\\s*(\"evmasm\")?\\s*\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "1": { "name": "keyword.control.assembly.solidity" },
+            "2": { "name": "string.quoted.assembly-dialect.solidity" }
+          },
+          "patterns": [
+            { "include": "#comments" },
+            {
+              "name": "keyword.control.yul.solidity",
+              "match": "\\b(let|if|switch|case|default|for|break|continue|function|leave)\\b"
+            },
+            {
+              "name": "support.function.yul.solidity",
+              "match": "\\b(stop|add|sub|mul|div|sdiv|mod|smod|exp|not|lt|gt|slt|sgt|eq|iszero|and|or|xor|byte|shl|shr|sar|addmod|mulmod|signextend|keccak256|pop|mload|mstore|mstore8|sload|sstore|tload|tstore|msize|gas|address|balance|selfbalance|caller|callvalue|calldataload|calldatasize|calldatacopy|codesize|codecopy|extcodesize|extcodecopy|returndatasize|returndatacopy|extcodehash|create|create2|call|callcode|delegatecall|staticcall|return|revert|selfdestruct|invalid|log0|log1|log2|log3|log4|chainid|basefee|blobbasefee|origin|gasprice|blockhash|blobhash|coinbase|timestamp|number|prevrandao|gaslimit|mcopy)\\b"
+            },
+            {
+              "name": "variable.other.yul.solidity",
+              "match": "\\b[a-zA-Z_]\\w*\\b"
+            },
+            {
+              "name": "constant.numeric.hex.yul.solidity",
+              "match": "\\b0[xX][0-9a-fA-F]+\\b"
+            },
+            {
+              "name": "constant.numeric.decimal.yul.solidity",
+              "match": "\\b\\d+\\b"
+            },
+            {
+              "name": "string.quoted.double.yul.solidity",
+              "begin": "\"",
+              "end": "\""
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "name": "solforge",
+  "private": true,
+  "description": "Modern Solidity IDE plugin for VSCode/Cursor — Foundry-native, LSP-powered",
+  "scripts": {
+    "build": "pnpm -r build",
+    "watch": "pnpm -r --parallel watch",
+    "lint": "eslint packages/*/src/**/*.ts",
+    "test": "pnpm -r test",
+    "package": "cd packages/extension && pnpm package",
+    "clean": "pnpm -r clean"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "esbuild": "^0.20.0",
+    "eslint": "^8.56.0",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "packageManager": "pnpm@8.15.0"
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@solforge/server",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/server.js",
+  "scripts": {
+    "build": "tsc -b",
+    "watch": "tsc -b -w",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "test": "node --test dist/**/*.test.js"
+  },
+  "dependencies": {
+    "@solforge/common": "workspace:*",
+    "@solidity-parser/parser": "^0.18.0",
+    "toml": "^3.0.0",
+    "vscode-languageserver": "^9.0.1",
+    "vscode-languageserver-textdocument": "^1.0.11",
+    "vscode-uri": "^3.0.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  }
+}

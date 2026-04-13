@@ -1,0 +1,199 @@
+{
+  "name": "solforge",
+  "displayName": "Solforge",
+  "description": "Modern Solidity IDE — Foundry-native LSP, test explorer, and static analysis",
+  "version": "0.1.0",
+  "publisher": "uniswap",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Formatters",
+    "Testing",
+    "Debuggers"
+  ],
+  "keywords": [
+    "solidity",
+    "ethereum",
+    "foundry",
+    "forge",
+    "smart contracts",
+    "defi",
+    "evm"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/foundry.toml",
+    "workspaceContains:**/*.sol"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "solidity",
+        "aliases": ["Solidity", "solidity"],
+        "extensions": [".sol"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "solidity",
+        "scopeName": "source.solidity",
+        "path": "./syntaxes/solidity.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Solforge",
+      "properties": {
+        "solforge.foundryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to forge binary. Leave empty to use PATH."
+        },
+        "solforge.formatOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run forge fmt on save."
+        },
+        "solforge.diagnostics.compileOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Run forge build on save for diagnostics."
+        },
+        "solforge.diagnostics.debounceMs": {
+          "type": "number",
+          "default": 500,
+          "description": "Debounce time for real-time diagnostics (ms)."
+        },
+        "solforge.slither.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable slither static analysis integration."
+        },
+        "solforge.slither.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to slither binary."
+        },
+        "solforge.inlayHints.parameterNames": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show parameter name inlay hints in function calls."
+        },
+        "solforge.inlayHints.variableTypes": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show inferred type inlay hints for variables."
+        },
+        "solforge.gasEstimates.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show gas estimate code lens on functions."
+        },
+        "solforge.test.verbosity": {
+          "type": "number",
+          "default": 2,
+          "minimum": 0,
+          "maximum": 5,
+          "description": "Verbosity level for forge test output (0-5)."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "solforge.build",
+        "title": "Solforge: Build (forge build)",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "solforge.test",
+        "title": "Solforge: Run Tests (forge test)"
+      },
+      {
+        "command": "solforge.testFile",
+        "title": "Solforge: Run Tests in Current File"
+      },
+      {
+        "command": "solforge.testFunction",
+        "title": "Solforge: Run Test at Cursor"
+      },
+      {
+        "command": "solforge.format",
+        "title": "Solforge: Format (forge fmt)"
+      },
+      {
+        "command": "solforge.gasSnapshot",
+        "title": "Solforge: Gas Snapshot (forge snapshot)"
+      },
+      {
+        "command": "solforge.flatten",
+        "title": "Solforge: Flatten Contract"
+      },
+      {
+        "command": "solforge.inspectStorage",
+        "title": "Solforge: Inspect Storage Layout"
+      },
+      {
+        "command": "solforge.anvil.start",
+        "title": "Solforge: Start Anvil"
+      },
+      {
+        "command": "solforge.anvil.stop",
+        "title": "Solforge: Stop Anvil"
+      },
+      {
+        "command": "solforge.restartServer",
+        "title": "Solforge: Restart Language Server"
+      }
+    ],
+    "taskDefinitions": [
+      {
+        "type": "forge",
+        "required": ["command"],
+        "properties": {
+          "command": {
+            "type": "string",
+            "description": "The forge command to run (build, test, script, etc.)"
+          },
+          "args": {
+            "type": "array",
+            "description": "Additional arguments"
+          }
+        }
+      }
+    ],
+    "problemMatchers": [
+      {
+        "name": "forge",
+        "owner": "solforge",
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "pattern": {
+          "regexp": "^Error \\(\\d+\\): (.*)$\\n --> (.*?):(\\d+):(\\d+):",
+          "message": 1,
+          "file": 2,
+          "line": 3,
+          "column": 4
+        }
+      }
+    ]
+  },
+  "scripts": {
+    "build": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "watch": "pnpm build --watch",
+    "package": "vsce package --no-dependencies",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@solforge/common": "workspace:*",
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.3"
+  }
+}
