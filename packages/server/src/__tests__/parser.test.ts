@@ -506,4 +506,195 @@ function add(uint256 a, uint256 b) pure returns (uint256) {
       assert.equal(cached.sourceUnit.contracts[0].name, "B");
     });
   });
+
+  describe("natspec extraction", () => {
+    it("extracts @notice from a triple-slash comment on a contract", () => {
+      const result = parser.parse(
+        "natspec-contract.sol",
+        `
+/// @notice A simple counter
+contract Counter {}
+`,
+      );
+
+      const contract = result.sourceUnit.contracts[0];
+      assert.ok(contract.natspec, "contract should have natspec");
+      assert.equal(contract.natspec.notice, "A simple counter");
+    });
+
+    it("extracts multi-tag triple-slash docblock on a function", () => {
+      const result = parser.parse(
+        "natspec-function.sol",
+        `
+pragma solidity ^0.8.24;
+
+contract C {
+    /// @notice Do something
+    /// @dev Only admin
+    /// @param x The input
+    /// @return result The output
+    function foo(uint256 x) external returns (uint256 result) {}
+}
+`,
+      );
+
+      const func = result.sourceUnit.contracts[0].functions[0];
+      assert.ok(func.natspec, "function should have natspec");
+      assert.equal(func.natspec.notice, "Do something");
+      assert.equal(func.natspec.dev, "Only admin");
+      assert.equal(func.natspec.params?.x, "The input");
+      assert.equal(func.natspec.returns?.result, "The output");
+    });
+
+    it("extracts natspec from a block comment (/** ... */) form", () => {
+      const result = parser.parse(
+        "natspec-block.sol",
+        `
+pragma solidity ^0.8.24;
+
+contract C {
+    /**
+     * @notice Transfer tokens
+     * @param to Destination address
+     * @param amount Number of tokens
+     */
+    function transfer(address to, uint256 amount) external {}
+}
+`,
+      );
+
+      const func = result.sourceUnit.contracts[0].functions[0];
+      assert.ok(func.natspec);
+      assert.equal(func.natspec.notice, "Transfer tokens");
+      assert.equal(func.natspec.params?.to, "Destination address");
+      assert.equal(func.natspec.params?.amount, "Number of tokens");
+    });
+
+    it("extracts @custom:tag values", () => {
+      const result = parser.parse(
+        "natspec-custom.sol",
+        `
+pragma solidity ^0.8.24;
+
+contract C {
+    /// @custom:security High risk
+    function dangerous() external {}
+}
+`,
+      );
+
+      const func = result.sourceUnit.contracts[0].functions[0];
+      assert.ok(func.natspec);
+      assert.equal(func.natspec.custom?.security, "High risk");
+    });
+
+    it("joins untagged continuation lines onto the most recent section", () => {
+      const result = parser.parse(
+        "natspec-continuation.sol",
+        `
+pragma solidity ^0.8.24;
+
+contract C {
+    /// @notice This function does
+    /// many important things
+    function f() external {}
+}
+`,
+      );
+
+      const func = result.sourceUnit.contracts[0].functions[0];
+      assert.ok(func.natspec);
+      assert.equal(func.natspec.notice, "This function does many important things");
+    });
+
+    it("returns undefined natspec when no docblock precedes the declaration", () => {
+      const result = parser.parse(
+        "natspec-none.sol",
+        `
+pragma solidity ^0.8.24;
+
+contract NoDocs {}
+`,
+      );
+
+      const contract = result.sourceUnit.contracts[0];
+      assert.equal(contract.natspec, undefined);
+    });
+
+    it("allows blank lines between preceding imports/pragmas and the natspec block", () => {
+      const result = parser.parse(
+        "natspec-import-gap.sol",
+        `
+pragma solidity ^0.8.24;
+import "./foo.sol";
+
+/// @notice Hello
+contract X {}
+`,
+      );
+
+      const contract = result.sourceUnit.contracts[0];
+      assert.ok(contract.natspec);
+      assert.equal(contract.natspec.notice, "Hello");
+    });
+
+    it("extracts natspec for events and errors", () => {
+      const result = parser.parse(
+        "natspec-event-error.sol",
+        `
+pragma solidity ^0.8.24;
+
+contract C {
+    /// @notice Emitted on transfer
+    event T();
+    /// @notice Thrown on fail
+    error E();
+}
+`,
+      );
+
+      const contract = result.sourceUnit.contracts[0];
+      const evt = contract.events[0];
+      const err = contract.errors[0];
+
+      assert.ok(evt.natspec, "event should have natspec");
+      assert.equal(evt.natspec.notice, "Emitted on transfer");
+
+      assert.ok(err.natspec, "error should have natspec");
+      assert.equal(err.natspec.notice, "Thrown on fail");
+    });
+
+    it("stores @inheritdoc under custom.inheritdoc", () => {
+      const result = parser.parse(
+        "natspec-inheritdoc.sol",
+        `
+pragma solidity ^0.8.24;
+
+contract C {
+    /// @inheritdoc IFoo
+    function foo() external {}
+}
+`,
+      );
+
+      const func = result.sourceUnit.contracts[0].functions[0];
+      assert.ok(func.natspec);
+      assert.equal(func.natspec.custom?.inheritdoc, "IFoo");
+    });
+
+    it("does not treat a regular /* ... */ comment as natspec", () => {
+      const result = parser.parse(
+        "natspec-regular-block.sol",
+        `
+pragma solidity ^0.8.24;
+
+/* Just a regular comment, not NatSpec */
+contract Plain {}
+`,
+      );
+
+      const contract = result.sourceUnit.contracts[0];
+      assert.equal(contract.natspec, undefined);
+    });
+  });
 });

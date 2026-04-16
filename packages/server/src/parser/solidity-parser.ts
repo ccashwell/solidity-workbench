@@ -18,7 +18,8 @@ import type {
   Mutability,
   ContractKind,
   ParameterDeclaration,
-} from "@solforge/common";
+  NatspecComment,
+} from "@solidity-workbench/common";
 
 /**
  * Production Solidity parser wrapping @solidity-parser/parser (ANTLR4-based).
@@ -35,9 +36,19 @@ export class SolidityParser {
   private cache: Map<string, ParseResult> = new Map();
 
   /**
+   * Source lines for the file currently being parsed. Populated at the start
+   * of `parse(uri, text)` and cleared in the finally block so the per-node
+   * `mapX` methods can look up preceding NatSpec comments without threading
+   * the lines array through every signature. A parser instance only handles
+   * one `parse` call at a time, so holding this state on the instance is safe.
+   */
+  private currentLines: string[] | null = null;
+
+  /**
    * Parse a Solidity source file and cache the result.
    */
   parse(uri: string, text: string): ParseResult {
+    this.currentLines = text.split("\n");
     try {
       const ast = parser.parse(text, {
         tolerant: true,
@@ -56,7 +67,7 @@ export class SolidityParser {
       }
 
       const sourceUnit = this.mapSourceUnit(uri, ast);
-      const result: ParseResult = { sourceUnit, errors };
+      const result: ParseResult = { sourceUnit, errors, text };
       this.cache.set(uri, result);
       return result;
     } catch (err: unknown) {
@@ -74,14 +85,27 @@ export class SolidityParser {
               : { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
           },
         ],
+        text,
       };
       this.cache.set(uri, errorResult);
       return errorResult;
+    } finally {
+      this.currentLines = null;
     }
   }
 
   get(uri: string): ParseResult | undefined {
     return this.cache.get(uri);
+  }
+
+  /**
+   * Retrieve the raw source text that was passed to `parse(uri, text)` most
+   * recently for the given URI. Returns undefined if the file hasn't been
+   * parsed yet. Useful for downstream indexes that need the original text
+   * without re-reading from disk.
+   */
+  getText(uri: string): string | undefined {
+    return this.cache.get(uri)?.text;
   }
 
   getWordAtPosition(text: string, line: number, character: number): string | null {
@@ -236,6 +260,8 @@ export class SolidityParser {
       baseName: b.baseName?.namePath ?? b.baseName ?? String(b),
     }));
 
+    const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
+
     return {
       type: "ContractDefinition",
       name: node.name,
@@ -249,6 +275,7 @@ export class SolidityParser {
       structs,
       enums,
       usingFor,
+      natspec,
       range: this.locToRange(node.loc),
       nameRange: this.nameRange(node),
     };
@@ -274,6 +301,8 @@ export class SolidityParser {
     const returnParameters = (node.returnParameters ?? []).map((p: any) => this.mapParameter(p));
     const modifierNames = (node.modifiers ?? []).map((m: any) => m.name ?? "");
 
+    const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
+
     return {
       type: "FunctionDefinition",
       name: funcKind === "function" ? (node.name ?? null) : null,
@@ -286,6 +315,7 @@ export class SolidityParser {
       isVirtual: node.isVirtual ?? false,
       isOverride: node.override !== null && node.override !== undefined,
       body: node.body !== null && node.body !== undefined,
+      natspec,
       range: this.locToRange(node.loc),
       nameRange: this.nameRange(node),
     };
@@ -308,12 +338,16 @@ export class SolidityParser {
         mutabilityAttr = v.isImmutable ? "immutable" : "constant";
       }
 
+      const declLine = (v.loc?.start?.line ?? node.loc?.start?.line ?? 1) - 1;
+      const natspec = this.extractNatspecBefore(this.currentLines, declLine);
+
       vars.push({
         type: "StateVariableDeclaration",
         typeName: v.typeName ? this.typeNameToString(v.typeName) : typeName,
         name: v.name ?? v.identifier?.name ?? "",
         visibility,
         mutability: mutabilityAttr,
+        natspec,
         range: this.locToRange(v.loc ?? node.loc),
         nameRange: this.nameRange(v.loc ? v : node),
       });
@@ -323,53 +357,63 @@ export class SolidityParser {
   }
 
   private mapEvent(node: any): EventDefinition {
+    const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
     return {
       type: "EventDefinition",
       name: node.name,
       parameters: (node.parameters ?? []).map((p: any) => this.mapParameter(p)),
       isAnonymous: node.isAnonymous ?? false,
+      natspec,
       range: this.locToRange(node.loc),
       nameRange: this.nameRange(node),
     };
   }
 
   private mapError(node: any): ErrorDefinition {
+    const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
     return {
       type: "ErrorDefinition",
       name: node.name,
       parameters: (node.parameters ?? []).map((p: any) => this.mapParameter(p)),
+      natspec,
       range: this.locToRange(node.loc),
       nameRange: this.nameRange(node),
     };
   }
 
   private mapStruct(node: any): StructDefinition {
+    const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
     return {
       type: "StructDefinition",
       name: node.name,
       members: (node.members ?? []).map((m: any) => this.mapParameter(m)),
+      natspec,
       range: this.locToRange(node.loc),
       nameRange: this.nameRange(node),
     };
   }
 
   private mapEnum(node: any): EnumDefinition {
+    const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
     return {
       type: "EnumDefinition",
       name: node.name,
       members: (node.members ?? []).map((m: any) => m.name ?? m),
+      natspec,
       range: this.locToRange(node.loc),
       nameRange: this.nameRange(node),
     };
   }
 
   private mapModifier(node: any): ModifierDefinition {
+    const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
     return {
       type: "ModifierDefinition",
       name: node.name,
       parameters: (node.parameters ?? []).map((p: any) => this.mapParameter(p)),
       isVirtual: node.isVirtual ?? false,
       isOverride: !!node.override,
+      natspec,
       range: this.locToRange(node.loc),
       nameRange: this.nameRange(node),
     };
@@ -449,6 +493,71 @@ export class SolidityParser {
     return this.locToRange(node.loc);
   }
 
+  // ── NatSpec extraction ─────────────────────────────────────────────
+
+  /**
+   * Extract the NatSpec docblock that immediately precedes a given line.
+   * Walks backward from `lineIndex - 1` collecting:
+   *   - A contiguous run of `/// ...` triple-slash lines
+   *   - Or a single `/** ... *\/` block comment ending on the previous
+   *     non-empty line (the block comment start `/**` must be on its own line
+   *     — modulo leading whitespace — to count as NatSpec)
+   *
+   * Parses tags: @title, @author, @notice, @dev, @param <name> <desc>,
+   *              @return [name] <desc>, @inheritdoc <name>, @custom:<tag> <value>.
+   * Lines without tags append (with a single-space separator) to whichever
+   * section was most recently started; before any tag the implicit section
+   * is `@notice`.
+   *
+   * Returns `undefined` when no NatSpec is present or every parsed field
+   * would be empty. `lineIndex` is the zero-based line of the declaration
+   * itself; callers typically pass `node.loc.start.line - 1`.
+   */
+  private extractNatspecBefore(
+    lines: string[] | null,
+    lineIndex: number,
+  ): NatspecComment | undefined {
+    if (!lines || lineIndex <= 0 || lineIndex > lines.length) {
+      return undefined;
+    }
+
+    // Skip blank lines between the declaration and the preceding comment.
+    let i = lineIndex - 1;
+    while (i >= 0 && lines[i].trim() === "") i--;
+    if (i < 0) return undefined;
+
+    const firstTrimmed = lines[i].trim();
+    const rawLines: string[] = [];
+
+    if (firstTrimmed.endsWith("*/")) {
+      // Block comment form. Walk backward until we find a line whose trimmed
+      // content starts with `/**` — that's the NatSpec opener. If we never
+      // find it (e.g. this is a regular `/* ... */` comment), bail.
+      let startIdx = i;
+      while (startIdx >= 0 && !lines[startIdx].trim().startsWith("/**")) {
+        startIdx--;
+      }
+      if (startIdx < 0) return undefined;
+      for (let j = startIdx; j <= i; j++) {
+        rawLines.push(stripBlockCommentMarkers(lines[j]));
+      }
+    } else if (firstTrimmed.startsWith("///")) {
+      // Triple-slash form. Collect contiguous `///` lines walking backward.
+      const collected: string[] = [];
+      let j = i;
+      while (j >= 0 && lines[j].trim().startsWith("///")) {
+        collected.push(stripTripleSlashMarker(lines[j]));
+        j--;
+      }
+      collected.reverse();
+      rawLines.push(...collected);
+    } else {
+      return undefined;
+    }
+
+    return parseNatspecLines(rawLines);
+  }
+
   private emptySourceUnit(uri: string): SoliditySourceUnit {
     return {
       filePath: uri,
@@ -462,11 +571,202 @@ export class SolidityParser {
   }
 }
 
+// ── NatSpec parsing helpers ──────────────────────────────────────────
+
+/**
+ * Matches a NatSpec tag line. Captures:
+ *   1. tag name (e.g. "notice", "param", "custom")
+ *   2. optional sub-tag after `:` (e.g. "security" in `@custom:security`)
+ *   3. optional remainder of the line after whitespace
+ */
+const TAG_REGEX = /^@(\w+)(?::(\w+))?(?:\s+(.*))?$/;
+
+/** Matches a Solidity identifier (used to detect named `@return` values). */
+const IDENTIFIER_REGEX = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
+
+/**
+ * Strip block-comment decoration from a single line:
+ *   - trailing `*/ ` (with any preceding whitespace / extra stars)
+ *   - leading `; /**` / `/*` opener (with optional single space after)
+ *   - leading `*` found on interior lines (with optional single space after)
+ */
+function stripBlockCommentMarkers(line: string): string {
+  let s = line;
+  s = s.replace(/\s*\*+\/\s*$/, "");
+  s = s.replace(/^\s*\/\*+\s?/, "");
+  s = s.replace(/^\s*\*+\s?/, "");
+  return s.trim();
+}
+
+/** Strip the leading `///` marker (and optional single space) from a line. */
+function stripTripleSlashMarker(line: string): string {
+  return line.replace(/^\s*\/\/\/\s?/, "").trim();
+}
+
+/** Which tag's value a subsequent untagged continuation line appends to. */
+type NatspecSection =
+  | { kind: "notice" }
+  | { kind: "dev" }
+  | { kind: "param"; name: string }
+  | { kind: "return"; name: string }
+  | { kind: "custom"; tag: string }
+  | null;
+
+/**
+ * Parse an array of NatSpec lines (already stripped of comment markers) into
+ * a `NatspecComment`. Returns undefined if no fields end up populated.
+ */
+function parseNatspecLines(rawLines: string[]): NatspecComment | undefined {
+  const natspec: NatspecComment = {};
+  // Before any tag, untagged lines fold into @notice per solc convention.
+  let section: NatspecSection = { kind: "notice" };
+
+  const append = (text: string) => {
+    if (!section) return;
+    switch (section.kind) {
+      case "notice":
+        natspec.notice = natspec.notice ? natspec.notice + " " + text : text;
+        return;
+      case "dev":
+        natspec.dev = natspec.dev ? natspec.dev + " " + text : text;
+        return;
+      case "param": {
+        if (!natspec.params) natspec.params = {};
+        const prev = natspec.params[section.name];
+        natspec.params[section.name] = prev ? prev + " " + text : text;
+        return;
+      }
+      case "return": {
+        if (!natspec.returns) natspec.returns = {};
+        const prev = natspec.returns[section.name];
+        natspec.returns[section.name] = prev ? prev + " " + text : text;
+        return;
+      }
+      case "custom": {
+        if (!natspec.custom) natspec.custom = {};
+        const prev = natspec.custom[section.tag];
+        natspec.custom[section.tag] = prev ? prev + " " + text : text;
+        return;
+      }
+    }
+  };
+
+  for (const raw of rawLines) {
+    const line = raw.trim();
+    if (!line) continue;
+
+    const match = line.match(TAG_REGEX);
+    if (!match) {
+      append(line);
+      continue;
+    }
+
+    const tag = match[1];
+    const sub = match[2];
+    const rest = (match[3] ?? "").trim();
+
+    switch (tag) {
+      case "title":
+        natspec.title = rest;
+        section = null;
+        break;
+      case "author":
+        natspec.author = rest;
+        section = null;
+        break;
+      case "notice":
+        natspec.notice = rest;
+        section = { kind: "notice" };
+        break;
+      case "dev":
+        natspec.dev = rest;
+        section = { kind: "dev" };
+        break;
+      case "param": {
+        const parts = rest.split(/\s+/).filter(Boolean);
+        const name = parts[0] ?? "";
+        const desc = parts.slice(1).join(" ");
+        if (!natspec.params) natspec.params = {};
+        natspec.params[name] = desc;
+        section = { kind: "param", name };
+        break;
+      }
+      case "return": {
+        const parts = rest.split(/\s+/).filter(Boolean);
+        if (!natspec.returns) natspec.returns = {};
+        if (parts.length > 0 && IDENTIFIER_REGEX.test(parts[0])) {
+          const name = parts[0];
+          natspec.returns[name] = parts.slice(1).join(" ");
+          section = { kind: "return", name };
+        } else {
+          natspec.returns[""] = rest;
+          section = { kind: "return", name: "" };
+        }
+        break;
+      }
+      case "inheritdoc":
+        if (!natspec.custom) natspec.custom = {};
+        natspec.custom.inheritdoc = rest;
+        section = null;
+        break;
+      case "custom":
+        if (sub) {
+          if (!natspec.custom) natspec.custom = {};
+          natspec.custom[sub] = rest;
+          section = { kind: "custom", tag: sub };
+        }
+        break;
+      default:
+        // Unknown tag: store under custom so we don't drop it silently.
+        if (!natspec.custom) natspec.custom = {};
+        natspec.custom[tag] = rest;
+        section = { kind: "custom", tag };
+        break;
+    }
+  }
+
+  // Collapse internal whitespace runs (including newlines we joined with
+  // spaces above) down to single spaces, and trim the edges.
+  const collapse = (s: string): string => s.replace(/\s+/g, " ").trim();
+  if (natspec.title !== undefined) natspec.title = collapse(natspec.title);
+  if (natspec.author !== undefined) natspec.author = collapse(natspec.author);
+  if (natspec.notice !== undefined) natspec.notice = collapse(natspec.notice);
+  if (natspec.dev !== undefined) natspec.dev = collapse(natspec.dev);
+  if (natspec.params) {
+    for (const k of Object.keys(natspec.params)) {
+      natspec.params[k] = collapse(natspec.params[k]);
+    }
+  }
+  if (natspec.returns) {
+    for (const k of Object.keys(natspec.returns)) {
+      natspec.returns[k] = collapse(natspec.returns[k]);
+    }
+  }
+  if (natspec.custom) {
+    for (const k of Object.keys(natspec.custom)) {
+      natspec.custom[k] = collapse(natspec.custom[k]);
+    }
+  }
+
+  const hasContent =
+    natspec.title !== undefined ||
+    natspec.author !== undefined ||
+    natspec.notice !== undefined ||
+    natspec.dev !== undefined ||
+    (natspec.params !== undefined && Object.keys(natspec.params).length > 0) ||
+    (natspec.returns !== undefined && Object.keys(natspec.returns).length > 0) ||
+    (natspec.custom !== undefined && Object.keys(natspec.custom).length > 0);
+
+  return hasContent ? natspec : undefined;
+}
+
 // ── Types ────────────────────────────────────────────────────────────
 
 export interface ParseResult {
   sourceUnit: SoliditySourceUnit;
   errors: ParseError[];
+  /** Raw source text that produced this parse result. */
+  text?: string;
 }
 
 export interface ParseError {
