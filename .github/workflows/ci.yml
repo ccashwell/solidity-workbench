@@ -35,6 +35,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Rebuild icon and check for drift
+        run: |
+          pnpm build:icon
+          if ! git diff --quiet packages/extension/resources/icon.png; then
+            echo "::error::icon.png is out of date — run 'pnpm build:icon' and commit the result"
+            exit 1
+          fi
+
       - name: Build
         run: pnpm -r build
 
@@ -75,7 +83,7 @@ jobs:
       - name: Package VSIX
         run: cd packages/extension && pnpm package
 
-      - name: Verify VSIX contains bundled LSP server
+      - name: Verify VSIX contains bundled LSP server and icon
         run: |
           VSIX=$(ls packages/extension/*.vsix | head -n 1)
           echo "Inspecting $VSIX"
@@ -86,6 +94,10 @@ jobs:
           }
           grep -q 'extension/dist/extension.js' /tmp/vsix-listing.txt || {
             echo "::error::VSIX is missing bundled extension entry (extension/dist/extension.js)"
+            exit 1
+          }
+          grep -q 'extension/resources/icon.png' /tmp/vsix-listing.txt || {
+            echo "::error::VSIX is missing extension icon (extension/resources/icon.png)"
             exit 1
           }
 

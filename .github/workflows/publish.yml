@@ -1,0 +1,85 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify tag matches package.json version
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG_VERSION=$(node -p "require('./packages/extension/package.json').version")
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "pkg=${PKG_VERSION}" >> "$GITHUB_OUTPUT"
+          if [ "$TAG" != "$PKG_VERSION" ]; then
+            echo "::error::Tag v${TAG} does not match packages/extension version ${PKG_VERSION}"
+            exit 1
+          fi
+
+      - name: Build
+        run: pnpm -r build
+
+      - name: Package VSIX
+        run: cd packages/extension && pnpm package
+
+      - name: Verify VSIX contents
+        run: |
+          VSIX=$(ls packages/extension/*.vsix | head -n 1)
+          unzip -l "$VSIX" | tee /tmp/vsix-listing.txt
+          grep -q 'extension/dist/server.js' /tmp/vsix-listing.txt
+          grep -q 'extension/dist/extension.js' /tmp/vsix-listing.txt
+          grep -q 'extension/resources/icon.png' /tmp/vsix-listing.txt
+
+      - name: Publish to VS Code Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "${VSCE_PAT:-}" ]; then
+            echo "::warning::VSCE_PAT not set — skipping VS Code Marketplace publish"
+          else
+            cd packages/extension
+            npx --yes @vscode/vsce publish --no-dependencies --pat "$VSCE_PAT"
+          fi
+
+      - name: Publish to Open VSX
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -z "${OVSX_PAT:-}" ]; then
+            echo "::warning::OVSX_PAT not set — skipping Open VSX publish"
+          else
+            VSIX=$(ls packages/extension/*.vsix | head -n 1)
+            npx --yes ovsx publish "$VSIX" --pat "$OVSX_PAT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: packages/extension/*.vsix
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

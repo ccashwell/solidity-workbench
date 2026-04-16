@@ -3,17 +3,19 @@
   "private": true,
   "description": "Modern Solidity IDE plugin for VSCode/Cursor — Foundry-native, LSP-powered",
   "scripts": {
-    "build": "pnpm -r build",
+    "build": "pnpm build:icon && pnpm -r build",
+    "build:icon": "node scripts/build-icon.mjs",
     "watch": "pnpm -r --parallel watch",
     "lint": "eslint packages/*/src/**/*.ts",
     "lint:fix": "eslint packages/*/src/**/*.ts --fix",
     "format": "prettier --write 'packages/*/src/**/*.ts'",
     "format:check": "prettier --check 'packages/*/src/**/*.ts'",
     "test": "pnpm -r test",
-    "package": "cd packages/extension && pnpm package",
+    "package": "pnpm build:icon && cd packages/extension && pnpm package",
     "clean": "pnpm -r clean"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^20.11.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
