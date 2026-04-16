@@ -25,9 +25,7 @@ let client: LanguageClient;
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   // ── LSP Server ───────────────────────────────────────────────────
 
-  const serverModule = context.asAbsolutePath(
-    path.join("node_modules", "@solforge", "server", "dist", "server.js"),
-  );
+  const serverModule = context.asAbsolutePath(path.join("dist", "server.js"));
 
   const serverOptions: ServerOptions = {
     run: {
@@ -51,10 +49,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         vscode.workspace.createFileSystemWatcher("**/.gas-snapshot"),
       ],
     },
-    outputChannelName: "Solforge",
+    outputChannelName: "Solidity Workbench",
   };
 
-  client = new LanguageClient("solforge", "Solforge Language Server", serverOptions, clientOptions);
+  client = new LanguageClient(
+    "solidity-workbench",
+    "Solidity Workbench Language Server",
+    serverOptions,
+    clientOptions,
+  );
 
   // Start the client (which also starts the server)
   await client.start();
@@ -69,9 +72,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Restart server command
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.restartServer", async () => {
+    vscode.commands.registerCommand("solidity-workbench.restartServer", async () => {
       await client.restart();
-      vscode.window.showInformationMessage("Solforge language server restarted.");
+      vscode.window.showInformationMessage("Solidity Workbench language server restarted.");
     }),
   );
 
@@ -116,14 +119,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push({ dispose: () => slither.dispose() });
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.slither", () => slither.analyze()),
+    vscode.commands.registerCommand("solidity-workbench.slither", () => slither.analyze()),
   );
 
   // Auto-run slither on save if enabled
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
       if (doc.languageId === "solidity") {
-        const config = vscode.workspace.getConfiguration("solforge");
+        const config = vscode.workspace.getConfiguration("solidity-workbench");
         if (config.get<boolean>("slither.enabled")) {
           slither.analyze();
         }
@@ -134,19 +137,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // ── Status Bar ────────────────────────────────────────────────────
 
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBar.text = "$(beaker) Solforge";
-  statusBar.tooltip = "Solforge — Solidity IDE";
-  statusBar.command = "solforge.build";
+  statusBar.text = "$(beaker) Solidity Workbench";
+  statusBar.tooltip = "Solidity Workbench — Solidity IDE";
+  statusBar.command = "solidity-workbench.build";
   statusBar.show();
   context.subscriptions.push(statusBar);
 
   // ── Output Channel ────────────────────────────────────────────────
 
-  const outputChannel = vscode.window.createOutputChannel("Solforge", {
+  const outputChannel = vscode.window.createOutputChannel("Solidity Workbench", {
     log: true,
   });
   context.subscriptions.push(outputChannel);
-  outputChannel.info("Solforge activated");
+  outputChannel.info("Solidity Workbench activated");
 }
 
 export async function deactivate(): Promise<void> {

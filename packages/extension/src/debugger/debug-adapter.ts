@@ -5,101 +5,34 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 /**
- * Solidity Transaction Debugger — step through EVM execution.
+ * Solidity Transaction Debugger — terminal-based fallback.
  *
- * This integrates with `forge debug` and `forge test --debug` to provide
- * a source-level debugging experience:
+ * Exposes three commands (`solidity-workbench.debugTest`, `solidity-workbench.debugScript`,
+ * `solidity-workbench.debugTransaction`) that shell out to `forge test --debug`,
+ * `forge debug <script>`, and `forge debug --rpc-url <url> <txHash>` in a
+ * dedicated VSCode terminal. This gives users step-through EVM debugging
+ * via forge's built-in TUI without requiring a Debug Adapter Protocol
+ * server.
  *
- * - Set breakpoints in Solidity source files
- * - Step through execution (step over, step into, step out)
- * - Inspect local variables, storage, and memory
- * - View the call stack across contract boundaries
- * - Watch expressions (contract state, computed values)
- * - Conditional breakpoints on storage changes
- *
- * Architecture:
- * We implement a Debug Adapter Protocol (DAP) provider that:
- * 1. Launches `forge test --debug <test>` or `forge debug <script>`
- * 2. Parses the debug trace output
- * 3. Maps EVM opcodes back to Solidity source locations using source maps
- * 4. Exposes the standard DAP interface for VSCode's debug UI
- *
- * For the initial implementation, we use forge's built-in debug mode
- * with TUI output parsing. A full DAP adapter would communicate via
- * the debug protocol, but forge doesn't expose a DAP server yet.
+ * A full DAP implementation is planned; see PRODUCTION_GAPS.md.
  */
-export class SolidityDebugProvider implements vscode.DebugConfigurationProvider {
+export class SolidityDebugProvider {
   activate(context: vscode.ExtensionContext): void {
-    // Register debug configuration provider
-    context.subscriptions.push(vscode.debug.registerDebugConfigurationProvider("solforge", this));
-
-    // Register debug adapter descriptor factory
     context.subscriptions.push(
-      vscode.debug.registerDebugAdapterDescriptorFactory(
-        "solforge",
-        new SolidityDebugAdapterFactory(),
-      ),
-    );
-
-    // Register commands
-    context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.debugTest", (testName?: string) =>
+      vscode.commands.registerCommand("solidity-workbench.debugTest", (testName?: string) =>
         this.debugTest(testName),
       ),
     );
 
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.debugScript", () => this.debugScript()),
+      vscode.commands.registerCommand("solidity-workbench.debugScript", () => this.debugScript()),
     );
 
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.debugTransaction", () => this.debugTransaction()),
+      vscode.commands.registerCommand("solidity-workbench.debugTransaction", () =>
+        this.debugTransaction(),
+      ),
     );
-  }
-
-  /**
-   * Provide debug configurations for launch.json.
-   */
-  provideDebugConfigurations(): vscode.DebugConfiguration[] {
-    return [
-      {
-        type: "solforge",
-        request: "launch",
-        name: "Debug Forge Test",
-        mode: "test",
-        testFunction: "${command:solforge.pickTest}",
-      },
-      {
-        type: "solforge",
-        request: "launch",
-        name: "Debug Forge Script",
-        mode: "script",
-        scriptFile: "${file}",
-      },
-      {
-        type: "solforge",
-        request: "launch",
-        name: "Debug Transaction",
-        mode: "transaction",
-        txHash: "",
-        rpcUrl: "http://127.0.0.1:8545",
-      },
-    ];
-  }
-
-  /**
-   * Resolve a debug configuration before launching.
-   */
-  resolveDebugConfiguration(
-    folder: vscode.WorkspaceFolder | undefined,
-    config: vscode.DebugConfiguration,
-  ): vscode.DebugConfiguration | undefined {
-    if (!config.type) {
-      config.type = "solforge";
-      config.request = "launch";
-      config.mode = "test";
-    }
-    return config;
   }
 
   /**
@@ -123,7 +56,7 @@ export class SolidityDebugProvider implements vscode.DebugConfigurationProvider 
 
     if (!testName) return;
 
-    const config = vscode.workspace.getConfiguration("solforge");
+    const config = vscode.workspace.getConfiguration("solidity-workbench");
     const forgePath = config.get<string>("foundryPath") || "forge";
 
     // Use the terminal-based debugger with maximum verbosity and debug flag
@@ -147,7 +80,7 @@ export class SolidityDebugProvider implements vscode.DebugConfigurationProvider 
       return;
     }
 
-    const config = vscode.workspace.getConfiguration("solforge");
+    const config = vscode.workspace.getConfiguration("solidity-workbench");
     const forgePath = config.get<string>("foundryPath") || "forge";
 
     const terminal = vscode.window.createTerminal({
@@ -176,7 +109,7 @@ export class SolidityDebugProvider implements vscode.DebugConfigurationProvider 
     });
     if (!rpcUrl) return;
 
-    const config = vscode.workspace.getConfiguration("solforge");
+    const config = vscode.workspace.getConfiguration("solidity-workbench");
     const forgePath = config.get<string>("foundryPath") || "forge";
 
     const terminal = vscode.window.createTerminal({
@@ -195,7 +128,7 @@ export class SolidityDebugProvider implements vscode.DebugConfigurationProvider 
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) return null;
 
-    const config = vscode.workspace.getConfiguration("solforge");
+    const config = vscode.workspace.getConfiguration("solidity-workbench");
     const forgePath = config.get<string>("foundryPath") || "forge";
 
     try {
@@ -249,17 +182,6 @@ export class SolidityDebugProvider implements vscode.DebugConfigurationProvider 
       if (/^\s*(?:contract|interface|library)\s/.test(text)) break;
     }
     return null;
-  }
-}
-
-class SolidityDebugAdapterFactory implements vscode.DebugAdapterDescriptorFactory {
-  createDebugAdapterDescriptor(
-    _session: vscode.DebugSession,
-  ): vscode.ProviderResult<vscode.DebugAdapterDescriptor> {
-    // For now, we use the terminal-based approach via forge debug.
-    // A full DAP implementation would return a DebugAdapterServer or
-    // DebugAdapterInlineImplementation here.
-    return undefined;
   }
 }
 

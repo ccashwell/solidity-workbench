@@ -1,6 +1,6 @@
 {
-  "name": "solforge",
-  "displayName": "Solforge",
+  "name": "solidity-workbench",
+  "displayName": "Solidity Workbench",
   "description": "Modern Solidity IDE — Foundry-native LSP, test explorer, and static analysis",
   "version": "0.1.0",
   "publisher": "uniswap",
@@ -46,54 +46,54 @@
       }
     ],
     "configuration": {
-      "title": "Solforge",
+      "title": "Solidity Workbench",
       "properties": {
-        "solforge.foundryPath": {
+        "solidity-workbench.foundryPath": {
           "type": "string",
           "default": "",
           "description": "Path to forge binary. Leave empty to use PATH."
         },
-        "solforge.formatOnSave": {
+        "solidity-workbench.formatOnSave": {
           "type": "boolean",
           "default": true,
           "description": "Run forge fmt on save."
         },
-        "solforge.diagnostics.compileOnSave": {
+        "solidity-workbench.diagnostics.compileOnSave": {
           "type": "boolean",
           "default": true,
           "description": "Run forge build on save for diagnostics."
         },
-        "solforge.diagnostics.debounceMs": {
+        "solidity-workbench.diagnostics.debounceMs": {
           "type": "number",
           "default": 500,
           "description": "Debounce time for real-time diagnostics (ms)."
         },
-        "solforge.slither.enabled": {
+        "solidity-workbench.slither.enabled": {
           "type": "boolean",
           "default": false,
           "description": "Enable slither static analysis integration."
         },
-        "solforge.slither.path": {
+        "solidity-workbench.slither.path": {
           "type": "string",
           "default": "",
           "description": "Path to slither binary."
         },
-        "solforge.inlayHints.parameterNames": {
+        "solidity-workbench.inlayHints.parameterNames": {
           "type": "boolean",
           "default": true,
           "description": "Show parameter name inlay hints in function calls."
         },
-        "solforge.inlayHints.variableTypes": {
+        "solidity-workbench.inlayHints.variableTypes": {
           "type": "boolean",
           "default": false,
           "description": "Show inferred type inlay hints for variables."
         },
-        "solforge.gasEstimates.enabled": {
+        "solidity-workbench.gasEstimates.enabled": {
           "type": "boolean",
           "default": true,
           "description": "Show gas estimate code lens on functions."
         },
-        "solforge.test.verbosity": {
+        "solidity-workbench.test.verbosity": {
           "type": "number",
           "default": 2,
           "minimum": 0,
@@ -104,218 +104,155 @@
     },
     "commands": [
       {
-        "command": "solforge.build",
-        "title": "Solforge: Build (forge build)",
+        "command": "solidity-workbench.build",
+        "title": "Solidity Workbench: Build (forge build)",
         "icon": "$(gear)"
       },
       {
-        "command": "solforge.test",
-        "title": "Solforge: Run Tests (forge test)"
+        "command": "solidity-workbench.test",
+        "title": "Solidity Workbench: Run Tests (forge test)"
       },
       {
-        "command": "solforge.testFile",
-        "title": "Solforge: Run Tests in Current File"
+        "command": "solidity-workbench.testFile",
+        "title": "Solidity Workbench: Run Tests in Current File"
       },
       {
-        "command": "solforge.testFunction",
-        "title": "Solforge: Run Test at Cursor"
+        "command": "solidity-workbench.testFunction",
+        "title": "Solidity Workbench: Run Test at Cursor"
       },
       {
-        "command": "solforge.format",
-        "title": "Solforge: Format (forge fmt)"
+        "command": "solidity-workbench.format",
+        "title": "Solidity Workbench: Format (forge fmt)"
       },
       {
-        "command": "solforge.gasSnapshot",
-        "title": "Solforge: Gas Snapshot (forge snapshot)"
+        "command": "solidity-workbench.gasSnapshot",
+        "title": "Solidity Workbench: Gas Snapshot (forge snapshot)"
       },
       {
-        "command": "solforge.flatten",
-        "title": "Solforge: Flatten Contract"
+        "command": "solidity-workbench.flatten",
+        "title": "Solidity Workbench: Flatten Contract"
       },
       {
-        "command": "solforge.inspectStorage",
-        "title": "Solforge: Inspect Storage Layout"
+        "command": "solidity-workbench.inspectStorage",
+        "title": "Solidity Workbench: Inspect Storage Layout"
       },
       {
-        "command": "solforge.anvil.start",
-        "title": "Solforge: Start Anvil"
+        "command": "solidity-workbench.anvil.start",
+        "title": "Solidity Workbench: Start Anvil"
       },
       {
-        "command": "solforge.anvil.stop",
-        "title": "Solforge: Stop Anvil"
+        "command": "solidity-workbench.anvil.stop",
+        "title": "Solidity Workbench: Stop Anvil"
       },
       {
-        "command": "solforge.restartServer",
-        "title": "Solforge: Restart Language Server"
+        "command": "solidity-workbench.chisel.start",
+        "title": "Solidity Workbench: Start Chisel REPL"
       },
       {
-        "command": "solforge.coverage",
-        "title": "Solforge: Run Coverage (forge coverage)"
+        "command": "solidity-workbench.chisel.startFork",
+        "title": "Solidity Workbench: Start Chisel REPL (Fork)"
       },
       {
-        "command": "solforge.coverageClear",
-        "title": "Solforge: Clear Coverage Highlights"
+        "command": "solidity-workbench.chisel.sendSelection",
+        "title": "Solidity Workbench: Send Selection to Chisel"
       },
       {
-        "command": "solforge.slither",
-        "title": "Solforge: Run Slither Analysis"
+        "command": "solidity-workbench.restartServer",
+        "title": "Solidity Workbench: Restart Language Server"
       },
       {
-        "command": "solforge.cast.sig",
-        "title": "Solforge: Get Function Selector (cast sig)"
+        "command": "solidity-workbench.coverage",
+        "title": "Solidity Workbench: Run Coverage (forge coverage)"
       },
       {
-        "command": "solforge.cast.4byte",
-        "title": "Solforge: Decode Selector (cast 4byte)"
+        "command": "solidity-workbench.coverageClear",
+        "title": "Solidity Workbench: Clear Coverage Highlights"
       },
       {
-        "command": "solforge.cast.calldataDecode",
-        "title": "Solforge: Decode Calldata (cast calldata-decode)"
+        "command": "solidity-workbench.slither",
+        "title": "Solidity Workbench: Run Slither Analysis"
       },
       {
-        "command": "solforge.cast.abiEncode",
-        "title": "Solforge: ABI Encode (cast abi-encode)"
+        "command": "solidity-workbench.cast.sig",
+        "title": "Solidity Workbench: Get Function Selector (cast sig)"
       },
       {
-        "command": "solforge.cast.keccak",
-        "title": "Solforge: Keccak256 Hash (cast keccak)"
+        "command": "solidity-workbench.cast.4byte",
+        "title": "Solidity Workbench: Decode Selector (cast 4byte)"
       },
       {
-        "command": "solforge.cast.toWei",
-        "title": "Solforge: Convert to Wei (cast to-wei)"
+        "command": "solidity-workbench.cast.calldataDecode",
+        "title": "Solidity Workbench: Decode Calldata (cast calldata-decode)"
       },
       {
-        "command": "solforge.cast.fromWei",
-        "title": "Solforge: Convert from Wei (cast from-wei)"
+        "command": "solidity-workbench.cast.abiEncode",
+        "title": "Solidity Workbench: ABI Encode (cast abi-encode)"
       },
       {
-        "command": "solforge.cast.balance",
-        "title": "Solforge: Check Balance (cast balance)"
+        "command": "solidity-workbench.cast.keccak",
+        "title": "Solidity Workbench: Keccak256 Hash (cast keccak)"
       },
       {
-        "command": "solforge.cast.storage",
-        "title": "Solforge: Read Storage Slot (cast storage)"
+        "command": "solidity-workbench.cast.toWei",
+        "title": "Solidity Workbench: Convert to Wei (cast to-wei)"
       },
       {
-        "command": "solforge.script.simulate",
-        "title": "Solforge: Run Script — Simulate (forge script)"
+        "command": "solidity-workbench.cast.fromWei",
+        "title": "Solidity Workbench: Convert from Wei (cast from-wei)"
       },
       {
-        "command": "solforge.script.broadcast",
-        "title": "Solforge: Run Script — Broadcast (forge script --broadcast)"
+        "command": "solidity-workbench.cast.balance",
+        "title": "Solidity Workbench: Check Balance (cast balance)"
       },
       {
-        "command": "solforge.script.resume",
-        "title": "Solforge: Resume Script Broadcast (forge script --resume)"
+        "command": "solidity-workbench.cast.storage",
+        "title": "Solidity Workbench: Read Storage Slot (cast storage)"
       },
       {
-        "command": "solforge.deploy.create",
-        "title": "Solforge: Deploy Contract (forge create)"
+        "command": "solidity-workbench.script.simulate",
+        "title": "Solidity Workbench: Run Script — Simulate (forge script)"
       },
       {
-        "command": "solforge.deploy.verify",
-        "title": "Solforge: Verify Contract on Etherscan"
+        "command": "solidity-workbench.script.broadcast",
+        "title": "Solidity Workbench: Run Script — Broadcast (forge script --broadcast)"
       },
       {
-        "command": "solforge.deploy.verifyCheck",
-        "title": "Solforge: Check Verification Status"
+        "command": "solidity-workbench.script.resume",
+        "title": "Solidity Workbench: Resume Script Broadcast (forge script --resume)"
       },
       {
-        "command": "solforge.debugTest",
-        "title": "Solforge: Debug Test (forge test --debug)"
+        "command": "solidity-workbench.deploy.create",
+        "title": "Solidity Workbench: Deploy Contract (forge create)"
       },
       {
-        "command": "solforge.debugScript",
-        "title": "Solforge: Debug Script (forge debug)"
+        "command": "solidity-workbench.deploy.verify",
+        "title": "Solidity Workbench: Verify Contract on Etherscan"
       },
       {
-        "command": "solforge.debugTransaction",
-        "title": "Solforge: Debug Transaction"
+        "command": "solidity-workbench.deploy.verifyCheck",
+        "title": "Solidity Workbench: Check Verification Status"
       },
       {
-        "command": "solforge.inspectStoragePanel",
-        "title": "Solforge: Storage Layout Visualization"
-      }
-    ],
-    "breakpoints": [
-      { "language": "solidity" }
-    ],
-    "debuggers": [
+        "command": "solidity-workbench.debugTest",
+        "title": "Solidity Workbench: Debug Test (forge test --debug)"
+      },
       {
-        "type": "solforge",
-        "label": "Solforge Debugger",
-        "languages": ["solidity"],
-        "configurationAttributes": {
-          "launch": {
-            "required": ["mode"],
-            "properties": {
-              "mode": {
-                "type": "string",
-                "description": "Debug mode: test, script, or transaction",
-                "enum": ["test", "script", "transaction"]
-              },
-              "testFunction": {
-                "type": "string",
-                "description": "Test function name for mode=test"
-              },
-              "scriptFile": {
-                "type": "string",
-                "description": "Script file path for mode=script"
-              },
-              "txHash": {
-                "type": "string",
-                "description": "Transaction hash for mode=transaction"
-              },
-              "rpcUrl": {
-                "type": "string",
-                "description": "RPC URL for mode=transaction",
-                "default": "http://127.0.0.1:8545"
-              }
-            }
-          }
-        },
-        "configurationSnippets": [
-          {
-            "label": "Solforge: Debug Test",
-            "description": "Debug a Foundry test function",
-            "body": {
-              "type": "solforge",
-              "request": "launch",
-              "name": "Debug Forge Test",
-              "mode": "test",
-              "testFunction": "${1:test_myFunction}"
-            }
-          },
-          {
-            "label": "Solforge: Debug Script",
-            "description": "Debug a Foundry script",
-            "body": {
-              "type": "solforge",
-              "request": "launch",
-              "name": "Debug Forge Script",
-              "mode": "script",
-              "scriptFile": "^\"${2:\\${file\\}}\""
-            }
-          },
-          {
-            "label": "Solforge: Debug Transaction",
-            "description": "Replay and debug a transaction",
-            "body": {
-              "type": "solforge",
-              "request": "launch",
-              "name": "Debug Transaction",
-              "mode": "transaction",
-              "txHash": "${1:0x...}",
-              "rpcUrl": "${2:http://127.0.0.1:8545}"
-            }
-          }
-        ]
+        "command": "solidity-workbench.debugScript",
+        "title": "Solidity Workbench: Debug Script (forge debug)"
+      },
+      {
+        "command": "solidity-workbench.debugTransaction",
+        "title": "Solidity Workbench: Debug Transaction"
+      },
+      {
+        "command": "solidity-workbench.inspectStoragePanel",
+        "title": "Solidity Workbench: Storage Layout Visualization"
       }
     ],
     "views": {
       "test": [
         {
-          "id": "solforge-gas-profiler",
+          "id": "solidity-workbench-gas-profiler",
           "name": "Gas Profiler",
           "when": "workspaceFolderCount > 0"
         }
@@ -324,19 +261,19 @@
     "menus": {
       "editor/context": [
         {
-          "command": "solforge.testFunction",
+          "command": "solidity-workbench.testFunction",
           "when": "resourceLangId == solidity && resourceFilename =~ /\\.t\\.sol$/",
-          "group": "solforge@1"
+          "group": "solidity-workbench@1"
         },
         {
-          "command": "solforge.cast.keccak",
+          "command": "solidity-workbench.cast.keccak",
           "when": "resourceLangId == solidity && editorHasSelection",
-          "group": "solforge@2"
+          "group": "solidity-workbench@2"
         },
         {
-          "command": "solforge.cast.sig",
+          "command": "solidity-workbench.cast.sig",
           "when": "resourceLangId == solidity && editorHasSelection",
-          "group": "solforge@3"
+          "group": "solidity-workbench@3"
         }
       ]
     },
@@ -359,7 +296,7 @@
     "problemMatchers": [
       {
         "name": "forge",
-        "owner": "solforge",
+        "owner": "solidity-workbench",
         "fileLocation": ["relative", "${workspaceFolder}"],
         "pattern": {
           "regexp": "^Error \\(\\d+\\): (.*)$\\n --> (.*?):(\\d+):(\\d+):",
@@ -372,13 +309,13 @@
     ]
   },
   "scripts": {
-    "build": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "build": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap && esbuild ../server/src/server.ts --bundle --outfile=dist/server.js --external:vscode --format=cjs --platform=node --sourcemap",
     "watch": "pnpm build --watch",
     "package": "vsce package --no-dependencies",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@solforge/common": "workspace:*",
+    "@solidity-workbench/common": "workspace:*",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
