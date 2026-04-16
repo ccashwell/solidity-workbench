@@ -57,12 +57,16 @@ export class DiagnosticsProvider {
     this.debounceTimers.set(
       uri,
       setTimeout(() => {
-        const diagnostics = this.extractSyntaxDiagnostics(text);
+        const diagnostics = DiagnosticsProvider.extractSyntaxDiagnostics(text);
 
         if (this.parser) {
           const result = this.parser.get(uri);
           if (result) {
-            diagnostics.push(...this.linter.lint(result.sourceUnit, text));
+            // Pass the raw AST so the linter's AST-based rules (reentrancy,
+            // missing-event, storage-in-loop, unchecked-call, delegatecall,
+            // unprotected-selfdestruct) can run. When parsing failed, `rawAst`
+            // is null and those rules silently skip.
+            diagnostics.push(...this.linter.lint(result.sourceUnit, text, result.rawAst));
           }
         }
 
@@ -115,9 +119,14 @@ export class DiagnosticsProvider {
 
   /**
    * Extract syntax-level diagnostics from the source text.
-   * These are fast, parser-independent checks.
+   *
+   * These are the fast, parser-independent checks we run on every
+   * keystroke: SPDX header, floating-pragma warning, `tx.origin`
+   * misuse, deprecated `selfdestruct`. Exposed as a static helper so
+   * tests can drive it directly without spinning up a real LSP
+   * connection or debounce timer.
    */
-  private extractSyntaxDiagnostics(text: string): Diagnostic[] {
+  static extractSyntaxDiagnostics(text: string): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
     const lines = text.split("\n");
 

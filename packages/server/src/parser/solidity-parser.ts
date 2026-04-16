@@ -46,6 +46,13 @@ export class SolidityParser {
 
   /**
    * Parse a Solidity source file and cache the result.
+   *
+   * We cache both the mapped `SoliditySourceUnit` (used by providers
+   * that only need declaration-level information) AND the original
+   * `@solidity-parser/parser` AST (used by the AST-based linter rules
+   * that need statement-level walking). The raw AST is kept on the
+   * cache so downstream consumers can call `parser.getRawAst(uri)`
+   * without re-parsing.
    */
   parse(uri: string, text: string): ParseResult {
     this.currentLines = text.split("\n");
@@ -67,7 +74,7 @@ export class SolidityParser {
       }
 
       const sourceUnit = this.mapSourceUnit(uri, ast);
-      const result: ParseResult = { sourceUnit, errors, text };
+      const result: ParseResult = { sourceUnit, errors, text, rawAst: ast };
       this.cache.set(uri, result);
       return result;
     } catch (err: unknown) {
@@ -86,12 +93,22 @@ export class SolidityParser {
           },
         ],
         text,
+        rawAst: null,
       };
       this.cache.set(uri, errorResult);
       return errorResult;
     } finally {
       this.currentLines = null;
     }
+  }
+
+  /**
+   * Return the raw `@solidity-parser/parser` AST for a previously-parsed
+   * file, or `null` if parsing failed. Exposed for the AST-based linter
+   * rules; most providers should read the mapped `sourceUnit` instead.
+   */
+  getRawAst(uri: string): unknown | null {
+    return this.cache.get(uri)?.rawAst ?? null;
   }
 
   get(uri: string): ParseResult | undefined {
@@ -767,6 +784,13 @@ export interface ParseResult {
   errors: ParseError[];
   /** Raw source text that produced this parse result. */
   text?: string;
+  /**
+   * Raw `@solidity-parser/parser` AST (SourceUnit at the top). `null`
+   * when parsing threw entirely. Typed as `unknown` here to avoid
+   * coupling the whole server to the parser's node-type taxonomy;
+   * consumers that actually walk the AST import the types locally.
+   */
+  rawAst?: unknown | null;
 }
 
 export interface ParseError {
