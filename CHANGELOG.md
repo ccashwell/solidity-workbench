@@ -7,7 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Added (second production-readiness sweep)
+
+- **AST-based linter rules**. `reentrancy`, `missing-event`,
+  `storage-in-loop`, `unchecked-call`, `dangerous-delegatecall`, and
+  `unprotected-selfdestruct` now walk the raw `@solidity-parser/parser`
+  AST instead of regex-scanning function body text. Eliminates false
+  positives on commented-out code and multi-line expressions. 6 new
+  regression tests cover the cases the regex version would have missed
+  or mis-flagged.
+- **Scope-aware rename for locals and parameters**. `RenameProvider`
+  consults `SolcBridge.findLocalReferences` to rewrite precisely the
+  byte ranges solc attributes to a single function-scoped declaration.
+  Top-level symbols still use the workspace-wide path. `prepareRename`
+  gives a clear error when neither path applies (e.g. before first
+  successful `forge build`).
+- **Canonical selectors from `forge build --json`**. `SolcBridge`
+  caches `evm.methodIdentifiers` and `CodeLensProvider` consults the
+  cache first, falling back to local keccak256 only when cold.
+  Selectors for functions that take structs / UDTs are now
+  Etherscan-accurate.
+- **Deploy picker reads compiled artifacts**. `deploy.ts::pickContract`
+  enumerates `out/**/*.json` for the authoritative contract list.
+  When the ABI is present the constructor-args prompt becomes
+  per-parameter with declared Solidity type in the prompt label;
+  strings are auto-quoted for `forge create`.
+- **E2E test scaffold via `@vscode/test-electron`**. A real VSCode
+  binary boots with the extension loaded and the sample project open.
+  6-test smoke suite covering activation, command registration,
+  language registration, and a round-trip through
+  `vscode.executeDocumentSymbolProvider`. New `e2e` CI job under
+  `xvfb-run`.
+- **LCOV parser extracted** into `@solidity-workbench/common` so it's
+  unit-testable from the server test runner.
+- **Provider test coverage expanded**: `CompletionProvider`,
+  `AutoImportProvider`, `CodeActionsProvider`,
+  `DiagnosticsProvider.extractSyntaxDiagnostics`, LCOV parser. Total
+  server tests: 135 → 181.
+
+### Added (first production-readiness sweep)
 
 - **Line-level coverage** via `forge coverage --report lcov`. Each executable
   line gets a covered / uncovered / partial gutter decoration; branch coverage
