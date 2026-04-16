@@ -116,11 +116,13 @@ describe("RenameProvider", () => {
       const doc = h.docForPath(file.path);
 
       // `localParam` is a parameter — not indexed at the workspace level.
+      // Without a SolcBridge wired in, the RenameProvider can't rescope
+      // it, so it should reject with a clear actionable message.
       assert.throws(
         () => h.provider.prepareRename(doc, { line: 1, character: 32 }),
         (err: Error) => {
           assert.ok(err instanceof Error, "expected an Error instance");
-          assert.match(err.message, /local variables/);
+          assert.match(err.message, /not in the workspace symbol index|no type-resolved AST/i);
           return true;
         },
       );

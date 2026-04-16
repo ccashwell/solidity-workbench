@@ -138,10 +138,13 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   solcBridge = new SolcBridge(workspaceManager);
 
   // Make the type-resolved AST cache available to providers that want it
-  // for overload disambiguation and member resolution.
+  // for overload disambiguation, member resolution, canonical selector
+  // lookup, and scope-aware local-variable rename.
   hoverProvider.setSolcBridge(solcBridge);
   definitionProvider.setSolcBridge(solcBridge);
   completionProvider.setSolcBridge(solcBridge);
+  codeLensProvider.setSolcBridge(solcBridge);
+  renameProvider.setSolcBridge(solcBridge);
 
   connection.console.log(
     `Solidity Workbench LSP server initializing for ${workspaceManager.rootCount} root(s)`,

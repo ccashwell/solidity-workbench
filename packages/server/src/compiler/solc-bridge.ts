@@ -24,10 +24,21 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 export class SolcBridge {
   private cachedAst: Map<string, SolcSourceUnit> = new Map();
 
+  /**
+   * Canonical method identifiers keyed by bare contract name.
+   *
+   * Populated from `forge build --json` output alongside the AST so
+   * callers (currently `CodeLensProvider`) can render Etherscan-
+   * accurate selectors without hand-rolling struct / UDT canonicalization.
+   * When the cache is empty (pre-first-save or build failure), callers
+   * should fall back to their local keccak256 computation.
+   */
+  private cachedSelectors: Map<string, Record<string, string>> = new Map();
+
   constructor(private workspace: WorkspaceManager) {}
 
   /**
-   * Run a full forge build and extract ASTs from the output.
+   * Run a full forge build and extract ASTs + method identifiers.
    */
   async buildAndExtractAst(): Promise<Map<string, SolcSourceUnit>> {
     const result = await this.workspace.runForge([
@@ -44,6 +55,7 @@ export class SolcBridge {
     try {
       const output = JSON.parse(result.stdout);
       this.extractAsts(output);
+      this.extractSelectors(output);
     } catch {
       // Non-JSON output
     }
@@ -115,6 +127,125 @@ export class SolcBridge {
   }
 
   /**
+   * Scope-aware reference lookup for a local variable, parameter, or
+   * other function-scoped declaration.
+   *
+   * Given a file + offset, resolve the declaration (whether the
+   * cursor is on the declaration itself or on a reference site) and
+   * return:
+   *   - the declaration's own byte range
+   *   - every reference site in the same file whose
+   *     `referencedDeclaration` matches
+   *
+   * Returns `null` when:
+   *   - The position doesn't resolve to any declaration (no solc AST
+   *     for this file, or the position is whitespace / punctuation)
+   *   - The declaration is NOT function-scoped (i.e. it's a state
+   *     variable, contract, event, error, struct, enum, or file-level
+   *     declaration — those belong to the symbol-index-based rename
+   *     path in `RenameProvider`, not this one)
+   *
+   * This is the building block for scope-aware local-variable rename.
+   * Locals / parameters are always single-file, so cross-file scans
+   * are intentionally skipped — a huge simplification over the
+   * workspace-wide code-lens / symbol-index rename.
+   */
+  findLocalReferences(
+    filePath: string,
+    offset: number,
+  ): {
+    declarationOffset: number;
+    declarationLength: number;
+    nameLength: number;
+    references: { offset: number; length: number }[];
+  } | null {
+    const ast = this.cachedAst.get(filePath);
+    if (!ast) return null;
+
+    const node = this.findNodeAtOffset(ast.ast, offset);
+    if (!node) return null;
+
+    // Resolve to a declaration: either the node itself *is* a
+    // VariableDeclaration (cursor on declaration site) or it's an
+    // Identifier whose `referencedDeclaration` points to one.
+    let declId: number | null = null;
+    if (node.nodeType === "VariableDeclaration" && typeof node.id === "number") {
+      declId = node.id;
+    } else if (typeof node.referencedDeclaration === "number") {
+      declId = node.referencedDeclaration;
+    }
+    if (declId === null) return null;
+
+    // The declaration must be somewhere in this file — locals don't
+    // cross files, so we only search this file's AST.
+    const decl = this.findNodeById(ast.ast, declId);
+    if (!decl) return null;
+    if (decl.nodeType !== "VariableDeclaration") return null;
+
+    // Function-scoped only. Contract-scoped declarations (state vars)
+    // have a parent contract as their scope; function-scoped
+    // declarations have a function / block as their scope. We detect
+    // the latter by searching the AST for the scope ID and checking
+    // its node type.
+    if (typeof decl.scope !== "number" || !this.isFunctionScope(ast.ast, decl.scope)) {
+      return null;
+    }
+
+    const [declStart, declLength] = this.parseSourceRange(decl.src);
+    const name = typeof decl.name === "string" ? decl.name : "";
+    if (!name) return null;
+
+    // Walk the file's AST collecting every Identifier whose
+    // referencedDeclaration matches.
+    const references: { offset: number; length: number }[] = [];
+    this.collectReferencesTo(ast.ast, declId, references);
+
+    return {
+      declarationOffset: declStart,
+      declarationLength: declLength,
+      nameLength: name.length,
+      references,
+    };
+  }
+
+  private isFunctionScope(root: any, scopeId: number): boolean {
+    const scopeNode = this.findNodeById(root, scopeId);
+    if (!scopeNode) return false;
+    return (
+      scopeNode.nodeType === "FunctionDefinition" ||
+      scopeNode.nodeType === "ModifierDefinition" ||
+      scopeNode.nodeType === "Block"
+    );
+  }
+
+  private collectReferencesTo(
+    node: any,
+    declId: number,
+    out: { offset: number; length: number }[],
+  ): void {
+    if (!node || typeof node !== "object") return;
+
+    if (
+      node.nodeType === "Identifier" &&
+      node.referencedDeclaration === declId &&
+      typeof node.src === "string"
+    ) {
+      const [start, length] = this.parseSourceRange(node.src);
+      out.push({ offset: start, length });
+    }
+
+    for (const key of Object.keys(node)) {
+      if (key === "src" || key === "typeDescriptions") continue;
+      const child = node[key];
+      if (Array.isArray(child)) {
+        for (const item of child) this.collectReferencesTo(item, declId, out);
+      } else if (typeof child === "object" && child !== null) {
+        this.collectReferencesTo(child, declId, out);
+      }
+    }
+  }
+
+  /**
    * Get the storage layout for a contract.
    */
   async getStorageLayout(contractName: string): Promise<StorageLayoutEntry[] | null> {
@@ -149,10 +280,24 @@ export class SolcBridge {
     if (result.exitCode !== 0) return null;
 
     try {
-      return JSON.parse(result.stdout);
+      const parsed = JSON.parse(result.stdout) as Record<string, string>;
+      this.cachedSelectors.set(contractName, parsed);
+      return parsed;
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Read the method-identifier cache synchronously. Returns the map
+   * `{ "transfer(address,uint256)": "a9059cbb", ... }` from the last
+   * successful `forge build --json` (via `buildAndExtractAst`) or an
+   * explicit `getMethodIdentifiers` call. `undefined` means "not in
+   * the cache yet" — callers should fall back to their own keccak256
+   * computation over the parser's declaration-level signature.
+   */
+  getCachedMethodIdentifiers(contractName: string): Record<string, string> | undefined {
+    return this.cachedSelectors.get(contractName);
   }
 
   /**
@@ -209,31 +354,73 @@ export class SolcBridge {
     }
   }
 
+  /**
+   * Populate `cachedSelectors` from a `forge build --json` payload.
+   *
+   * The output shape is:
+   *   {
+   *     contracts: {
+   *       "src/Counter.sol": {
+   *         "Counter": {
+   *           evm: { methodIdentifiers: { "increment()": "d09de08a", ... } }
+   *         }
+   *       }
+   *     }
+   *   }
+   *
+   * We key the cache by bare contract name. When two contracts in
+   * different files share a name, the last one written wins; this
+   * matches what `forge inspect <name>` itself does.
+   */
+  private extractSelectors(output: any): void {
+    const contracts = output?.contracts;
+    if (!contracts || typeof contracts !== "object") return;
+
+    for (const fileEntry of Object.values(contracts) as any[]) {
+      if (!fileEntry || typeof fileEntry !== "object") continue;
+      for (const [contractName, contractEntry] of Object.entries(fileEntry) as [string, any][]) {
+        const ids = contractEntry?.evm?.methodIdentifiers;
+        if (ids && typeof ids === "object") {
+          this.cachedSelectors.set(contractName, ids as Record<string, string>);
+        }
+      }
+    }
+  }
+
   private findNodeAtOffset(node: any, offset: number): any | null {
     if (!node || typeof node !== "object") return null;
 
-    if (node.src) {
-      const [start, length] = this.parseSourceRange(node.src);
-      if (offset >= start && offset < start + length) {
-        // Check children for a more specific match
-        for (const key of Object.keys(node)) {
-          if (key === "src" || key === "typeDescriptions") continue;
-          const child = node[key];
-          if (Array.isArray(child)) {
-            for (const item of child) {
-              const found = this.findNodeAtOffset(item, offset);
-              if (found) return found;
-            }
-          } else if (typeof child === "object" && child !== null) {
-            const found = this.findNodeAtOffset(child, offset);
-            if (found) return found;
-          }
+    // The top-level SourceUnit doesn't carry a src range, so recurse
+    // into `nodes` when present and fall back to generic key walking
+    // when we don't have a src to check.
+    if (!node.src) {
+      if (Array.isArray(node.nodes)) {
+        for (const child of node.nodes) {
+          const found = this.findNodeAtOffset(child, offset);
+          if (found) return found;
         }
-        return node; // This node is the best match
       }
+      return null;
     }
 
-    return null;
+    const [start, length] = this.parseSourceRange(node.src);
+    if (offset < start || offset >= start + length) return null;
+
+    // Check children for a more specific match.
+    for (const key of Object.keys(node)) {
+      if (key === "src" || key === "typeDescriptions") continue;
+      const child = node[key];
+      if (Array.isArray(child)) {
+        for (const item of child) {
+          const found = this.findNodeAtOffset(item, offset);
+          if (found) return found;
+        }
+      } else if (typeof child === "object" && child !== null) {
+        const found = this.findNodeAtOffset(child, offset);
+        if (found) return found;
+      }
+    }
+    return node; // This node is the best match
   }
 
   private findNodeById(node: any, id: number): any | null {
