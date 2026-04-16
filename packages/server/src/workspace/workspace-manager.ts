@@ -3,8 +3,8 @@ import * as path from "node:path";
 import type { Connection } from "vscode-languageserver/node.js";
 import { URI } from "vscode-uri";
 import { parse as parseToml } from "toml";
-import type { FoundryProfile, Remapping } from "@solforge/common";
-import { FoundryConfig, parseRemapping, resolveImportPath } from "@solforge/common";
+import type { FoundryProfile, Remapping } from "@solidity-workbench/common";
+import { FoundryConfig, parseRemapping, resolveImportPath } from "@solidity-workbench/common";
 
 /**
  * Manages workspace state: foundry.toml, remappings, source directories,
@@ -29,6 +29,14 @@ export class WorkspaceManager {
 
   get forge(): string {
     return this.forgePath;
+  }
+
+  /**
+   * Update the forge binary path from extension config.
+   * Empty string or undefined resets to the PATH-based "forge".
+   */
+  setForgePath(path: string | undefined): void {
+    this.forgePath = path && path.trim().length > 0 ? path : "forge";
   }
 
   get srcDir(): string {

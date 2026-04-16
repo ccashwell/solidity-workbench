@@ -8,10 +8,12 @@ import {
   CompletionItem,
   Hover,
   DidChangeConfigurationNotification,
-  SemanticTokensBuilder,
   CodeAction,
+  FileChangeType,
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
+import { URI } from "vscode-uri";
+import * as path from "node:path";
 import { WorkspaceManager } from "./workspace/workspace-manager.js";
 import { SolidityParser } from "./parser/solidity-parser.js";
 import { SymbolIndex } from "./analyzer/symbol-index.js";
@@ -32,7 +34,7 @@ import { AutoImportProvider } from "./providers/auto-import.js";
 import { CallHierarchyProvider } from "./providers/call-hierarchy.js";
 import { TypeHierarchyProvider } from "./providers/type-hierarchy.js";
 import { SolcBridge } from "./compiler/solc-bridge.js";
-import { SolSemanticTokenTypes, SolSemanticTokenModifiers } from "@solforge/common";
+import { SolSemanticTokenTypes, SolSemanticTokenModifiers } from "@solidity-workbench/common";
 
 // Create the LSP connection and document manager
 const connection = createConnection(ProposedFeatures.all);
@@ -91,7 +93,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   typeHierarchyProvider = new TypeHierarchyProvider(symbolIndex, parser);
   solcBridge = new SolcBridge(workspaceManager);
 
-  connection.console.log(`Solforge LSP server initializing for workspace: ${rootUri}`);
+  connection.console.log(`Solidity Workbench LSP server initializing for workspace: ${rootUri}`);
 
   return {
     capabilities: {
@@ -159,11 +161,82 @@ connection.onInitialized(async () => {
   // Register for configuration changes
   connection.client.register(DidChangeConfigurationNotification.type, undefined);
 
+  // Pull initial config from the client (solidity-workbench.foundryPath, etc.)
+  await refreshConfiguration();
+
   // Index the workspace
   await workspaceManager.initialize();
   await symbolIndex.indexWorkspace();
 
-  connection.console.log("Solforge LSP server initialized successfully");
+  connection.console.log("Solidity Workbench LSP server initialized successfully");
+});
+
+// ── Configuration ────────────────────────────────────────────────────
+
+async function refreshConfiguration(): Promise<void> {
+  try {
+    const [config] = (await connection.workspace.getConfiguration([
+      { section: "solidity-workbench" },
+    ])) as [{ foundryPath?: string } | null | undefined];
+
+    workspaceManager.setForgePath(config?.foundryPath);
+  } catch (err) {
+    // Some clients don't implement workspace/configuration — fall back silently.
+    connection.console.warn(`workspace/configuration unavailable: ${err}`);
+  }
+}
+
+connection.onDidChangeConfiguration(async () => {
+  await refreshConfiguration();
+});
+
+// ── File System Watching ─────────────────────────────────────────────
+
+connection.onDidChangeWatchedFiles(async (params) => {
+  let needsWorkspaceReload = false;
+  const touchedSolFiles: string[] = [];
+  const removedSolFiles: string[] = [];
+
+  for (const change of params.changes) {
+    const fsPath = URI.parse(change.uri).fsPath;
+    const basename = path.basename(fsPath);
+
+    if (basename === "foundry.toml" || basename === "remappings.txt") {
+      needsWorkspaceReload = true;
+      continue;
+    }
+
+    if (!fsPath.endsWith(".sol")) continue;
+
+    // Skip files currently open in the editor — those are tracked via
+    // documents.onDidChangeContent and would otherwise be reindexed twice.
+    if (documents.get(change.uri)) continue;
+
+    if (change.type === FileChangeType.Deleted) {
+      removedSolFiles.push(change.uri);
+    } else {
+      touchedSolFiles.push(change.uri);
+    }
+  }
+
+  if (needsWorkspaceReload) {
+    connection.console.log("foundry.toml or remappings.txt changed — reloading workspace");
+    await workspaceManager.initialize();
+    // Full reindex since remappings can change how imports resolve.
+    await symbolIndex.indexWorkspace();
+    return;
+  }
+
+  for (const uri of removedSolFiles) {
+    symbolIndex.onFileClosed(uri);
+    callHierarchyProvider.invalidateFile(uri);
+    connection.sendDiagnostics({ uri, diagnostics: [] });
+  }
+
+  for (const uri of touchedSolFiles) {
+    await symbolIndex.indexFile(uri);
+    callHierarchyProvider.invalidateFile(uri);
+  }
 });
 
 // ── Document Lifecycle ───────────────────────────────────────────────
