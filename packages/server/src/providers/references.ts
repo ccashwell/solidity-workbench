@@ -10,19 +10,20 @@ import { getWordAtPosition, isInsideString, findLineCommentStart } from "../util
 /**
  * Full workspace-wide find-all-references.
  *
- * Strategy:
- * 1. Identify the symbol at the cursor position
- * 2. Search all indexed files for textual occurrences
- * 3. Filter by word boundary to avoid false positives
- * 4. Include/exclude the declaration based on ReferenceContext
+ * Fast path: delegates to `SymbolIndex.findReferences`, which reads from an
+ * inverted identifier-occurrence index that's kept up to date as files are
+ * parsed. That index already handles word boundaries, block comments, line
+ * comments, and string literals, so a single map lookup returns all valid
+ * occurrences across the workspace.
  *
- * The dual approach (symbol index + text search) catches both:
- * - Declarations and definitions (from the symbol index)
- * - Usages in function bodies (from text scanning)
+ * Slow path (fallback): if the identifier hasn't been indexed yet — typically
+ * for brand-new files that haven't been parsed or for identifiers the index
+ * has never seen — we fall back to the legacy text-scan across open documents
+ * and known workspace files. A `console.warn` is emitted in this case so it
+ * shows up during development.
  *
- * For maximum accuracy, the rich AST (solc) path would provide
- * scope-aware reference resolution. The text search is a pragmatic
- * 90% solution that works across the entire workspace.
+ * Declarations are merged in or filtered out based on
+ * `ReferenceContext.includeDeclaration`.
  */
 export class ReferencesProvider {
   constructor(
@@ -41,45 +42,76 @@ export class ReferencesProvider {
     const word = getWordAtPosition(text, position)?.text ?? null;
     if (!word) return [];
 
-    const references: Location[] = [];
     const seen = new Set<string>(); // Deduplicate by "uri:line:char"
+    const results: Location[] = [];
 
-    // 1. Check the symbol index for declarations
-    if (context.includeDeclaration) {
-      const symbols = this.symbolIndex.findSymbols(word);
-      for (const sym of symbols) {
-        const key = `${sym.filePath}:${sym.nameRange.start.line}:${sym.nameRange.start.character}`;
-        if (!seen.has(key)) {
-          seen.add(key);
-          references.push(Location.create(sym.filePath, sym.nameRange));
+    const pushUnique = (uri: string, range: Location["range"]): void => {
+      const key = `${uri}:${range.start.line}:${range.start.character}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      results.push(Location.create(uri, range));
+    };
+
+    // 1. Fast path: inverted index
+    if (this.symbolIndex.hasReferences(word)) {
+      for (const entry of this.symbolIndex.findReferences(word)) {
+        pushUnique(entry.uri, entry.range);
+      }
+    } else {
+      // Unindexed identifier — fall back to a live text scan.  This happens
+      // for files that haven't been parsed/indexed yet (e.g. a freshly
+      // opened buffer before onDidChangeContent fires).
+      console.warn(
+        `[references] identifier "${word}" not in reference index; falling back to text scan`,
+      );
+      for (const doc of this.documents.all()) {
+        this.findInText(doc.getText(), word, doc.uri, results, seen);
+      }
+      for (const uri of this.workspace.getAllFileUris()) {
+        if (this.documents.get(uri)) continue;
+        try {
+          const filePath = this.workspace.uriToPath(uri);
+          const fileText = fs.readFileSync(filePath, "utf-8");
+          this.findInText(fileText, word, uri, results, seen);
+        } catch {
+          /* unreadable, skip */
         }
       }
     }
 
-    // 2. Scan all open documents for textual occurrences
-    for (const doc of this.documents.all()) {
-      this.findInText(doc.getText(), word, doc.uri, references, seen);
-    }
+    // 2. Handle the declaration flag.
+    const declarations = this.symbolIndex.findSymbols(word);
 
-    // 3. Scan all workspace files not currently open
-    const allUris = this.workspace.getAllFileUris();
-    for (const uri of allUris) {
-      if (this.documents.get(uri)) continue; // Already scanned above
-
-      try {
-        const filePath = this.workspace.uriToPath(uri);
-        const fileText = fs.readFileSync(filePath, "utf-8");
-        this.findInText(fileText, word, uri, references, seen);
-      } catch {
-        // File might not exist or be unreadable
+    if (context.includeDeclaration) {
+      // Merge in declarations (using nameRange). Dedup against what the
+      // inverted index already returned — a declaration usually shows up
+      // there too, but belt-and-suspenders.
+      for (const sym of declarations) {
+        pushUnique(sym.filePath, sym.nameRange);
+      }
+    } else {
+      // Strip out declaration name ranges from the results.
+      const declKeys = new Set<string>();
+      for (const sym of declarations) {
+        declKeys.add(
+          `${sym.filePath}:${sym.nameRange.start.line}:${sym.nameRange.start.character}`,
+        );
+      }
+      if (declKeys.size > 0) {
+        return results.filter((loc) => {
+          const key = `${loc.uri}:${loc.range.start.line}:${loc.range.start.character}`;
+          return !declKeys.has(key);
+        });
       }
     }
 
-    return references;
+    return results;
   }
 
   /**
-   * Scan text for word-boundary occurrences of a symbol.
+   * Text-scan fallback — only invoked when the inverted index has never seen
+   * the identifier. Mirrors the pre-index behaviour: word-boundary matches
+   * with block-comment, line-comment, and string-literal filtering.
    */
   private findInText(
     text: string,

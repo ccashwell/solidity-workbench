@@ -2,7 +2,7 @@ import type { CodeLens, Range } from "vscode-languageserver/node.js";
 import { Command } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
-import type { ParameterDeclaration } from "@solforge/common";
+import type { ParameterDeclaration } from "@solidity-workbench/common";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import { keccak256 } from "js-sha3";
@@ -42,8 +42,9 @@ export class CodeLensProvider {
     const isTestFile = document.uri.endsWith(".t.sol");
 
     for (const contract of result.sourceUnit.contracts) {
-      // Contract-level lens: reference count
-      lenses.push(this.createReferenceLens(contract.name, contract.nameRange));
+      // Contract-level lens: reference count (omit if 0 usages).
+      const contractLens = this.createReferenceLens(contract.name, contract.nameRange);
+      if (contractLens) lenses.push(contractLens);
 
       // Contract-level lens: interface compliance
       if (contract.baseContracts.length > 0) {
@@ -66,7 +67,7 @@ export class CodeLensProvider {
             range: func.range,
             command: {
               title: "$(play) Run Test",
-              command: "solforge.testFunction",
+              command: "solidity-workbench.testFunction",
               arguments: [func.name],
             },
           });
@@ -74,7 +75,7 @@ export class CodeLensProvider {
             range: func.range,
             command: {
               title: "$(debug) Debug",
-              command: "solforge.debugTest",
+              command: "solidity-workbench.debugTest",
               arguments: [func.name],
             },
           });
@@ -93,9 +94,10 @@ export class CodeLensProvider {
           });
         }
 
-        // Reference count lens for non-test functions
+        // Reference count lens for non-test functions (omit if 0 usages).
         if (!isTestFile && func.name) {
-          lenses.push(this.createReferenceLens(func.name, func.nameRange));
+          const funcLens = this.createReferenceLens(func.name, func.nameRange);
+          if (funcLens) lenses.push(funcLens);
         }
 
         // Function selector lens for external/public functions
@@ -110,7 +112,7 @@ export class CodeLensProvider {
               range: func.range,
               command: {
                 title: `selector: ${selector}`,
-                command: "solforge.copySelector",
+                command: "solidity-workbench.copySelector",
                 arguments: [selector],
               },
             });
@@ -126,7 +128,7 @@ export class CodeLensProvider {
             range: event.range,
             command: {
               title: `topic0: ${topic}`,
-              command: "solforge.copySelector",
+              command: "solidity-workbench.copySelector",
               arguments: [topic],
             },
           });
@@ -167,14 +169,24 @@ export class CodeLensProvider {
     }
   }
 
-  private createReferenceLens(symbolName: string, range: Range): CodeLens {
-    const refs = this.symbolIndex.findSymbols(symbolName);
-    const count = refs.length;
+  /**
+   * Build a "N references" code lens showing the number of *usage* sites for
+   * a symbol — i.e. total textual occurrences minus declaration sites.
+   *
+   * Returns `null` when the symbol has no usages, so callers can omit the
+   * lens entirely rather than showing a misleading "0 references".
+   */
+  private createReferenceLens(symbolName: string, range: Range): CodeLens | null {
+    const totalOccurrences = this.symbolIndex.referenceCount(symbolName);
+    const declarationCount = this.symbolIndex.findSymbols(symbolName).length;
+    const usageCount = Math.max(0, totalOccurrences - declarationCount);
+
+    if (usageCount === 0) return null;
 
     return {
       range,
       command: {
-        title: count === 1 ? "1 reference" : `${count} references`,
+        title: usageCount === 1 ? "1 reference" : `${usageCount} references`,
         command: "editor.action.findReferences",
         arguments: [range.start],
       },

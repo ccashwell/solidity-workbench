@@ -1,4 +1,4 @@
-import type { WorkspaceSymbol } from "vscode-languageserver/node.js";
+import type { Range, WorkspaceSymbol } from "vscode-languageserver/node.js";
 import {
   Location,
   SymbolInformation,
@@ -10,9 +10,10 @@ import type {
   SymbolKind,
   ContractDefinition,
   FunctionDefinition,
-} from "@solforge/common";
+} from "@solidity-workbench/common";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import { ReferenceIndex } from "./reference-index.js";
 
 /**
  * Maintains a cross-file symbol index for the workspace.
@@ -31,6 +32,13 @@ export class SymbolIndex {
   /** Contract definitions indexed by name — for inheritance resolution */
   private contractsByName: Map<string, { uri: string; contract: ContractDefinition }> = new Map();
 
+  /**
+   * Inverted identifier-occurrence index used to answer "find all references"
+   * and "reference count" queries in O(1) by-name lookups instead of scanning
+   * every file on every query.
+   */
+  private refIndex = new ReferenceIndex();
+
   constructor(parser: SolidityParser, workspace: WorkspaceManager) {
     this.parser = parser;
     this.workspace = workspace;
@@ -48,6 +56,10 @@ export class SymbolIndex {
 
   /**
    * Index or re-index a single file.
+   *
+   * Reads the file from disk, updates the parser cache, and then delegates
+   * to `updateFile(uri)` to (re)build both the symbol table and the
+   * inverted reference index from the parser's cached source text.
    */
   async indexFile(uri: string): Promise<void> {
     try {
@@ -67,6 +79,15 @@ export class SymbolIndex {
   updateFile(uri: string): void {
     const result = this.parser.get(uri);
     if (!result) return;
+
+    // Refresh the inverted reference index using the cached source text.
+    // If for some reason the parser didn't retain text (older call sites),
+    // we skip the refresh rather than re-reading from disk here — indexFile()
+    // is the canonical entry point that guarantees both caches are populated.
+    const cachedText = this.parser.getText(uri);
+    if (cachedText !== undefined) {
+      this.refIndex.indexFile(uri, cachedText);
+    }
 
     // Remove old symbols for this file
     const oldSymbols = this.symbolsByFile.get(uri) ?? [];
@@ -200,6 +221,44 @@ export class SymbolIndex {
       }
     }
 
+    // File-level free functions (Solidity >=0.7.1)
+    for (const fn of su.freeFunctions) {
+      if (!fn.name) continue;
+      newSymbols.push({
+        name: fn.name,
+        kind: "function",
+        filePath: uri,
+        range: fn.range,
+        nameRange: fn.nameRange,
+        detail: this.buildFunctionSignature(fn),
+        natspec: fn.natspec,
+      });
+    }
+
+    // File-level custom errors
+    for (const err of su.errors) {
+      newSymbols.push({
+        name: err.name,
+        kind: "error",
+        filePath: uri,
+        range: err.range,
+        nameRange: err.nameRange,
+        natspec: err.natspec,
+      });
+    }
+
+    // File-level user-defined value types (e.g. `type Fixed is uint256;`)
+    for (const udvt of su.userDefinedValueTypes) {
+      newSymbols.push({
+        name: udvt.name,
+        kind: "userDefinedValueType",
+        filePath: uri,
+        range: udvt.range,
+        nameRange: udvt.nameRange,
+        detail: udvt.underlyingType,
+      });
+    }
+
     // Store symbols
     this.symbolsByFile.set(uri, newSymbols);
     for (const sym of newSymbols) {
@@ -214,6 +273,44 @@ export class SymbolIndex {
    */
   findSymbols(name: string): SolSymbol[] {
     return this.symbolsByName.get(name) ?? [];
+  }
+
+  /**
+   * Find every textual occurrence of `name` in indexed files.
+   *
+   * Backed by the inverted `ReferenceIndex`, which pre-computes word-boundary
+   * matches and already strips block comments, line comments, and string
+   * literals.  Includes both declaration sites and usage sites; callers that
+   * want to distinguish them can intersect with {@link findSymbols}.
+   */
+  findReferences(name: string): { uri: string; range: Range }[] {
+    return this.refIndex.findReferences(name);
+  }
+
+  /**
+   * Total count of indexed occurrences of `name` (declarations + usages).
+   */
+  referenceCount(name: string): number {
+    return this.refIndex.referenceCount(name);
+  }
+
+  /**
+   * True if any file in the workspace has been indexed with an occurrence of
+   * `name`.  Used by callers that want to decide between the fast inverted
+   * index path and a slow text-scan fallback for identifiers we haven't seen
+   * yet (e.g. newly opened files not yet indexed).
+   */
+  hasReferences(name: string): boolean {
+    return this.refIndex.has(name);
+  }
+
+  /**
+   * Drop all inverted-index entries for a file — intended for cleanup when a
+   * file is closed or removed from the workspace.  Symbol / contract maps
+   * are untouched; those remain valid until the next `updateFile` rebuild.
+   */
+  onFileClosed(uri: string): void {
+    this.refIndex.removeFile(uri);
   }
 
   /**

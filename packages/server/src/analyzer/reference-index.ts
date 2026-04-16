@@ -17,47 +17,77 @@ export class ReferenceIndex {
 
   /**
    * Index all identifier occurrences in a file.
+   *
+   * Each line is first stripped of any block-commented regions (including
+   * `/* ... *\/` contained entirely on one line and multi-line spans), then
+   * stripped of any trailing `//` line comment, and the surviving code is
+   * fed to the identifier regex.  Block-commented characters are replaced
+   * with spaces rather than removed so that column offsets line up with the
+   * original source — important because the resulting ranges are reported
+   * back verbatim to LSP clients.
    */
   indexFile(uri: string, text: string): void {
-    // Remove old entries for this file
     this.removeFile(uri);
 
     const identifiers = new Set<string>();
     const lines = text.split("\n");
-    const identRe = /\b([a-zA-Z_$][\w$]*)\b/g;
 
     let inBlockComment = false;
 
     for (let lineNum = 0; lineNum < lines.length; lineNum++) {
-      const line = lines[lineNum];
+      const { code, stillInBlock } = this.stripBlockComments(lines[lineNum], inBlockComment);
+      inBlockComment = stillInBlock;
 
-      // Track block comments
-      if (inBlockComment) {
-        if (line.includes("*/")) {
-          inBlockComment = false;
-        }
-        continue;
-      }
-      if (line.includes("/*") && !line.includes("*/")) {
-        inBlockComment = true;
-        // Index the part before the comment
-        const codePart = line.slice(0, line.indexOf("/*"));
-        this.indexLine(codePart, lineNum, uri, identifiers);
-        continue;
-      }
-
-      // Skip pure line comments
-      const trimmed = line.trimStart();
-      if (trimmed.startsWith("//")) continue;
-
-      // Handle inline comments
-      const commentIdx = this.findCommentStart(line);
-      const codePart = commentIdx >= 0 ? line.slice(0, commentIdx) : line;
+      // Strip any trailing line comment.  The code already has block-commented
+      // regions blanked out, so findCommentStart won't get confused by a `//`
+      // that was itself inside a block comment.
+      const commentIdx = this.findCommentStart(code);
+      const codePart = commentIdx >= 0 ? code.slice(0, commentIdx) : code;
 
       this.indexLine(codePart, lineNum, uri, identifiers);
     }
 
     this.fileSymbols.set(uri, identifiers);
+  }
+
+  /**
+   * Replace every `/* ... *\/` span on a line with spaces, preserving the
+   * line's total length and every non-comment character's column.
+   *
+   * @param line     raw line text
+   * @param inBlock  true if we entered the line already inside a block comment
+   * @returns `{ code, stillInBlock }` where `code` is the masked text and
+   *          `stillInBlock` indicates whether the block comment is still
+   *          open at end of line.
+   */
+  private stripBlockComments(
+    line: string,
+    inBlock: boolean,
+  ): { code: string; stillInBlock: boolean } {
+    let out = "";
+    let i = 0;
+    while (i < line.length) {
+      if (inBlock) {
+        const end = line.indexOf("*/", i);
+        if (end === -1) {
+          out += " ".repeat(line.length - i);
+          return { code: out, stillInBlock: true };
+        }
+        out += " ".repeat(end + 2 - i);
+        i = end + 2;
+        inBlock = false;
+      } else {
+        const start = line.indexOf("/*", i);
+        if (start === -1) {
+          out += line.slice(i);
+          return { code: out, stillInBlock: false };
+        }
+        out += line.slice(i, start);
+        i = start;
+        inBlock = true;
+      }
+    }
+    return { code: out, stillInBlock: inBlock };
   }
 
   /**
