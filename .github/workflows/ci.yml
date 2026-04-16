@@ -27,6 +27,11 @@ jobs:
           node-version: ${{ matrix.node-version }}
           cache: "pnpm"
 
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
@@ -69,6 +74,20 @@ jobs:
 
       - name: Package VSIX
         run: cd packages/extension && pnpm package
+
+      - name: Verify VSIX contains bundled LSP server
+        run: |
+          VSIX=$(ls packages/extension/*.vsix | head -n 1)
+          echo "Inspecting $VSIX"
+          unzip -l "$VSIX" | tee /tmp/vsix-listing.txt
+          grep -q 'extension/dist/server.js' /tmp/vsix-listing.txt || {
+            echo "::error::VSIX is missing bundled LSP server (extension/dist/server.js)"
+            exit 1
+          }
+          grep -q 'extension/dist/extension.js' /tmp/vsix-listing.txt || {
+            echo "::error::VSIX is missing bundled extension entry (extension/dist/extension.js)"
+            exit 1
+          }
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
