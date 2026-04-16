@@ -28,8 +28,10 @@ export function registerDeployCommands(context: vscode.ExtensionContext): void {
       const rpcUrl = await pickDeployNetwork();
       if (!rpcUrl) return;
 
-      // Step 3: Constructor arguments
-      const constructorArgs = await getConstructorArgs(contractInfo.name);
+      // Step 3: Constructor arguments — typed prompt when the ABI is known.
+      const constructorArgs = contractInfo.constructorAbi
+        ? await getConstructorArgsFromAbi(contractInfo.name, contractInfo.constructorAbi)
+        : await getConstructorArgs(contractInfo.name);
 
       // Step 4: Signing method
       const signFlag = await pickSigningMethod();
@@ -151,18 +153,219 @@ export function registerDeployCommands(context: vscode.ExtensionContext): void {
 
 interface ContractInfo {
   name: string;
+  /** Path under the workspace root, e.g. `src/Counter.sol`. */
   path: string;
+  /** ABI constructor entry, when known. Lets us prompt per-argument with types. */
+  constructorAbi?: ConstructorAbi;
 }
 
+interface ConstructorAbi {
+  inputs: { name: string; type: string; internalType?: string }[];
+  stateMutability?: string;
+}
+
+/**
+ * Present the user with the list of deployable contracts.
+ *
+ * Source of truth: `out/**\/*.json` Forge artifacts. These are the
+ * authoritative list of "contracts that actually compile", complete
+ * with their ABI (so we can type-check constructor args) and the
+ * original source path (so `forge create` knows where to find the
+ * contract). If no artifacts exist yet we fall back to the current
+ * file's declarations — most of the time a user running the Deploy
+ * command has at least done one `forge build` first.
+ */
 async function pickContract(): Promise<ContractInfo | undefined> {
+  const fromArtifacts = await readArtifactContracts();
+  if (fromArtifacts.length > 0) {
+    return pickFromArtifacts(fromArtifacts);
+  }
+
+  // Fallback: current-file regex detection (legacy path). This keeps
+  // the command usable on a freshly-cloned project that hasn't run
+  // `forge build` yet — it just can't offer constructor-arg typing.
+  return pickFromActiveFileOrSrcTree();
+}
+
+async function pickFromArtifacts(artifacts: ContractInfo[]): Promise<ContractInfo | undefined> {
+  // If the user is on a Solidity file right now, pre-filter to
+  // contracts whose source path matches. Otherwise show everything.
+  const editor = vscode.window.activeTextEditor;
+  let candidates = artifacts;
+  if (editor?.document.languageId === "solidity") {
+    const relPath = vscode.workspace.asRelativePath(editor.document.uri);
+    const inFile = artifacts.filter((c) => c.path === relPath);
+    if (inFile.length > 0) candidates = inFile;
+  }
+
+  if (candidates.length === 1) return candidates[0];
+
+  const items: (vscode.QuickPickItem & { contract: ContractInfo })[] = candidates.map((c) => ({
+    label: c.name,
+    description: c.constructorAbi
+      ? `constructor(${c.constructorAbi.inputs.map((i) => i.type).join(", ")})`
+      : "no constructor",
+    detail: c.path,
+    contract: c,
+  }));
+
+  const picked = await vscode.window.showQuickPick(items, {
+    placeHolder: "Select a contract to deploy (compiled artifacts)",
+    matchOnDescription: true,
+    matchOnDetail: true,
+  });
+  return picked?.contract;
+}
+
+/**
+ * Read every `*.json` artifact under `out/` and map it to a
+ * ContractInfo. Artifacts shaped like `out/<Source.sol>/<Name>.json`
+ * (Forge default) plus an optional Hardhat-style nested layout are
+ * both handled; anything else is skipped.
+ *
+ * Skipped entirely:
+ *   - Build info files (`out/build-info/*.json`)
+ *   - Interface-only entries (contracts with `bytecode.object === "0x"`),
+ *     since they can't be deployed
+ *   - Test / Mock contracts (by name prefix / suffix) to reduce clutter
+ */
+async function readArtifactContracts(): Promise<ContractInfo[]> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  if (!workspaceFolder) return [];
+
+  const files = await vscode.workspace.findFiles(
+    "out/**/*.json",
+    "{**/build-info/**,**/node_modules/**}",
+  );
+
+  const out: ContractInfo[] = [];
+  for (const fileUri of files) {
+    try {
+      const bytes = await vscode.workspace.fs.readFile(fileUri);
+      const text = Buffer.from(bytes).toString("utf-8");
+      const parsed = JSON.parse(text) as ForgeArtifact;
+
+      const contractName = extractContractName(fileUri, parsed);
+      if (!contractName) continue;
+      if (isNoiseContract(contractName)) continue;
+
+      // Interface / abstract artifacts have an empty bytecode object;
+      // offering them to the user would just fail at `forge create`.
+      const bytecode = parsed?.bytecode?.object ?? parsed?.evm?.bytecode?.object;
+      if (!bytecode || bytecode === "0x" || bytecode === "0x0") continue;
+
+      const sourcePath = parsed?.metadata?.settings?.compilationTarget
+        ? Object.keys(parsed.metadata.settings.compilationTarget)[0]
+        : extractSourcePath(fileUri);
+
+      const constructorAbi = extractConstructorAbi(parsed.abi);
+
+      out.push({
+        name: contractName,
+        path: sourcePath ?? vscode.workspace.asRelativePath(fileUri),
+        constructorAbi,
+      });
+    } catch {
+      // Malformed artifact — skip.
+    }
+  }
+
+  // Dedupe by (path, name) since some build configs emit the same
+  // contract under multiple profiles.
+  const seen = new Set<string>();
+  return out.filter((c) => {
+    const key = `${c.path}::${c.name}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+interface ForgeArtifact {
+  abi?: AbiEntry[];
+  bytecode?: { object?: string };
+  evm?: { bytecode?: { object?: string } };
+  metadata?: {
+    settings?: {
+      compilationTarget?: Record<string, string>;
+    };
+  };
+}
+
+interface AbiEntry {
+  type?: string;
+  name?: string;
+  inputs?: { name?: string; type?: string; internalType?: string }[];
+  stateMutability?: string;
+}
+
+function extractContractName(fileUri: vscode.Uri, parsed: ForgeArtifact): string | undefined {
+  // Forge: `out/Counter.sol/Counter.json` → use the basename sans `.json`
+  const basename = fileUri.path.split("/").pop();
+  if (!basename) return undefined;
+  const stem = basename.replace(/\.json$/, "");
+  if (!stem) return undefined;
+  // If the artifact has a compilationTarget entry its value is the
+  // contract name — use that if the filename stem matches any of them.
+  const targets = parsed?.metadata?.settings?.compilationTarget;
+  if (targets) {
+    const targetNames = Object.values(targets);
+    if (targetNames.includes(stem)) return stem;
+  }
+  return stem;
+}
+
+function extractSourcePath(fileUri: vscode.Uri): string | undefined {
+  // `out/<Source.sol>/<Contract>.json` — the parent directory is the
+  // source file name. Two levels up from `out/` is where `src/` lives
+  // in Forge projects.
+  const parts = fileUri.path.split("/");
+  const outIdx = parts.lastIndexOf("out");
+  if (outIdx < 0 || outIdx + 1 >= parts.length) return undefined;
+  const source = parts[outIdx + 1];
+  if (!source.endsWith(".sol")) return undefined;
+  // Assume the source lives under `src/` — this matches Foundry defaults.
+  return `src/${source}`;
+}
+
+function extractConstructorAbi(abi: AbiEntry[] | undefined): ConstructorAbi | undefined {
+  if (!abi) return undefined;
+  for (const entry of abi) {
+    if (entry.type === "constructor") {
+      return {
+        inputs: (entry.inputs ?? []).map((i) => ({
+          name: i.name ?? "",
+          type: i.type ?? "unknown",
+          internalType: i.internalType,
+        })),
+        stateMutability: entry.stateMutability,
+      };
+    }
+  }
+  return undefined;
+}
+
+function isNoiseContract(name: string): boolean {
+  return (
+    name.endsWith("Test") ||
+    name.endsWith("Tests") ||
+    name.startsWith("Mock") ||
+    name.endsWith("Mock") ||
+    name.startsWith("Test")
+  );
+}
+
+/**
+ * Legacy fallback when no artifacts are available.
+ */
+async function pickFromActiveFileOrSrcTree(): Promise<ContractInfo | undefined> {
   const editor = vscode.window.activeTextEditor;
 
-  // Try to detect from current file
   if (editor?.document.languageId === "solidity") {
     const text = editor.document.getText();
     const contracts = [...text.matchAll(/(?:abstract\s+)?contract\s+(\w+)/g)]
       .map((m) => m[1])
-      .filter((name) => !name.endsWith("Test") && !name.startsWith("Mock"));
+      .filter((name) => !isNoiseContract(name));
 
     if (contracts.length === 1) {
       return {
@@ -183,7 +386,6 @@ async function pickContract(): Promise<ContractInfo | undefined> {
     }
   }
 
-  // Find all Solidity files in src/
   const files = await vscode.workspace.findFiles("src/**/*.sol", "**/node_modules/**");
 
   const items: vscode.QuickPickItem[] = [];
@@ -192,7 +394,7 @@ async function pickContract(): Promise<ContractInfo | undefined> {
     const matches = [...doc.getText().matchAll(/(?:abstract\s+)?contract\s+(\w+)/g)];
     for (const match of matches) {
       const name = match[1];
-      if (!name.endsWith("Test") && !name.startsWith("Mock")) {
+      if (!isNoiseContract(name)) {
         items.push({
           label: name,
           detail: vscode.workspace.asRelativePath(file),
@@ -279,6 +481,62 @@ async function getConstructorArgs(contractName: string): Promise<string | undefi
   }
 
   return undefined;
+}
+
+/**
+ * ABI-driven constructor-arg prompt. We iterate each constructor input
+ * and ask the user for its value, showing the declared Solidity type
+ * so they know what shape to enter. Empty inputs abort the flow.
+ *
+ * Values are quoted / unquoted to match `forge create`'s expectations:
+ *   - Strings: wrapped in `"..."`
+ *   - Addresses / numbers / bools: passed literally
+ *   - Arrays: taken verbatim (`[1,2,3]`) — the user is expected to
+ *     provide JSON-encoded literals for complex inputs.
+ */
+async function getConstructorArgsFromAbi(
+  contractName: string,
+  abi: ConstructorAbi,
+): Promise<string | undefined> {
+  if (abi.inputs.length === 0) return undefined;
+
+  const parts: string[] = [];
+  for (const input of abi.inputs) {
+    const label = input.name ? `${input.name}: ${input.type}` : input.type;
+    const value = await vscode.window.showInputBox({
+      title: `Constructor arg — ${contractName}`,
+      prompt: label,
+      placeHolder: placeholderForType(input.type),
+      ignoreFocusOut: true,
+    });
+    if (value === undefined) return undefined; // user cancelled
+
+    parts.push(encodeConstructorArg(input.type, value.trim()));
+  }
+
+  return parts.join(" ");
+}
+
+function placeholderForType(type: string): string {
+  if (type === "address") return "0x...";
+  if (type === "bool") return "true";
+  if (type === "string") return "hello world";
+  if (/^u?int/.test(type)) return "0";
+  if (/^bytes\d*$/.test(type)) return "0x...";
+  if (type.endsWith("[]")) return `[${placeholderForType(type.slice(0, -2))}]`;
+  return "";
+}
+
+function encodeConstructorArg(type: string, raw: string): string {
+  // `forge create --constructor-args` takes space-separated literals.
+  // Strings need quoting; everything else is passed through as-is.
+  if (type === "string") {
+    // If the user already quoted the value, keep their quoting; otherwise wrap.
+    if (raw.startsWith('"') && raw.endsWith('"')) return raw;
+    if (raw.startsWith("'") && raw.endsWith("'")) return raw;
+    return JSON.stringify(raw);
+  }
+  return raw;
 }
 
 async function getEtherscanApiKey(): Promise<string | undefined> {
