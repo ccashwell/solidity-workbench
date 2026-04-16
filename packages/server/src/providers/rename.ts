@@ -1,4 +1,10 @@
-import type { Position, Range, WorkspaceEdit, TextDocuments } from "vscode-languageserver/node.js";
+import type {
+  CancellationToken,
+  Position,
+  Range,
+  WorkspaceEdit,
+  TextDocuments,
+} from "vscode-languageserver/node.js";
 import { TextEdit, ResponseError, ErrorCodes } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import * as fs from "node:fs";
@@ -85,6 +91,7 @@ export class RenameProvider {
     document: TextDocument,
     position: Position,
     newName: string,
+    token?: CancellationToken,
   ): Promise<WorkspaceEdit | null> {
     // NOTE: This is a conservative implementation. True scope-aware rename
     // requires resolving solc AST `referencedDeclaration` IDs (see SolcBridge),
@@ -122,6 +129,7 @@ export class RenameProvider {
 
     // 1. Find all occurrences in currently open documents (skip lib/).
     for (const doc of this.documents.all()) {
+      if (token?.isCancellationRequested) return null;
       if (isInLibDir(doc.uri)) continue;
       const edits = this.findOccurrencesInText(doc.getText(), oldName, doc.uri);
       if (edits.length > 0) {
@@ -132,6 +140,7 @@ export class RenameProvider {
     // 2. Scan all workspace files (not currently open), skipping lib/.
     const allUris = this.workspace.getAllFileUris();
     for (const uri of allUris) {
+      if (token?.isCancellationRequested) return null;
       if (changes[uri]) continue; // Already processed from open docs
       if (isInLibDir(uri)) continue;
 

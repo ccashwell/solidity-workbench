@@ -4,6 +4,9 @@ import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { NatspecComment, SolSymbol } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
+import type { SolcBridge } from "../compiler/solc-bridge.js";
+import { URI } from "vscode-uri";
+import { readFileSync } from "node:fs";
 
 /**
  * Provides hover information for Solidity symbols.
@@ -15,32 +18,92 @@ import type { SolidityParser } from "../parser/solidity-parser.js";
  * - Visibility and mutability for functions
  */
 export class HoverProvider {
+  private solcBridge: SolcBridge | null = null;
+
   constructor(
     private symbolIndex: SymbolIndex,
     private parser: SolidityParser,
   ) {}
+
+  /**
+   * Wire the SolcBridge (type-resolved AST cache) into hover so that
+   * when multiple workspace symbols share a name we can pick the one
+   * actually referenced at the cursor position via
+   * `referencedDeclaration`. Falls back gracefully when no solc AST
+   * exists yet (first-load, or forge build failed).
+   */
+  setSolcBridge(bridge: SolcBridge): void {
+    this.solcBridge = bridge;
+  }
 
   provideHover(document: TextDocument, position: Position): Hover | null {
     const text = document.getText();
     const word = this.parser.getWordAtPosition(text, position.line, position.character);
     if (!word) return null;
 
-    // Check for built-in globals
     const builtinHover = this.getBuiltinHover(word);
     if (builtinHover) return builtinHover;
 
-    // Check for Solidity type keywords
     const typeHover = this.getTypeHover(word);
     if (typeHover) return typeHover;
 
-    // Look up in symbol index
     const symbols = this.symbolIndex.findSymbols(word);
     if (symbols.length === 0) return null;
 
-    // Prefer the symbol from the current file
-    const sym = symbols.find((s) => s.filePath === document.uri) ?? symbols[0];
+    // Pick the canonical symbol:
+    // 1. When multiple candidates exist, consult the solc AST for the
+    //    cursor position. If it resolves to a specific declaration, find
+    //    the matching symbol-index entry and use that.
+    // 2. Otherwise prefer the symbol from the current file.
+    // 3. Otherwise take the first match.
+    let sym: SolSymbol | undefined;
+    if (symbols.length > 1 && this.solcBridge) {
+      const resolved = this.resolveViaSolc(document, position);
+      if (resolved) {
+        sym = symbols.find(
+          (s) =>
+            s.filePath === resolved.uri &&
+            s.nameRange.start.line === resolved.line &&
+            Math.abs(s.nameRange.start.character - resolved.character) <= word.length,
+        );
+      }
+    }
+    if (!sym) sym = symbols.find((s) => s.filePath === document.uri) ?? symbols[0];
 
     return this.buildHover(sym);
+  }
+
+  /**
+   * Map the cursor position to a solc-AST `referencedDeclaration`, then
+   * back to a URI + zero-based position.
+   */
+  private resolveViaSolc(
+    document: TextDocument,
+    position: Position,
+  ): { uri: string; line: number; character: number } | null {
+    if (!this.solcBridge) return null;
+    const fsPath = URI.parse(document.uri).fsPath;
+    const offset = document.offsetAt(position);
+    const ref = this.solcBridge.resolveReference(fsPath, offset);
+    if (!ref) return null;
+
+    // solc emits byte offsets. For our purposes we only need a coarse
+    // filename + ~line pinpoint, so read the referenced file to compute
+    // (line, character) from the offset.
+    try {
+      const text = readFileSync(ref.filePath, "utf-8");
+      const prefix = text.slice(0, ref.offset);
+      const line = prefix.split(/\r?\n/).length - 1;
+      const character =
+        prefix.length - Math.max(prefix.lastIndexOf("\n"), prefix.lastIndexOf("\r")) - 1;
+      return {
+        uri: URI.file(ref.filePath).toString(),
+        line,
+        character,
+      };
+    } catch {
+      return null;
+    }
   }
 
   private buildHover(sym: SolSymbol): Hover {

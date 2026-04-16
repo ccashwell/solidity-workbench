@@ -10,6 +10,7 @@ import {
   DidChangeConfigurationNotification,
   CodeAction,
   FileChangeType,
+  WorkspaceFoldersChangeEvent,
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
@@ -34,9 +35,17 @@ import { AutoImportProvider } from "./providers/auto-import.js";
 import { CallHierarchyProvider } from "./providers/call-hierarchy.js";
 import { TypeHierarchyProvider } from "./providers/type-hierarchy.js";
 import { SolcBridge } from "./compiler/solc-bridge.js";
-import { SolSemanticTokenTypes, SolSemanticTokenModifiers } from "@solidity-workbench/common";
+import { listTests } from "./providers/list-tests.js";
+import {
+  SolSemanticTokenTypes,
+  SolSemanticTokenModifiers,
+  ServerStateNotification,
+  ListTests,
+  type ListTestsParams,
+  type ListTestsResult,
+  type ServerStateParams,
+} from "@solidity-workbench/common";
 
-// Create the LSP connection and document manager
 const connection = createConnection(ProposedFeatures.all);
 const documents = new TextDocuments(TextDocument);
 
@@ -64,16 +73,51 @@ let callHierarchyProvider: CallHierarchyProvider;
 let typeHierarchyProvider: TypeHierarchyProvider;
 let solcBridge: SolcBridge;
 
-connection.onInitialize((params: InitializeParams): InitializeResult => {
-  const workspaceFolders = params.workspaceFolders ?? [];
-  const rootUri = workspaceFolders[0]?.uri ?? params.rootUri ?? "";
+/**
+ * Latest snapshot of `solidity-workbench.*` workspace configuration.
+ * Providers read through `getServerSettings()` so a configuration change
+ * takes effect on the very next LSP request with no restart.
+ */
+interface ServerSettings {
+  foundryPath?: string;
+  diagnostics?: {
+    compileOnSave?: boolean;
+    debounceMs?: number;
+  };
+  inlayHints?: {
+    parameterNames?: boolean;
+    variableTypes?: boolean;
+  };
+  gasEstimates?: {
+    enabled?: boolean;
+  };
+}
 
-  // Initialize core services
-  workspaceManager = new WorkspaceManager(rootUri, connection);
+let currentSettings: ServerSettings = {};
+
+export function getServerSettings(): ServerSettings {
+  return currentSettings;
+}
+
+function pushServerState(params: ServerStateParams): void {
+  connection.sendNotification(ServerStateNotification, params);
+}
+
+connection.onInitialize((params: InitializeParams): InitializeResult => {
+  const initialFolder = params.workspaceFolders?.[0]?.uri ?? params.rootUri ?? "";
+
+  workspaceManager = new WorkspaceManager(initialFolder, connection);
+
+  // Register every additional workspace folder the client sent.
+  for (const folder of params.workspaceFolders ?? []) {
+    if (folder.uri !== initialFolder) {
+      void workspaceManager.addRoot(folder.uri);
+    }
+  }
+
   parser = new SolidityParser();
   symbolIndex = new SymbolIndex(parser, workspaceManager);
 
-  // Initialize providers
   completionProvider = new CompletionProvider(symbolIndex, workspaceManager);
   definitionProvider = new DefinitionProvider(symbolIndex, workspaceManager);
   hoverProvider = new HoverProvider(symbolIndex, parser);
@@ -93,7 +137,15 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   typeHierarchyProvider = new TypeHierarchyProvider(symbolIndex, parser);
   solcBridge = new SolcBridge(workspaceManager);
 
-  connection.console.log(`Solidity Workbench LSP server initializing for workspace: ${rootUri}`);
+  // Make the type-resolved AST cache available to providers that want it
+  // for overload disambiguation and member resolution.
+  hoverProvider.setSolcBridge(solcBridge);
+  definitionProvider.setSolcBridge(solcBridge);
+  completionProvider.setSolcBridge(solcBridge);
+
+  connection.console.log(
+    `Solidity Workbench LSP server initializing for ${workspaceManager.rootCount} root(s)`,
+  );
 
   return {
     capabilities: {
@@ -158,30 +210,44 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 });
 
 connection.onInitialized(async () => {
-  // Register for configuration changes
   connection.client.register(DidChangeConfigurationNotification.type, undefined);
 
-  // Pull initial config from the client (solidity-workbench.foundryPath, etc.)
+  // Pull initial config from the client (solidity-workbench.*) and apply.
   await refreshConfiguration();
 
-  // Index the workspace
   await workspaceManager.initialize();
+  pushServerState({
+    phase: "indexing",
+    filesIndexed: 0,
+    filesTotal: workspaceManager.getAllFileUris().length,
+  });
+
   await symbolIndex.indexWorkspace();
+
+  pushServerState({
+    phase: "idle",
+    rootCount: workspaceManager.rootCount,
+    fileCount: workspaceManager.getAllFileUris().length,
+  });
+
+  // React to workspace folder changes (multi-root add / remove).
+  connection.workspace.onDidChangeWorkspaceFolders(handleWorkspaceFoldersChanged);
 
   connection.console.log("Solidity Workbench LSP server initialized successfully");
 });
 
-// ── Configuration ────────────────────────────────────────────────────
+// ── Configuration ───────────────────────────────────────────────────
 
 async function refreshConfiguration(): Promise<void> {
   try {
     const [config] = (await connection.workspace.getConfiguration([
       { section: "solidity-workbench" },
-    ])) as [{ foundryPath?: string } | null | undefined];
+    ])) as [ServerSettings | null | undefined];
 
-    workspaceManager.setForgePath(config?.foundryPath);
+    currentSettings = config ?? {};
+    workspaceManager.setForgePath(currentSettings.foundryPath);
+    diagnosticsProvider.setDebounceMs(currentSettings.diagnostics?.debounceMs ?? 300);
   } catch (err) {
-    // Some clients don't implement workspace/configuration — fall back silently.
     connection.console.warn(`workspace/configuration unavailable: ${err}`);
   }
 }
@@ -190,7 +256,28 @@ connection.onDidChangeConfiguration(async () => {
   await refreshConfiguration();
 });
 
-// ── File System Watching ─────────────────────────────────────────────
+// ── Workspace folders ───────────────────────────────────────────────
+
+async function handleWorkspaceFoldersChanged(event: WorkspaceFoldersChangeEvent): Promise<void> {
+  for (const removed of event.removed) {
+    workspaceManager.removeRoot(removed.uri);
+    connection.console.log(`Removed workspace root: ${removed.uri}`);
+  }
+  for (const added of event.added) {
+    await workspaceManager.addRoot(added.uri);
+    connection.console.log(`Added workspace root: ${added.uri}`);
+  }
+
+  // Rebuild the symbol + reference index over the new root set.
+  await symbolIndex.indexWorkspace();
+  pushServerState({
+    phase: "idle",
+    rootCount: workspaceManager.rootCount,
+    fileCount: workspaceManager.getAllFileUris().length,
+  });
+}
+
+// ── File System Watching ────────────────────────────────────────────
 
 connection.onDidChangeWatchedFiles(async (params) => {
   let needsWorkspaceReload = false;
@@ -207,9 +294,6 @@ connection.onDidChangeWatchedFiles(async (params) => {
     }
 
     if (!fsPath.endsWith(".sol")) continue;
-
-    // Skip files currently open in the editor — those are tracked via
-    // documents.onDidChangeContent and would otherwise be reindexed twice.
     if (documents.get(change.uri)) continue;
 
     if (change.type === FileChangeType.Deleted) {
@@ -222,8 +306,12 @@ connection.onDidChangeWatchedFiles(async (params) => {
   if (needsWorkspaceReload) {
     connection.console.log("foundry.toml or remappings.txt changed — reloading workspace");
     await workspaceManager.initialize();
-    // Full reindex since remappings can change how imports resolve.
     await symbolIndex.indexWorkspace();
+    pushServerState({
+      phase: "idle",
+      rootCount: workspaceManager.rootCount,
+      fileCount: workspaceManager.getAllFileUris().length,
+    });
     return;
   }
 
@@ -239,10 +327,9 @@ connection.onDidChangeWatchedFiles(async (params) => {
   }
 });
 
-// ── Document Lifecycle ───────────────────────────────────────────────
+// ── Document Lifecycle ──────────────────────────────────────────────
 
 documents.onDidChangeContent(async (change) => {
-  // Re-parse the changed document
   const uri = change.document.uri;
   const text = change.document.getText();
 
@@ -250,30 +337,38 @@ documents.onDidChangeContent(async (change) => {
   symbolIndex.updateFile(uri);
   callHierarchyProvider.invalidateFile(uri);
 
-  // Provide fast diagnostics from parser
   await diagnosticsProvider.provideFastDiagnostics(uri, text);
 });
 
 documents.onDidSave(async (event) => {
-  // Trigger forge build for full diagnostics on save
-  await diagnosticsProvider.provideFullDiagnostics(event.document.uri);
+  pushServerState({ phase: "building" });
+  const startedAt = Date.now();
+  const { errorCount, warningCount } = await diagnosticsProvider.provideFullDiagnostics(
+    event.document.uri,
+  );
+  pushServerState({
+    phase: "build-result",
+    success: errorCount === 0,
+    errorCount,
+    warningCount,
+    durationMs: Date.now() - startedAt,
+  });
 
-  // Update the rich AST from solc (type-resolved analysis)
   solcBridge.buildAndExtractAst().catch((err) => {
     connection.console.error(`solc AST extraction failed: ${err}`);
   });
 });
 
 documents.onDidClose((event) => {
-  // Clean up diagnostics for closed files
   connection.sendDiagnostics({ uri: event.document.uri, diagnostics: [] });
 });
 
-// ── LSP Request Handlers ─────────────────────────────────────────────
+// ── LSP Request Handlers ────────────────────────────────────────────
 
-connection.onCompletion(async (params): Promise<CompletionItem[]> => {
+connection.onCompletion(async (params, token): Promise<CompletionItem[]> => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return [];
+  if (token.isCancellationRequested) return [];
   return completionProvider.provideCompletions(doc, params.position);
 });
 
@@ -281,27 +376,30 @@ connection.onCompletionResolve(async (item: CompletionItem): Promise<CompletionI
   return completionProvider.resolveCompletion(item);
 });
 
-connection.onDefinition(async (params) => {
+connection.onDefinition(async (params, token) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return null;
+  if (token.isCancellationRequested) return null;
   return definitionProvider.provideDefinition(doc, params.position);
 });
 
-connection.onTypeDefinition(async (params) => {
+connection.onTypeDefinition(async (params, token) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return null;
+  if (token.isCancellationRequested) return null;
   return definitionProvider.provideTypeDefinition(doc, params.position);
 });
 
-connection.onReferences(async (params) => {
+connection.onReferences(async (params, token) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return [];
-  return referencesProvider.provideReferences(doc, params.position, params.context);
+  return referencesProvider.provideReferences(doc, params.position, params.context, token);
 });
 
-connection.onHover(async (params): Promise<Hover | null> => {
+connection.onHover(async (params, token): Promise<Hover | null> => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return null;
+  if (token.isCancellationRequested) return null;
   return hoverProvider.provideHover(doc, params.position);
 });
 
@@ -311,15 +409,15 @@ connection.onDocumentSymbol(async (params) => {
   return documentSymbolProvider.provideDocumentSymbols(doc);
 });
 
-connection.onWorkspaceSymbol(async (params) => {
-  return symbolIndex.findWorkspaceSymbols(params.query);
+connection.onWorkspaceSymbol(async (params, token) => {
+  return symbolIndex.findWorkspaceSymbols(params.query, token);
 });
 
-connection.onCodeAction(async (params): Promise<CodeAction[]> => {
+connection.onCodeAction(async (params, token): Promise<CodeAction[]> => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return [];
+  if (token.isCancellationRequested) return [];
   const actions = codeActionsProvider.provideCodeActions(doc, params.range, params.context);
-  // Append auto-import actions from diagnostics
   const importActions = autoImportProvider.provideImportActions(doc, params.context.diagnostics);
   return [...actions, ...importActions];
 });
@@ -336,27 +434,30 @@ connection.onDocumentRangeFormatting(async (params) => {
   return formattingProvider.formatRange(doc, params.range, params.options);
 });
 
-connection.languages.semanticTokens.on(async (params) => {
+connection.languages.semanticTokens.on(async (params, token) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return { data: [] };
-  return semanticTokensProvider.provideSemanticTokens(doc);
+  return semanticTokensProvider.provideSemanticTokens(doc, token);
 });
 
-connection.languages.semanticTokens.onRange(async (params) => {
+connection.languages.semanticTokens.onRange(async (params, token) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return { data: [] };
-  return semanticTokensProvider.provideSemanticTokensRange(doc, params.range);
+  return semanticTokensProvider.provideSemanticTokensRange(doc, params.range, token);
 });
 
-// ── Inlay Hints ──────────────────────────────────────────────────────
+// ── Inlay Hints ─────────────────────────────────────────────────────
 
 connection.languages.inlayHint.on(async (params) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return [];
+  // Respect the client's preference. If parameter-name hints are off,
+  // return early to skip the per-line scan entirely.
+  if (currentSettings.inlayHints?.parameterNames === false) return [];
   return inlayHintsProvider.provideInlayHints(doc, params.range);
 });
 
-// ── Signature Help ───────────────────────────────────────────────────
+// ── Signature Help ──────────────────────────────────────────────────
 
 connection.onSignatureHelp(async (params) => {
   const doc = documents.get(params.textDocument.uri);
@@ -364,7 +465,7 @@ connection.onSignatureHelp(async (params) => {
   return signatureHelpProvider.provideSignatureHelp(doc, params.position);
 });
 
-// ── Rename ───────────────────────────────────────────────────────────
+// ── Rename ──────────────────────────────────────────────────────────
 
 connection.onPrepareRename(async (params) => {
   const doc = documents.get(params.textDocument.uri);
@@ -372,17 +473,21 @@ connection.onPrepareRename(async (params) => {
   return renameProvider.prepareRename(doc, params.position);
 });
 
-connection.onRenameRequest(async (params) => {
+connection.onRenameRequest(async (params, token) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return null;
-  return renameProvider.provideRename(doc, params.position, params.newName);
+  return renameProvider.provideRename(doc, params.position, params.newName, token);
 });
 
-// ── Code Lens ────────────────────────────────────────────────────────
+// ── Code Lens ───────────────────────────────────────────────────────
 
 connection.onCodeLens(async (params) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return [];
+  if (currentSettings.gasEstimates?.enabled === false) {
+    // Still return non-gas lenses (refs, selectors, run-test).
+    return codeLensProvider.provideCodeLenses(doc, { suppressGas: true });
+  }
   return codeLensProvider.provideCodeLenses(doc);
 });
 
@@ -390,7 +495,7 @@ connection.onCodeLensResolve(async (codeLens) => {
   return codeLensProvider.resolveCodeLens(codeLens);
 });
 
-// ── Call Hierarchy ───────────────────────────────────────────────────
+// ── Call Hierarchy ──────────────────────────────────────────────────
 
 connection.languages.callHierarchy.onPrepare(async (params) => {
   const doc = documents.get(params.textDocument.uri);
@@ -398,12 +503,12 @@ connection.languages.callHierarchy.onPrepare(async (params) => {
   return callHierarchyProvider.prepareCallHierarchy(doc, params.position);
 });
 
-connection.languages.callHierarchy.onIncomingCalls(async (params) => {
-  return callHierarchyProvider.getIncomingCalls(params.item);
+connection.languages.callHierarchy.onIncomingCalls(async (params, token) => {
+  return callHierarchyProvider.getIncomingCalls(params.item, token);
 });
 
-connection.languages.callHierarchy.onOutgoingCalls(async (params) => {
-  return callHierarchyProvider.getOutgoingCalls(params.item);
+connection.languages.callHierarchy.onOutgoingCalls(async (params, token) => {
+  return callHierarchyProvider.getOutgoingCalls(params.item, token);
 });
 
 // ── Type Hierarchy ──────────────────────────────────────────────────
@@ -422,7 +527,13 @@ connection.languages.typeHierarchy.onSubtypes(async (params) => {
   return typeHierarchyProvider.getSubtypes(params.item);
 });
 
-// ── Start ────────────────────────────────────────────────────────────
+// ── Custom requests ─────────────────────────────────────────────────
+
+connection.onRequest(ListTests, async (params: ListTestsParams): Promise<ListTestsResult> => {
+  return listTests(workspaceManager, parser, params);
+});
+
+// ── Start ───────────────────────────────────────────────────────────
 
 documents.listen(connection);
 connection.listen();

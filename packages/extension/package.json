@@ -5,6 +5,19 @@
   "version": "0.1.0",
   "publisher": "uniswap",
   "license": "MIT",
+  "icon": "resources/icon.png",
+  "galleryBanner": {
+    "color": "#1B1B1B",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/uniswap/solidity-workbench.git"
+  },
+  "bugs": {
+    "url": "https://github.com/uniswap/solidity-workbench/issues"
+  },
+  "homepage": "https://github.com/uniswap/solidity-workbench#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -127,6 +140,10 @@
       {
         "command": "solidity-workbench.gasSnapshot",
         "title": "Solidity Workbench: Gas Snapshot (forge snapshot)"
+      },
+      {
+        "command": "solidity-workbench.gasClearHistory",
+        "title": "Solidity Workbench: Clear Gas Regression Baseline"
       },
       {
         "command": "solidity-workbench.flatten",

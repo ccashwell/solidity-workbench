@@ -29,7 +29,7 @@ export class StorageLayoutPanel {
     );
   }
 
-  private async showPanel(context: vscode.ExtensionContext): Promise<void> {
+  private async showPanel(_context: vscode.ExtensionContext): Promise<void> {
     const editor = vscode.window.activeTextEditor;
     if (!editor || editor.document.languageId !== "solidity") {
       vscode.window.showWarningMessage("Open a Solidity file first.");

@@ -2,6 +2,7 @@ import type {
   CallHierarchyIncomingCall,
   CallHierarchyItem,
   CallHierarchyOutgoingCall,
+  CancellationToken,
   Position,
   Range,
 } from "vscode-languageserver/node.js";
@@ -90,8 +91,12 @@ export class CallHierarchyProvider {
    * included because without type info we cannot prove they *don't* dispatch
    * to this target, and unqualified internal calls are the common case.
    */
-  async getIncomingCalls(item: CallHierarchyItem): Promise<CallHierarchyIncomingCall[]> {
-    await this.ensureIndexed();
+  async getIncomingCalls(
+    item: CallHierarchyItem,
+    token?: CancellationToken,
+  ): Promise<CallHierarchyIncomingCall[]> {
+    await this.ensureIndexed(token);
+    if (token?.isCancellationRequested) return [];
 
     const sites = this.incomingCalls.get(item.name) ?? [];
     const allowedQualifiers = this.computeAllowedQualifiers(item.detail);
@@ -138,8 +143,12 @@ export class CallHierarchyProvider {
   /**
    * Get outgoing calls — what does this function call?
    */
-  async getOutgoingCalls(item: CallHierarchyItem): Promise<CallHierarchyOutgoingCall[]> {
-    await this.ensureIndexed();
+  async getOutgoingCalls(
+    item: CallHierarchyItem,
+    token?: CancellationToken,
+  ): Promise<CallHierarchyOutgoingCall[]> {
+    await this.ensureIndexed(token);
+    if (token?.isCancellationRequested) return [];
 
     const key = this.makeKey(item.uri, item.name);
     const sites = this.outgoingCalls.get(key) ?? [];
@@ -195,9 +204,10 @@ export class CallHierarchyProvider {
     this.indexedFiles.delete(uri);
   }
 
-  private async ensureIndexed(): Promise<void> {
+  private async ensureIndexed(token?: CancellationToken): Promise<void> {
     const allUris = this.workspace.getAllFileUris();
     for (const uri of allUris) {
+      if (token?.isCancellationRequested) return;
       if (this.indexedFiles.has(uri)) continue;
       try {
         const filePath = this.workspace.uriToPath(uri);

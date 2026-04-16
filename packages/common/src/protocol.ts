@@ -42,7 +42,91 @@ export interface GasSnapshotUpdateParams {
   }[];
 }
 
+/**
+ * Server state heartbeat — pushed on init, after every forge build, and
+ * whenever indexing progress crosses a round-number milestone. Drives the
+ * status bar in the extension client.
+ */
+export const ServerStateNotification = "solidity-workbench/serverState";
+
+export type ServerStateIndexing = {
+  phase: "indexing";
+  filesIndexed: number;
+  filesTotal: number;
+};
+
+export type ServerStateIdle = {
+  phase: "idle";
+  rootCount: number;
+  fileCount: number;
+};
+
+export type ServerStateBuilding = {
+  phase: "building";
+};
+
+export type ServerStateBuildResult = {
+  phase: "build-result";
+  success: boolean;
+  errorCount: number;
+  warningCount: number;
+  durationMs: number;
+};
+
+export type ServerStateParams =
+  | ServerStateIndexing
+  | ServerStateIdle
+  | ServerStateBuilding
+  | ServerStateBuildResult;
+
 // ── Custom Requests (client → server) ────────────────────────────────
+
+/**
+ * List test contracts and functions across the workspace, resolved from
+ * the already-parsed AST (not by the client re-regexing test files).
+ *
+ * The client uses this to populate the VSCode Test Explorer. It replaces
+ * the previous `parseTestFile` path in `FoundryTestProvider`, which
+ * misbehaved on braces inside strings and multi-line function headers.
+ */
+export const ListTests = "solidity-workbench/listTests";
+
+export interface ListTestsParams {
+  /**
+   * Optional: limit results to files under the given folder URI. When
+   * omitted, every workspace root is scanned.
+   */
+  folderUri?: string;
+}
+
+export interface TestContractInfo {
+  /** File URI */
+  uri: string;
+  /** Contract name (e.g. `CounterTest`) */
+  name: string;
+  /** Inclusive LSP range of the contract declaration */
+  range: { start: { line: number; character: number }; end: { line: number; character: number } };
+  /** One entry per `test_*`, `testFuzz_*`, `testFork_*`, `testFail_*`, `invariant_*`, or `setUp`. */
+  tests: TestFunctionInfo[];
+}
+
+export interface TestFunctionInfo {
+  /** Function name (e.g. `test_InitialCountIsZero`) */
+  name: string;
+  /**
+   * Classification of the test type so the client can attach tags /
+   * different icons. `setUp` and `invariant` are grouped under `"other"`.
+   */
+  kind: "test" | "testFuzz" | "testFork" | "testFail" | "invariant" | "setUp";
+  /** Inclusive LSP range of the function declaration */
+  range: { start: { line: number; character: number }; end: { line: number; character: number } };
+  /** Is this function in a `.t.sol` test file? (Saves the client a regex.) */
+  isTestFile: boolean;
+}
+
+export interface ListTestsResult {
+  contracts: TestContractInfo[];
+}
 
 /** Request to get the storage layout for a contract */
 export const GetStorageLayout = "solidity-workbench/getStorageLayout";

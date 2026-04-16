@@ -19,6 +19,7 @@ import { SlitherIntegration } from "./analysis/slither.js";
 import { SolidityDebugProvider } from "./debugger/debug-adapter.js";
 import { ChiselIntegration } from "./views/chisel.js";
 import { FoundryTomlProvider } from "./views/foundry-toml-schema.js";
+import { StatusBar } from "./views/status-bar.js";
 
 let client: LanguageClient;
 
@@ -59,18 +60,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     clientOptions,
   );
 
-  // Start the client (which also starts the server)
   await client.start();
+
+  // ── Status bar (subscribes to serverState notifications) ──────────
+
+  const statusBar = new StatusBar();
+  statusBar.activate(context, client);
 
   // ── Commands ──────────────────────────────────────────────────────
 
   registerFoundryCommands(context);
-  registerAnvilCommands(context);
+  registerAnvilCommands(context, (status) => statusBar.setAnvil(status));
   registerCastCommands(context);
   registerScriptCommands(context);
   registerDeployCommands(context);
 
-  // Restart server command
   context.subscriptions.push(
     vscode.commands.registerCommand("solidity-workbench.restartServer", async () => {
       await client.restart();
@@ -82,6 +86,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const testProvider = new FoundryTestProvider();
   testProvider.activate(context);
+  testProvider.setLanguageClient(client);
 
   // ── Gas Profiler ──────────────────────────────────────────────────
 
@@ -91,6 +96,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // ── Coverage ──────────────────────────────────────────────────────
 
   const coverage = new CoverageProvider();
+  coverage.onCoverageChange((pct) => statusBar.setCoverage(pct));
   coverage.activate(context);
 
   // ── Storage Layout ────────────────────────────────────────────────
@@ -122,7 +128,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("solidity-workbench.slither", () => slither.analyze()),
   );
 
-  // Auto-run slither on save if enabled
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
       if (doc.languageId === "solidity") {
@@ -133,15 +138,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     }),
   );
-
-  // ── Status Bar ────────────────────────────────────────────────────
-
-  const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
-  statusBar.text = "$(beaker) Solidity Workbench";
-  statusBar.tooltip = "Solidity Workbench — Solidity IDE";
-  statusBar.command = "solidity-workbench.build";
-  statusBar.show();
-  context.subscriptions.push(statusBar);
 
   // ── Output Channel ────────────────────────────────────────────────
 

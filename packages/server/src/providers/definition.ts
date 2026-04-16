@@ -4,7 +4,9 @@ import type { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { SolcBridge } from "../compiler/solc-bridge.js";
 import { getWordAtPosition } from "../utils/text.js";
+import { readFileSync } from "node:fs";
 
 /**
  * Provides go-to-definition and go-to-type-definition.
@@ -16,10 +18,22 @@ import { getWordAtPosition } from "../utils/text.js";
  * 4. For member access (e.g., contract.func), resolve through inheritance chain
  */
 export class DefinitionProvider {
+  private solcBridge: SolcBridge | null = null;
+
   constructor(
     private symbolIndex: SymbolIndex,
     private workspace: WorkspaceManager,
   ) {}
+
+  /**
+   * Wire the SolcBridge for overload and cross-file disambiguation.
+   * When multiple symbols share a name we consult the solc AST's
+   * `referencedDeclaration` so we jump to the actual target (not just
+   * the first index match).
+   */
+  setSolcBridge(bridge: SolcBridge): void {
+    this.solcBridge = bridge;
+  }
 
   provideDefinition(document: TextDocument, position: Position): Definition | null {
     const text = document.getText();
@@ -44,7 +58,8 @@ export class DefinitionProvider {
     // Check for dotted access (Type.member)
     const dottedTarget = this.getDottedAccess(text, position);
     if (dottedTarget) {
-      return this.resolveMemberDefinition(dottedTarget.type, dottedTarget.member);
+      const resolved = this.resolveMemberDefinition(dottedTarget.type, dottedTarget.member);
+      if (resolved) return resolved;
     }
 
     // Look up in symbol index
@@ -56,13 +71,57 @@ export class DefinitionProvider {
       return Location.create(symbols[0].filePath, symbols[0].nameRange);
     }
 
-    // Multiple definitions — prefer the one in the same file, then declarations
+    // Multiple definitions — consult the solc AST when available. If it
+    // resolves to a specific (file, offset) we convert that back to a
+    // (line, character) range and prefer the matching symbol-index entry.
+    if (this.solcBridge) {
+      const solcResolved = this.resolveViaSolc(document, position);
+      if (solcResolved) {
+        const match = symbols.find(
+          (s) =>
+            s.filePath === solcResolved.uri &&
+            s.nameRange.start.line === solcResolved.line &&
+            Math.abs(s.nameRange.start.character - solcResolved.character) <= word.length,
+        );
+        if (match) {
+          return Location.create(match.filePath, match.nameRange);
+        }
+      }
+    }
+
+    // Fallback: prefer same-file matches, then every match.
     const sameFile = symbols.filter((s) => s.filePath === document.uri);
     if (sameFile.length > 0) {
       return sameFile.map((s) => Location.create(s.filePath, s.nameRange));
     }
 
     return symbols.map((s) => Location.create(s.filePath, s.nameRange));
+  }
+
+  private resolveViaSolc(
+    document: TextDocument,
+    position: Position,
+  ): { uri: string; line: number; character: number } | null {
+    if (!this.solcBridge) return null;
+    const fsPath = this.workspace.uriToPath(document.uri);
+    const offset = document.offsetAt(position);
+    const ref = this.solcBridge.resolveReference(fsPath, offset);
+    if (!ref) return null;
+
+    try {
+      const text = readFileSync(ref.filePath, "utf-8");
+      const prefix = text.slice(0, ref.offset);
+      const line = prefix.split(/\r?\n/).length - 1;
+      const character =
+        prefix.length - Math.max(prefix.lastIndexOf("\n"), prefix.lastIndexOf("\r")) - 1;
+      return {
+        uri: URI.file(ref.filePath).toString(),
+        line,
+        character,
+      };
+    } catch {
+      return null;
+    }
   }
 
   provideTypeDefinition(document: TextDocument, position: Position): Definition | null {

@@ -21,6 +21,7 @@ import { LineIndex } from "../utils/line-index.js";
  */
 export class DiagnosticsProvider {
   private debounceTimers: Map<string, NodeJS.Timeout> = new Map();
+  private debounceMs = 300;
   private linter = new SolidityLinter();
   private parser: SolidityParser | undefined;
 
@@ -36,10 +37,20 @@ export class DiagnosticsProvider {
   }
 
   /**
+   * Update the debounce window for fast diagnostics. Wired to the
+   * `solidity-workbench.diagnostics.debounceMs` client setting so the
+   * user can tune it without restarting the server. Clamped to [50,
+   * 2000] to avoid degenerate configurations.
+   */
+  setDebounceMs(ms: number): void {
+    if (!Number.isFinite(ms) || ms <= 0) return;
+    this.debounceMs = Math.max(50, Math.min(2000, Math.round(ms)));
+  }
+
+  /**
    * Fast diagnostics from parser — runs on every change with debouncing.
    */
   async provideFastDiagnostics(uri: string, text: string): Promise<void> {
-    // Debounce
     const existing = this.debounceTimers.get(uri);
     if (existing) clearTimeout(existing);
 
@@ -48,7 +59,6 @@ export class DiagnosticsProvider {
       setTimeout(() => {
         const diagnostics = this.extractSyntaxDiagnostics(text);
 
-        // Add linter diagnostics from parsed AST
         if (this.parser) {
           const result = this.parser.get(uri);
           if (result) {
@@ -57,26 +67,35 @@ export class DiagnosticsProvider {
         }
 
         this.connection.sendDiagnostics({ uri, diagnostics });
-      }, 300),
+      }, this.debounceMs),
     );
   }
 
   /**
    * Full diagnostics from forge build — runs on save.
+   *
+   * Returns aggregate error / warning counts so the server can publish
+   * a `solidity-workbench/serverState` heartbeat after every build. On
+   * failure we still return `{ errorCount: 0, warningCount: 0 }` rather
+   * than throwing, so the caller's heartbeat logic stays simple.
    */
-  async provideFullDiagnostics(uri: string): Promise<void> {
+  async provideFullDiagnostics(
+    _uri: string,
+  ): Promise<{ errorCount: number; warningCount: number }> {
     try {
       const result = await this.workspace.runForge(["build", "--json"]);
-
-      // Parse forge build JSON output for errors
       const diagnosticsByFile = this.parseForgeOutput(result.stdout, result.stderr);
 
-      // Send diagnostics for all affected files
+      let errorCount = 0;
+      let warningCount = 0;
       for (const [fileUri, diags] of diagnosticsByFile) {
+        for (const d of diags) {
+          if (d.severity === DiagnosticSeverity.Error) errorCount += 1;
+          else if (d.severity === DiagnosticSeverity.Warning) warningCount += 1;
+        }
         this.connection.sendDiagnostics({ uri: fileUri, diagnostics: diags });
       }
 
-      // Clear diagnostics for files that had no errors
       const allUris = this.workspace.getAllFileUris();
       for (const fileUri of allUris) {
         if (!diagnosticsByFile.has(fileUri)) {
@@ -86,8 +105,11 @@ export class DiagnosticsProvider {
           });
         }
       }
+
+      return { errorCount, warningCount };
     } catch (err) {
       this.connection.console.error(`forge build failed: ${err}`);
+      return { errorCount: 0, warningCount: 0 };
     }
   }
 

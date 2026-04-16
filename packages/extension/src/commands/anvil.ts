@@ -3,16 +3,26 @@ import * as vscode from "vscode";
 /**
  * Anvil (local testnet) management commands.
  *
- * - Start/stop Anvil from the command palette
- * - Fork from a given RPC URL
- * - Show Anvil status in the status bar
+ * Accepts an optional `onStatusChange` callback so the status bar can
+ * reflect whether Anvil is currently running (and whether it's forked
+ * from a remote RPC). The callback is invoked on every start / stop
+ * transition and when VSCode notifies us that the Anvil terminal was
+ * closed manually.
  */
+
+export interface AnvilStatus {
+  forked: boolean;
+  host?: string;
+}
+
+export type AnvilStatusHandler = (status: AnvilStatus | null) => void;
 
 let anvilTerminal: vscode.Terminal | undefined;
 
-export function registerAnvilCommands(context: vscode.ExtensionContext): void {
-  // ── anvil start ─────────────────────────────────────────────────
-
+export function registerAnvilCommands(
+  context: vscode.ExtensionContext,
+  onStatusChange?: AnvilStatusHandler,
+): void {
   context.subscriptions.push(
     vscode.commands.registerCommand("solidity-workbench.anvil.start", async () => {
       if (anvilTerminal && !anvilTerminal.exitStatus) {
@@ -21,7 +31,6 @@ export function registerAnvilCommands(context: vscode.ExtensionContext): void {
         return;
       }
 
-      // Ask for optional fork URL
       const forkUrl = await vscode.window.showInputBox({
         title: "Fork RPC URL (optional)",
         placeHolder: "https://eth-mainnet.g.alchemy.com/v2/...",
@@ -29,10 +38,15 @@ export function registerAnvilCommands(context: vscode.ExtensionContext): void {
       });
 
       const args = ["anvil"];
+      let host: string | undefined;
       if (forkUrl) {
         args.push("--fork-url", forkUrl);
+        try {
+          host = new URL(forkUrl).hostname;
+        } catch {
+          host = forkUrl;
+        }
 
-        // Ask for fork block number
         const blockNumber = await vscode.window.showInputBox({
           title: "Fork block number (optional)",
           placeHolder: "latest",
@@ -50,21 +64,20 @@ export function registerAnvilCommands(context: vscode.ExtensionContext): void {
       anvilTerminal.show();
       anvilTerminal.sendText(args.join(" "));
 
+      onStatusChange?.({ forked: !!forkUrl, host });
+
       vscode.window.showInformationMessage(
-        forkUrl
-          ? `Anvil started (forking ${new URL(forkUrl).hostname})`
-          : "Anvil started (fresh chain)",
+        forkUrl ? `Anvil started (forking ${host})` : "Anvil started (fresh chain)",
       );
     }),
   );
-
-  // ── anvil stop ──────────────────────────────────────────────────
 
   context.subscriptions.push(
     vscode.commands.registerCommand("solidity-workbench.anvil.stop", async () => {
       if (anvilTerminal && !anvilTerminal.exitStatus) {
         anvilTerminal.dispose();
         anvilTerminal = undefined;
+        onStatusChange?.(null);
         vscode.window.showInformationMessage("Anvil stopped.");
       } else {
         vscode.window.showInformationMessage("Anvil is not running.");
@@ -72,11 +85,11 @@ export function registerAnvilCommands(context: vscode.ExtensionContext): void {
     }),
   );
 
-  // Clean up terminal on close
   context.subscriptions.push(
     vscode.window.onDidCloseTerminal((terminal) => {
       if (terminal === anvilTerminal) {
         anvilTerminal = undefined;
+        onStatusChange?.(null);
       }
     }),
   );

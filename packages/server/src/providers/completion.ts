@@ -9,6 +9,7 @@ import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolKind } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { SolcBridge } from "../compiler/solc-bridge.js";
 
 /**
  * Provides context-aware completions for Solidity.
@@ -20,10 +21,21 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
  * - General typing → keywords, types, visible symbols
  */
 export class CompletionProvider {
+  private solcBridge: SolcBridge | null = null;
+
   constructor(
     private symbolIndex: SymbolIndex,
     private workspace: WorkspaceManager,
   ) {}
+
+  /**
+   * Wire the SolcBridge so `instance.` can return the members of
+   * `instance`'s concrete type (resolved via solc). Falls back to the
+   * existing contract-name heuristic when no AST cache is available.
+   */
+  setSolcBridge(bridge: SolcBridge): void {
+    this.solcBridge = bridge;
+  }
 
   provideCompletions(document: TextDocument, position: Position): CompletionItem[] {
     const text = document.getText();
@@ -31,7 +43,6 @@ export class CompletionProvider {
     const lineText = text.split("\n")[position.line] ?? "";
     const textBefore = lineText.slice(0, position.character);
 
-    // Detect context
     if (this.isInImportPath(textBefore)) {
       return this.provideImportCompletions(textBefore);
     }
@@ -41,10 +52,9 @@ export class CompletionProvider {
     }
 
     if (textBefore.trimEnd().endsWith(".")) {
-      return this.provideMemberCompletions(text, position, textBefore);
+      return this.provideMemberCompletions(document, text, position, textBefore);
     }
 
-    // Default: provide keywords + visible symbols
     return [
       ...this.provideKeywordCompletions(textBefore),
       ...this.provideTypeCompletions(),
@@ -124,6 +134,7 @@ export class CompletionProvider {
   }
 
   private provideMemberCompletions(
+    document: TextDocument,
     text: string,
     position: Position,
     textBefore: string,
@@ -136,59 +147,128 @@ export class CompletionProvider {
 
     const target = dotMatch[1];
 
-    // Check if it's a known contract/type name → provide its members
+    // 1. Known contract / interface / library name (static member access)
     const contract = this.symbolIndex.getContract(target);
     if (contract) {
-      const chain = this.symbolIndex.getInheritanceChain(target);
-      for (const c of chain) {
-        for (const func of c.functions) {
-          if (func.name && func.visibility !== "private") {
-            items.push({
-              label: func.name,
-              kind: CompletionItemKind.Method,
-              detail: `${func.visibility} ${func.mutability}`,
-              data: { symbolName: func.name },
-            });
-          }
-        }
-        for (const svar of c.stateVariables) {
-          if (svar.visibility === "public") {
-            items.push({
-              label: svar.name,
-              kind: CompletionItemKind.Field,
-              detail: svar.typeName,
-            });
-          }
-        }
-        for (const event of c.events) {
-          items.push({
-            label: event.name,
-            kind: CompletionItemKind.Event,
-          });
-        }
-        for (const err of c.errors) {
-          items.push({
-            label: err.name,
-            kind: CompletionItemKind.Struct,
-            detail: "error",
-          });
-        }
-      }
-      return items;
+      return this.contractMemberCompletions(target);
     }
 
-    // Address member completions
+    // 2. Variable of a contract/interface/library type, resolved via solc
+    const resolvedType = this.resolveVariableTypeName(document, position, target);
+    if (resolvedType) {
+      const viaType = this.symbolIndex.getContract(resolvedType);
+      if (viaType) {
+        return this.contractMemberCompletions(resolvedType);
+      }
+    }
+
+    // 3. Address member completions (heuristic + name hint)
     if (this.isAddressLike(target, text)) {
       return this.provideAddressMembers();
     }
 
-    // msg, block, tx globals
+    // 4. Global objects
     if (target === "msg") return this.provideMsgMembers();
     if (target === "block") return this.provideBlockMembers();
     if (target === "tx") return this.provideTxMembers();
     if (target === "abi") return this.provideAbiMembers();
     if (target === "type") return this.provideTypeMembers();
 
+    return items;
+  }
+
+  /**
+   * Resolve the concrete (contract / interface / library / struct) type
+   * name of a variable named `target` at `position` in `document`.
+   *
+   * Strategy:
+   *   1. Ask solc (via `SolcBridge.getTypeAtOffset`) for the type at the
+   *      variable's own position immediately before the dot. This gives
+   *      us the authoritative type string (e.g. `"contract IERC20"` or
+   *      `"struct Counter.Position"`).
+   *   2. Strip the prefix and locational/mutability decoration so we're
+   *      left with a bare identifier that matches a contract/struct name
+   *      in the symbol index.
+   */
+  private resolveVariableTypeName(
+    document: TextDocument,
+    position: Position,
+    target: string,
+  ): string | null {
+    if (!this.solcBridge) return null;
+
+    // Position of the variable identifier (before the dot). We want
+    // `target`'s first byte, not the dot or the cursor.
+    const lineText = document.getText().split("\n")[position.line] ?? "";
+    const dotIdx = lineText.lastIndexOf(".", position.character - 1);
+    if (dotIdx < 0) return null;
+    const varEnd = dotIdx;
+    const varStart = varEnd - target.length;
+    if (varStart < 0 || lineText.slice(varStart, varEnd) !== target) return null;
+
+    const varPos: Position = { line: position.line, character: varStart };
+    const offset = document.offsetAt(varPos);
+    const fsPath = this.workspace.uriToPath(document.uri);
+    const typeDesc = this.solcBridge.getTypeAtOffset(fsPath, offset);
+    if (!typeDesc?.typeString) return null;
+
+    return this.stripTypeString(typeDesc.typeString);
+  }
+
+  /**
+   * Reduce a solc `typeString` like `"contract IERC20"` or
+   * `"struct Counter.Position storage ref"` to the bare identifier we
+   * can look up in the symbol index (`IERC20` / `Position`).
+   */
+  private stripTypeString(typeString: string): string | null {
+    let s = typeString.trim();
+    s = s.replace(/^(contract|interface|library|struct|enum|type)\s+/, "");
+    s = s.replace(/\s+(memory|storage|calldata|ref|pointer|payable)(\s+.*)?$/, "");
+    // For nested names like `Counter.Position`, prefer the trailing segment.
+    const dot = s.lastIndexOf(".");
+    if (dot >= 0) s = s.slice(dot + 1);
+    s = s.trim();
+    if (!s || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(s)) return null;
+    return s;
+  }
+
+  private contractMemberCompletions(contractName: string): CompletionItem[] {
+    const items: CompletionItem[] = [];
+    const chain = this.symbolIndex.getInheritanceChain(contractName);
+    for (const c of chain) {
+      for (const func of c.functions) {
+        if (func.name && func.visibility !== "private") {
+          items.push({
+            label: func.name,
+            kind: CompletionItemKind.Method,
+            detail: `${func.visibility} ${func.mutability}`,
+            data: { symbolName: func.name },
+          });
+        }
+      }
+      for (const svar of c.stateVariables) {
+        if (svar.visibility === "public") {
+          items.push({
+            label: svar.name,
+            kind: CompletionItemKind.Field,
+            detail: svar.typeName,
+          });
+        }
+      }
+      for (const event of c.events) {
+        items.push({
+          label: event.name,
+          kind: CompletionItemKind.Event,
+        });
+      }
+      for (const err of c.errors) {
+        items.push({
+          label: err.name,
+          kind: CompletionItemKind.Struct,
+          detail: "error",
+        });
+      }
+    }
     return items;
   }
 

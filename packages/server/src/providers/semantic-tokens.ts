@@ -1,4 +1,4 @@
-import type { SemanticTokens, Range } from "vscode-languageserver/node.js";
+import type { CancellationToken, SemanticTokens, Range } from "vscode-languageserver/node.js";
 import { SemanticTokensBuilder } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import { SolSemanticTokenTypes, SolSemanticTokenModifiers } from "@solidity-workbench/common";
@@ -31,21 +31,27 @@ const tokenModifierMap = new Map(SolSemanticTokenModifiers.map((m, i) => [m, i])
 export class SemanticTokensProvider {
   constructor(private parser: SolidityParser) {}
 
-  provideSemanticTokens(document: TextDocument): SemanticTokens {
-    const tokens = this.collectTokens(document);
+  provideSemanticTokens(document: TextDocument, token?: CancellationToken): SemanticTokens {
+    const tokens = this.collectTokens(document, token);
+    if (token?.isCancellationRequested) return { data: [] };
     return this.buildFromTokens(tokens);
   }
 
-  provideSemanticTokensRange(document: TextDocument, range: Range): SemanticTokens {
-    const tokens = this.collectTokens(document).filter(
+  provideSemanticTokensRange(
+    document: TextDocument,
+    range: Range,
+    token?: CancellationToken,
+  ): SemanticTokens {
+    const tokens = this.collectTokens(document, token).filter(
       (t) => t.line >= range.start.line && t.line <= range.end.line,
     );
+    if (token?.isCancellationRequested) return { data: [] };
     return this.buildFromTokens(tokens);
   }
 
   // ── Token collection ────────────────────────────────────────────────
 
-  private collectTokens(document: TextDocument): TokenInfo[] {
+  private collectTokens(document: TextDocument, token?: CancellationToken): TokenInfo[] {
     const tokens: TokenInfo[] = [];
     const result = this.parser.get(document.uri);
     if (!result) return tokens;
@@ -54,9 +60,10 @@ export class SemanticTokensProvider {
     const lines = text.split("\n");
 
     this.collectDeclarationTokens(result, tokens);
+    if (token?.isCancellationRequested) return tokens;
 
     const nameKinds = this.buildNameKinds(result);
-    this.collectReferenceTokens(result, lines, nameKinds, tokens);
+    this.collectReferenceTokens(result, lines, nameKinds, tokens, token);
 
     return tokens;
   }
@@ -216,9 +223,12 @@ export class SemanticTokensProvider {
     lines: string[],
     nameKinds: Map<string, string>,
     tokens: TokenInfo[],
+    token?: CancellationToken,
   ): void {
     for (const contract of result.sourceUnit.contracts) {
+      if (token?.isCancellationRequested) return;
       for (const func of contract.functions) {
+        if (token?.isCancellationRequested) return;
         if (!func.body) continue;
         const bounds = getFunctionBodyBounds(lines, func.range.start.line);
         if (!bounds) continue;

@@ -33,13 +33,14 @@ export class CodeLensProvider {
     this.loadGasSnapshots();
   }
 
-  provideCodeLenses(document: TextDocument): CodeLens[] {
+  provideCodeLenses(document: TextDocument, options: { suppressGas?: boolean } = {}): CodeLens[] {
     const lenses: CodeLens[] = [];
     const result = this.parser.get(document.uri);
     if (!result) return lenses;
 
     const text = document.getText();
     const isTestFile = document.uri.endsWith(".t.sol");
+    const suppressGas = options.suppressGas === true;
 
     for (const contract of result.sourceUnit.contracts) {
       // Contract-level lens: reference count (omit if 0 usages).
@@ -82,16 +83,18 @@ export class CodeLensProvider {
         }
 
         // Gas estimate lens
-        const gasKey = `${contract.name}::${func.name}`;
-        const gasEstimate = this.gasSnapshots.get(gasKey);
-        if (gasEstimate !== undefined) {
-          lenses.push({
-            range: func.range,
-            command: {
-              title: `$(flame) ${this.formatGas(gasEstimate)} gas`,
-              command: "",
-            },
-          });
+        if (!suppressGas) {
+          const gasKey = `${contract.name}::${func.name}`;
+          const gasEstimate = this.gasSnapshots.get(gasKey);
+          if (gasEstimate !== undefined) {
+            lenses.push({
+              range: func.range,
+              command: {
+                title: `$(flame) ${this.formatGas(gasEstimate)} gas`,
+                command: "",
+              },
+            });
+          }
         }
 
         // Reference count lens for non-test functions (omit if 0 usages).

@@ -4,145 +4,263 @@ import type { Connection } from "vscode-languageserver/node.js";
 import { URI } from "vscode-uri";
 import { parse as parseToml } from "toml";
 import type { FoundryProfile, Remapping } from "@solidity-workbench/common";
-import { FoundryConfig, parseRemapping, resolveImportPath } from "@solidity-workbench/common";
+import { parseRemapping, resolveImportPath } from "@solidity-workbench/common";
+
+/**
+ * Per-root state. Each workspace root (i.e. each folder the user has
+ * opened in the editor) gets its own `foundry.toml` profile, remappings,
+ * and discovered source files. Aggregation across roots happens inside
+ * `WorkspaceManager`.
+ */
+interface WorkspaceRoot {
+  rootUri: string;
+  rootPath: string;
+  config: FoundryProfile | null;
+  remappings: Remapping[];
+  sourceFiles: Set<string>;
+}
 
 /**
  * Manages workspace state: foundry.toml, remappings, source directories,
- * and dependency resolution.
+ * and dependency resolution across one or more workspace roots.
+ *
+ * Multi-root support: the `roots` map is keyed by URI. The *primary* root
+ * is the first one added — that's what `runForge` uses as its default cwd
+ * when no explicit `cwd` is supplied. Aggregating methods
+ * (`getAllFileUris`, `getRemappings`, `libDirs`, `resolveImport`) span
+ * every root.
  */
 export class WorkspaceManager {
-  private rootPath: string;
   private connection: Connection;
-  private config: FoundryProfile | null = null;
-  private remappings: Remapping[] = [];
-  private sourceFiles: Map<string, string> = new Map(); // uri → file path
+  private roots: Map<string, WorkspaceRoot> = new Map();
+  private primaryUri: string | null = null;
   private forgePath = "forge";
 
-  constructor(rootUri: string, connection: Connection) {
-    this.rootPath = URI.parse(rootUri).fsPath;
+  constructor(initialRootUri: string, connection: Connection) {
     this.connection = connection;
+    if (initialRootUri) {
+      this.addRootSync(initialRootUri);
+    }
   }
 
+  /** Primary root's filesystem path. Kept for backwards compatibility. */
   get root(): string {
-    return this.rootPath;
+    const primary = this.primaryUri ? this.roots.get(this.primaryUri) : undefined;
+    return primary?.rootPath ?? process.cwd();
   }
 
   get forge(): string {
     return this.forgePath;
   }
 
-  /**
-   * Update the forge binary path from extension config.
-   * Empty string or undefined resets to the PATH-based "forge".
-   */
-  setForgePath(path: string | undefined): void {
-    this.forgePath = path && path.trim().length > 0 ? path : "forge";
+  /** All workspace root filesystem paths, primary first. */
+  get rootPaths(): string[] {
+    const paths: string[] = [];
+    if (this.primaryUri) {
+      const p = this.roots.get(this.primaryUri);
+      if (p) paths.push(p.rootPath);
+    }
+    for (const [uri, root] of this.roots) {
+      if (uri !== this.primaryUri) paths.push(root.rootPath);
+    }
+    return paths;
   }
 
+  get rootCount(): number {
+    return this.roots.size;
+  }
+
+  setForgePath(pathValue: string | undefined): void {
+    this.forgePath = pathValue && pathValue.trim().length > 0 ? pathValue : "forge";
+  }
+
+  /** Primary root's src directory. Multi-root callers should use per-root walking. */
   get srcDir(): string {
-    return path.join(this.rootPath, this.config?.src ?? "src");
+    const root = this.primaryRoot();
+    return path.join(root.rootPath, root.config?.src ?? "src");
   }
 
   get testDir(): string {
-    return path.join(this.rootPath, this.config?.test ?? "test");
+    const root = this.primaryRoot();
+    return path.join(root.rootPath, root.config?.test ?? "test");
   }
 
   get scriptDir(): string {
-    return path.join(this.rootPath, this.config?.script ?? "script");
+    const root = this.primaryRoot();
+    return path.join(root.rootPath, root.config?.script ?? "script");
   }
 
   get outDir(): string {
-    return path.join(this.rootPath, this.config?.out ?? "out");
+    const root = this.primaryRoot();
+    return path.join(root.rootPath, root.config?.out ?? "out");
   }
 
+  /** All library directories across all roots, for rename guards and index scans. */
   get libDirs(): string[] {
-    return (this.config?.libs ?? ["lib"]).map((l) => path.join(this.rootPath, l));
+    const out: string[] = [];
+    for (const root of this.roots.values()) {
+      const libs = root.config?.libs ?? ["lib"];
+      for (const lib of libs) {
+        out.push(path.join(root.rootPath, lib));
+      }
+    }
+    return out;
   }
 
+  /** Aggregated remappings from every root, in root-addition order. */
   getRemappings(): Remapping[] {
-    return this.remappings;
+    const out: Remapping[] = [];
+    for (const root of this.roots.values()) {
+      out.push(...root.remappings);
+    }
+    return out;
   }
 
+  /** Primary root's foundry profile. */
   getFoundryConfig(): FoundryProfile | null {
-    return this.config;
+    return this.primaryRoot().config;
+  }
+
+  /**
+   * Find the root that owns a given file URI (nearest-ancestor match).
+   * Returns the primary root as a fallback so callers never have to
+   * branch on `undefined`.
+   */
+  findRootFor(uri: string): WorkspaceRoot {
+    const fsPath = URI.parse(uri).fsPath;
+    let best: WorkspaceRoot | undefined;
+    let bestLen = -1;
+    for (const root of this.roots.values()) {
+      if (fsPath === root.rootPath || fsPath.startsWith(root.rootPath + path.sep)) {
+        if (root.rootPath.length > bestLen) {
+          best = root;
+          bestLen = root.rootPath.length;
+        }
+      }
+    }
+    return best ?? this.primaryRoot();
+  }
+
+  /** Remappings scoped to the root that owns `fromUri`. */
+  getRemappingsFor(fromUri: string): Remapping[] {
+    return this.findRootFor(fromUri).remappings;
   }
 
   async initialize(): Promise<void> {
-    await this.loadFoundryConfig();
-    await this.loadRemappings();
-    await this.discoverSourceFiles();
+    for (const root of this.roots.values()) {
+      await this.loadRoot(root);
+    }
+    const files = [...this.roots.values()].reduce((n, r) => n + r.sourceFiles.size, 0);
     this.connection.console.log(
-      `Workspace initialized: ${this.sourceFiles.size} Solidity files found`,
+      `Workspace initialized: ${this.roots.size} root(s), ${files} Solidity file(s)`,
     );
   }
 
-  /**
-   * Parse and load foundry.toml from the workspace root.
-   */
-  private async loadFoundryConfig(): Promise<void> {
-    const configPath = path.join(this.rootPath, "foundry.toml");
-    try {
-      if (!fs.existsSync(configPath)) {
-        this.connection.console.log("No foundry.toml found, using defaults");
-        return;
-      }
+  // ── Root management (multi-root) ───────────────────────────────────
 
-      const content = fs.readFileSync(configPath, "utf-8");
-      // Simple TOML parsing for the [profile.default] section.
-      // In production, use a proper TOML parser — for now we extract
-      // the fields we need with regex to avoid the dependency.
-      this.config = this.parseFoundryToml(content);
-      this.connection.console.log("Loaded foundry.toml configuration");
-    } catch (err) {
-      this.connection.console.error(`Failed to load foundry.toml: ${err}`);
+  async addRoot(uri: string): Promise<void> {
+    if (this.roots.has(uri)) return;
+    this.addRootSync(uri);
+    const root = this.roots.get(uri);
+    if (root) await this.loadRoot(root);
+  }
+
+  removeRoot(uri: string): void {
+    this.roots.delete(uri);
+    if (this.primaryUri === uri) {
+      const next = this.roots.keys().next();
+      this.primaryUri = next.done ? null : next.value;
     }
   }
 
-  /**
-   * Load remappings from foundry.toml and/or remappings.txt
-   */
-  private async loadRemappings(): Promise<void> {
-    this.remappings = [];
+  private addRootSync(uri: string): void {
+    const rootPath = URI.parse(uri).fsPath;
+    this.roots.set(uri, {
+      rootUri: uri,
+      rootPath,
+      config: null,
+      remappings: [],
+      sourceFiles: new Set(),
+    });
+    if (!this.primaryUri) this.primaryUri = uri;
+  }
 
-    // 1. Remappings from foundry.toml
-    if (this.config?.remappings) {
-      for (const raw of this.config.remappings) {
-        this.remappings.push(parseRemapping(raw));
+  /** Reload state for a single root (after foundry.toml / remappings.txt changed). */
+  async reloadRoot(uri: string): Promise<void> {
+    const root = this.roots.get(uri);
+    if (!root) return;
+    await this.loadRoot(root);
+  }
+
+  private async loadRoot(root: WorkspaceRoot): Promise<void> {
+    root.config = this.loadFoundryConfig(root.rootPath);
+    root.remappings = this.loadRemappings(root);
+    root.sourceFiles.clear();
+    this.discoverSourceFiles(root);
+  }
+
+  private primaryRoot(): WorkspaceRoot {
+    if (!this.primaryUri) throw new Error("WorkspaceManager has no primary root");
+    const root = this.roots.get(this.primaryUri);
+    if (!root) throw new Error(`Primary root ${this.primaryUri} missing`);
+    return root;
+  }
+
+  // ── Config + remappings ────────────────────────────────────────────
+
+  private loadFoundryConfig(rootPath: string): FoundryProfile | null {
+    const configPath = path.join(rootPath, "foundry.toml");
+    try {
+      if (!fs.existsSync(configPath)) {
+        this.connection.console.log(`No foundry.toml at ${rootPath} — using defaults`);
+        return null;
+      }
+      const content = fs.readFileSync(configPath, "utf-8");
+      return this.parseFoundryToml(content);
+    } catch (err) {
+      this.connection.console.error(`Failed to load foundry.toml at ${rootPath}: ${err}`);
+      return null;
+    }
+  }
+
+  private loadRemappings(root: WorkspaceRoot): Remapping[] {
+    const out: Remapping[] = [];
+
+    if (root.config?.remappings) {
+      for (const raw of root.config.remappings) {
+        out.push(parseRemapping(raw));
       }
     }
 
-    // 2. Remappings from remappings.txt (these take precedence / augment)
-    const remappingsPath = path.join(this.rootPath, "remappings.txt");
+    const remappingsPath = path.join(root.rootPath, "remappings.txt");
     try {
       if (fs.existsSync(remappingsPath)) {
         const content = fs.readFileSync(remappingsPath, "utf-8");
         for (const line of content.split("\n")) {
           const trimmed = line.trim();
           if (trimmed && !trimmed.startsWith("#")) {
-            this.remappings.push(parseRemapping(trimmed));
+            out.push(parseRemapping(trimmed));
           }
         }
       }
     } catch (err) {
-      this.connection.console.warn(`Failed to read remappings.txt: ${err}`);
+      this.connection.console.warn(`Failed to read remappings.txt at ${root.rootPath}: ${err}`);
     }
 
-    // 3. Auto-detect remappings from lib/ directory (forge-style)
-    for (const libDir of this.libDirs) {
+    // Auto-detect from lib/
+    const libs = (root.config?.libs ?? ["lib"]).map((l) => path.join(root.rootPath, l));
+    for (const libDir of libs) {
       try {
         if (!fs.existsSync(libDir)) continue;
         const entries = fs.readdirSync(libDir, { withFileTypes: true });
         for (const entry of entries) {
           if (entry.isDirectory()) {
-            // Check if there's a src/ subdirectory
             const srcPath = path.join(libDir, entry.name, "src");
             const hasSubSrc = fs.existsSync(srcPath);
             const target = hasSubSrc ? `${libDir}/${entry.name}/src/` : `${libDir}/${entry.name}/`;
-
-            // Only add if not already covered by explicit remappings
             const prefix = `${entry.name}/`;
-            if (!this.remappings.some((r) => r.prefix === prefix)) {
-              this.remappings.push({ prefix, path: target });
+            if (!out.some((r) => r.prefix === prefix)) {
+              out.push({ prefix, path: target });
             }
           }
         }
@@ -151,34 +269,34 @@ export class WorkspaceManager {
       }
     }
 
-    this.connection.console.log(`Loaded ${this.remappings.length} remappings`);
+    return out;
   }
 
-  /**
-   * Discover all .sol files in the workspace
-   */
-  private async discoverSourceFiles(): Promise<void> {
-    const dirs = [this.srcDir, this.testDir, this.scriptDir, ...this.libDirs];
+  private discoverSourceFiles(root: WorkspaceRoot): void {
+    const cfg = root.config;
+    const dirs = [
+      path.join(root.rootPath, cfg?.src ?? "src"),
+      path.join(root.rootPath, cfg?.test ?? "test"),
+      path.join(root.rootPath, cfg?.script ?? "script"),
+      ...(cfg?.libs ?? ["lib"]).map((l) => path.join(root.rootPath, l)),
+    ];
 
     for (const dir of dirs) {
-      await this.walkDirectory(dir);
+      this.walkDirectory(dir, root);
     }
   }
 
-  private async walkDirectory(dir: string): Promise<void> {
+  private walkDirectory(dir: string, root: WorkspaceRoot): void {
     try {
       if (!fs.existsSync(dir)) return;
       const entries = fs.readdirSync(dir, { withFileTypes: true });
-
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
-          // Skip node_modules and out directories
           if (entry.name === "node_modules" || entry.name === "out") continue;
-          await this.walkDirectory(fullPath);
+          this.walkDirectory(fullPath, root);
         } else if (entry.name.endsWith(".sol")) {
-          const uri = URI.file(fullPath).toString();
-          this.sourceFiles.set(uri, fullPath);
+          root.sourceFiles.add(URI.file(fullPath).toString());
         }
       }
     } catch (err) {
@@ -186,53 +304,77 @@ export class WorkspaceManager {
     }
   }
 
+  // ── Import resolution ──────────────────────────────────────────────
+
   /**
-   * Resolve a Solidity import path to a filesystem path.
+   * Resolve a Solidity import path to a filesystem path. Multi-root:
+   * first try remappings from the importing file's own root, then any
+   * other root (so shared lib dirs across roots still resolve), then
+   * relative, then per-root src/lib directories, then node_modules.
    */
   resolveImport(importPath: string, fromFile: string): string | null {
-    // 1. Try remappings first
-    const remapped = resolveImportPath(importPath, this.remappings);
-    if (remapped) {
-      const resolved = path.isAbsolute(remapped) ? remapped : path.join(this.rootPath, remapped);
-      if (fs.existsSync(resolved)) return resolved;
+    const fromUri = URI.file(fromFile).toString();
+    const ownRoot = this.findRootFor(fromUri);
+
+    // 1. Own root's remappings
+    const localMatch = this.tryRemap(importPath, ownRoot.remappings, ownRoot.rootPath);
+    if (localMatch) return localMatch;
+
+    // 2. Remappings from other roots (shared libs case)
+    for (const root of this.roots.values()) {
+      if (root === ownRoot) continue;
+      const match = this.tryRemap(importPath, root.remappings, root.rootPath);
+      if (match) return match;
     }
 
-    // 2. Try relative import
+    // 3. Relative
     if (importPath.startsWith(".")) {
-      const fromDir = path.dirname(fromFile);
-      const resolved = path.resolve(fromDir, importPath);
+      const resolved = path.resolve(path.dirname(fromFile), importPath);
       if (fs.existsSync(resolved)) return resolved;
     }
 
-    // 3. Try from project root directories
-    for (const baseDir of [this.srcDir, ...this.libDirs]) {
-      const resolved = path.join(baseDir, importPath);
-      if (fs.existsSync(resolved)) return resolved;
+    // 4. Per-root src + lib directories
+    for (const root of this.roots.values()) {
+      const srcDir = path.join(root.rootPath, root.config?.src ?? "src");
+      const libs = (root.config?.libs ?? ["lib"]).map((l) => path.join(root.rootPath, l));
+      for (const baseDir of [srcDir, ...libs]) {
+        const resolved = path.join(baseDir, importPath);
+        if (fs.existsSync(resolved)) return resolved;
+      }
     }
 
-    // 4. Try node_modules
-    const nodeModulesPath = path.join(this.rootPath, "node_modules", importPath);
+    // 5. node_modules from primary root
+    const nodeModulesPath = path.join(this.root, "node_modules", importPath);
     if (fs.existsSync(nodeModulesPath)) return nodeModulesPath;
 
     return null;
   }
 
-  /**
-   * Get all known Solidity file URIs in the workspace.
-   */
-  getAllFileUris(): string[] {
-    return Array.from(this.sourceFiles.keys());
+  private tryRemap(importPath: string, remappings: Remapping[], rootPath: string): string | null {
+    const remapped = resolveImportPath(importPath, remappings);
+    if (!remapped) return null;
+    const resolved = path.isAbsolute(remapped) ? remapped : path.join(rootPath, remapped);
+    if (fs.existsSync(resolved)) return resolved;
+    return null;
   }
 
-  /**
-   * Get the filesystem path for a URI.
-   */
+  /** Every known Solidity file URI, across every root. */
+  getAllFileUris(): string[] {
+    const uris: string[] = [];
+    for (const root of this.roots.values()) {
+      for (const uri of root.sourceFiles) uris.push(uri);
+    }
+    return uris;
+  }
+
   uriToPath(uri: string): string {
     return URI.parse(uri).fsPath;
   }
 
   /**
-   * Run a forge command and return its output.
+   * Run a forge command. If `cwd` is omitted we dispatch to the primary
+   * root — callers that need per-root behaviour should pass a `cwd`
+   * (typically via `findRootFor(uri).rootPath`).
    */
   async runForge(
     args: string[],
@@ -244,8 +386,8 @@ export class WorkspaceManager {
 
     try {
       const result = await execFileAsync(this.forgePath, args, {
-        cwd: cwd ?? this.rootPath,
-        maxBuffer: 10 * 1024 * 1024, // 10MB — forge output can be large
+        cwd: cwd ?? this.root,
+        maxBuffer: 10 * 1024 * 1024,
         timeout: 120_000,
       });
       return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
@@ -258,9 +400,6 @@ export class WorkspaceManager {
     }
   }
 
-  /**
-   * Parse foundry.toml using a proper TOML parser.
-   */
   private parseFoundryToml(content: string): FoundryProfile {
     try {
       const parsed = parseToml(content);

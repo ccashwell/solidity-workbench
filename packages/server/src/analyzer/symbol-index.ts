@@ -1,4 +1,4 @@
-import type { Range, WorkspaceSymbol } from "vscode-languageserver/node.js";
+import type { CancellationToken, Range, WorkspaceSymbol } from "vscode-languageserver/node.js";
 import {
   Location,
   SymbolInformation,
@@ -315,12 +315,17 @@ export class SymbolIndex {
 
   /**
    * Find symbols matching a query (for workspace symbol search).
+   *
+   * Supports cancellation: if the client cancels the request partway
+   * through a large result set we return whatever we've accumulated
+   * rather than finishing the full linear scan.
    */
-  findWorkspaceSymbols(query: string): WorkspaceSymbol[] {
+  findWorkspaceSymbols(query: string, token?: CancellationToken): WorkspaceSymbol[] {
     const results: WorkspaceSymbol[] = [];
     const lowerQuery = query.toLowerCase();
 
     for (const [name, symbols] of this.symbolsByName) {
+      if (token?.isCancellationRequested) return results;
       if (name.toLowerCase().includes(lowerQuery)) {
         for (const sym of symbols) {
           results.push({

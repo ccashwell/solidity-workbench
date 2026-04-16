@@ -1,4 +1,9 @@
-import type { Position, ReferenceContext, TextDocuments } from "vscode-languageserver/node.js";
+import type {
+  CancellationToken,
+  Position,
+  ReferenceContext,
+  TextDocuments,
+} from "vscode-languageserver/node.js";
 import { Location } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import * as fs from "node:fs";
@@ -37,6 +42,7 @@ export class ReferencesProvider {
     document: TextDocument,
     position: Position,
     context: ReferenceContext,
+    token?: CancellationToken,
   ): Location[] {
     const text = document.getText();
     const word = getWordAtPosition(text, position)?.text ?? null;
@@ -55,6 +61,7 @@ export class ReferencesProvider {
     // 1. Fast path: inverted index
     if (this.symbolIndex.hasReferences(word)) {
       for (const entry of this.symbolIndex.findReferences(word)) {
+        if (token?.isCancellationRequested) return [];
         pushUnique(entry.uri, entry.range);
       }
     } else {
@@ -65,9 +72,11 @@ export class ReferencesProvider {
         `[references] identifier "${word}" not in reference index; falling back to text scan`,
       );
       for (const doc of this.documents.all()) {
+        if (token?.isCancellationRequested) return [];
         this.findInText(doc.getText(), word, doc.uri, results, seen);
       }
       for (const uri of this.workspace.getAllFileUris()) {
+        if (token?.isCancellationRequested) return [];
         if (this.documents.get(uri)) continue;
         try {
           const filePath = this.workspace.uriToPath(uri);
@@ -78,6 +87,8 @@ export class ReferencesProvider {
         }
       }
     }
+
+    if (token?.isCancellationRequested) return [];
 
     // 2. Handle the declaration flag.
     const declarations = this.symbolIndex.findSymbols(word);
