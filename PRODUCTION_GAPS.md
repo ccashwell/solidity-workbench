@@ -1,119 +1,104 @@
-# Solforge: Gaps from Here to Production
+# Solidity Workbench: Remaining Gaps to v1.0
 
-Comprehensive gap analysis based on a full codebase audit (April 2026).
+Updated after the April 2026 productionization pass. Every previously-tracked
+P0 and P1 item from the original gap list is either fixed or superseded. This
+document covers what's left.
 
 ## Severity Legend
 
-- **P0 — Blocking**: Must fix before any user can test this
-- **P1 — Critical**: Must fix before public beta
-- **P2 — Important**: Should fix for v1.0 quality
-- **P3 — Enhancement**: Nice-to-have for v1.0, required for v2.0
+- **P1 — Critical**: should fix before public beta
+- **P2 — Important**: should fix for v1.0 quality
+- **P3 — Enhancement**: nice-to-have, required for v2.0
 
 ---
 
-## P0 — Blocking
+## Recently fixed
 
-### 1. Replace Regex Parser with Real AST Parser
+The following issues from the pre-productionization gap list are now resolved:
 
-**Current state**: The entire LSP server relies on a regex-based structural
-extractor (`parser/solidity-parser.ts`). This breaks on:
-- Multiline contract declarations (`contract Foo\n  is Bar, Baz`)
-- Nested mappings (`mapping(address => mapping(bytes32 => uint))`)
-- Complex function signatures with tuple returns
-- Constructor initializer lists
-- Assembly blocks (treated as opaque)
-
-**Fix**: Integrate `@solidity-parser/parser` (already in package.json as a
-dependency, never imported). The ANTLR4 parser handles all Solidity syntax
-correctly with error recovery.
-
-**Effort**: 2-3 days. Build an adapter that maps `@solidity-parser/parser`'s
-AST to our `SoliditySourceUnit` type, preserving the cache and incremental
-update interface.
-
-### 2. Fix Diagnostic Source Mapping (Byte Offset → Line/Col)
-
-**Current state**: `diagnostics.ts:parseSolcError()` receives byte offsets
-from solc but maps them all to `line: 0, character: 0`. Every solc error
-appears at the top of the file.
-
-**Fix**: Convert byte offsets to line/column using a simple offset-to-position
-lookup table built from `text.split("\n")` line lengths.
-
-**Effort**: 1-2 hours.
-
-### 3. Register Missing Extension Commands
-
-**Current state**: Several commands referenced in code lens and other
-providers are never registered in the extension:
-- `solforge.copySelector` (created in code-lens but never registered)
-- Various debug/deploy commands may have registration gaps
-
-**Fix**: Audit every `command:` string in the server-side code lens provider
-against the extension's registered commands. Register any missing ones.
-
-**Effort**: 1-2 hours.
+- Regex parser → replaced with `@solidity-parser/parser` wrapper with error recovery (all 35 parser tests passing).
+- Diagnostic byte-offset → line/column math: now handled by `LineIndex` with CRLF and UTF-8 correctness.
+- `forge build --format-json` → `--json` (the flag the old code used never existed).
+- VSIX packaging: server is now bundled into the VSIX via a second esbuild pass; CI verifies `dist/server.js` is present.
+- Broken `debuggers` contribution: removed. Terminal-based debug commands remain.
+- Chisel commands contributed in `package.json` so they appear in the Command Palette.
+- `solidity-workbench.foundryPath` config is now plumbed to the LSP server and refreshed on change.
+- `keccak256` selectors: real hash via `js-sha3`.
+- `toml` package used for `foundry.toml` parsing (profile inheritance, inline tables).
+- Duplicated `getWordAtPosition` / `isInsideString` / keyword sets: consolidated into `utils/text.ts`.
+- Workspace watcher: `onDidChangeWatchedFiles` now reindexes on external file changes and reloads when `foundry.toml` / `remappings.txt` changes.
+- Reference index wired: `ReferencesProvider` now uses the inverted index instead of an O(files × filesize) scan per query.
+- Symbol index now covers free functions, file-level custom errors, and user-defined value types.
+- NatSpec extraction: `///` and `/** */` docblocks parsed and attached to every definition; surfaced in hover and signature help.
+- Semantic tokens: push order sorted; reference-site tokens added for state variables, parameters, functions, modifiers, events.
+- Rename safety: unknown-identifier rename is rejected with a clear error; `lib/` directories are excluded from the edit set.
+- Call hierarchy: captures the receiver qualifier on each call so `A.transfer()` and `B.transfer()` don't cross-contaminate.
+- Linter `missing-zero-check`: one diagnostic per parameter, pointing at the parameter name.
+- Formatting temp file: `crypto.randomUUID()` instead of `Date.now()`.
+- Diagnostic file URIs: built via `URI.file(...)` so Windows paths aren't malformed.
+- CI now installs Foundry and runs the test suite against it.
 
 ---
 
-## P1 — Critical
+## P1 — Critical (remaining)
 
-### 4. Eliminate Duplicated Code
+### 1. Wire `SolcBridge` rich AST into providers
 
-**Current state**: `getWordAtPosition()` is duplicated 7 times across
-different provider files. The same Solidity keyword set appears in 4+
-different files with slightly different contents. `isInsideString()` is
-duplicated 3 times.
+**Current state**: `SolcBridge.buildAndExtractAst()` runs on save, caches per-file
+AST in memory, but no provider consumes the cache. `DefinitionProvider`,
+`HoverProvider`, `CompletionProvider.provideMemberCompletions`, and rename still
+rely on the fast (`@solidity-parser/parser`) AST alone.
 
-**Fix**: Already created `packages/server/src/utils/text.ts` with shared
-implementations. Remaining work: update all providers to import from it
-and delete their local copies.
+**Why it matters**: Without type resolution, member completions on variables
+(`token.` where `token` is an `IERC20`) return nothing, and rename can't be made
+scope-aware.
 
-**Effort**: 2-3 hours.
+**Fix plan**:
+1. In `DefinitionProvider.provideDefinition`: if the symbol index has multiple
+   candidates, consult `solcBridge.resolveReference(filePath, offset)` for the
+   authoritative declaration.
+2. In `HoverProvider`: consult `solcBridge.getTypeAtOffset(filePath, offset)`
+   for the resolved type string when the fast AST can't infer it.
+3. In `CompletionProvider.provideMemberCompletions`: when the token before `.`
+   is a variable, look up its type via `SolcBridge`, then enumerate members of
+   that type.
+4. In `RenameProvider`: when the cursor is on a local variable or parameter,
+   use `referencedDeclaration` IDs from the solc AST to compute the exact set
+   of references to rename.
 
-### 5. Implement Actual Function Selector Computation
+**Effort**: 3-5 days.
 
-**Current state**: `code-lens.ts:computeSelector()` and
-`computeEventTopic()` return the human-readable signature string instead
-of the actual keccak256 hash. The code comments say "actual keccak256 would
-need a crypto library."
+### 2. Test-Explorer should use the LSP's AST, not regex
 
-**Fix**: Use Node.js built-in `crypto.createHash('sha3-256')` or add the
-lightweight `js-sha3` package. Compute `keccak256(signature).slice(0, 4)`
-for function selectors and full `keccak256(signature)` for event topics.
+**Current state**: `FoundryTestProvider.parseTestFile` re-parses every test file
+with regex + brace counting. Breaks on braces inside strings or multiline
+function headers.
 
-**Effort**: 1 hour.
+**Fix plan**: Add a custom LSP request (e.g. `solidity-workbench/listTests`) that the
+extension calls to enumerate test contracts and functions from the already-parsed
+AST. Or: reuse `@solidity-parser/parser` on the client side directly.
 
-### 6. Fix `isAddressLike()` Stub
+**Effort**: 1 day.
 
-**Current state**: `completion.ts:isAddressLike()` always returns `false`,
-so address member completions (`.balance`, `.call()`, `.transfer()`, etc.)
-never trigger for variables.
+### 3. Coverage should be line-level, not file-level
 
-**Fix**: Check the symbol index for the variable's type. If it resolves to
-`address` or `address payable`, return true. As a heuristic fallback, check
-if the variable name contains "addr", "recipient", "sender", etc.
+**Current state**: `CoverageProvider` parses `forge coverage --report summary`
+and renders a single banner line per file. Users can't see which lines are
+covered.
 
-**Effort**: 1 hour.
+**Fix plan**: Switch to `forge coverage --report lcov --report-file lcov.info`
+and parse LCOV (DA records for lines, BRDA for branches, FN/FNDA for functions).
+Render line-level decorations with the existing covered/uncovered/partial styles.
 
-### 7. Complete `formatRange()` Implementation
+**Effort**: 1 day.
 
-**Current state**: `formatting.ts:formatRange()` formats the entire document
-because `forge fmt` doesn't support range formatting.
+### 4. Gas profiler doesn't compute deltas
 
-**Fix**: Format the entire document with `forge fmt`, then diff against
-the original and return only the TextEdits that fall within the requested
-range. This gives correct range-formatting behavior.
+**Current state**: `GasEntry.delta` is declared but never populated. The
+"regression tracker" promised in docs doesn't exist.
 
-**Effort**: 2 hours.
-
-### 8. Add Call Graph Cache Invalidation
-
-**Current state**: `call-hierarchy.ts` builds the call graph on first use
-and never invalidates it. File changes after the first query are invisible.
-
-**Fix**: Listen for `documents.onDidChangeContent` and mark affected files
-as dirty. Rebuild the call graph lazily on next query.
+**Fix plan**: Persist the last successfully-loaded snapshot in the extension's
+global state (`context.globalState`). Diff on refresh. Color arrows by sign.
 
 **Effort**: 2 hours.
 
@@ -121,188 +106,184 @@ as dirty. Rebuild the call graph lazily on next query.
 
 ## P2 — Important
 
-### 9. Proper Error Handling Strategy
+### 5. Multi-root workspace support
 
-**Current state**: Error handling is inconsistent across providers:
-- Some swallow errors silently (empty `catch {}`)
-- Some return `null` vs empty arrays inconsistently
-- No user-facing error messages for provider failures
-- No telemetry or error reporting
-
-**Fix**: Define a consistent pattern:
-1. Log all caught errors to the LSP connection console
-2. Return appropriate empty values (null for single results, [] for lists)
-3. Add a `connection.window.showMessage` for actionable user errors
-4. Never use empty `catch {}` — always log
-
-**Effort**: 4-6 hours to audit and fix all providers.
-
-### 10. Improve Linter Accuracy
-
-**Current state**: The custom linter has several false-positive sources:
-- Reentrancy check doesn't understand `nonReentrant` modifier
-- Missing zero-check flags any `require` as a zero check
-- Storage-in-loop warns even for single reads per iteration
-- No way to suppress individual warnings
-
-**Fix**:
-1. Check for `nonReentrant` in function modifiers before flagging reentrancy
-2. Actually parse the `require` condition to verify it's a zero check
-3. Track variable access count in loops — only warn for multiple reads
-4. Support `// solforge-disable-next-line` suppression comments
+Server initializes with `workspaceFolders[0]?.uri ?? params.rootUri`. Multi-root
+setups see only the first folder. Need `workspace/didChangeWorkspaceFolders` and
+per-root state (foundry.toml, remappings, symbol index).
 
 **Effort**: 1-2 days.
 
-### 11. Add Proper TOML Parser
+### 6. Provider test coverage
 
-**Current state**: `workspace-manager.ts:parseFoundryToml()` uses regex
-to extract foundry.toml values. This breaks on:
-- Multiline strings
-- Inline tables
-- Array values spanning multiple lines
-- Profile inheritance (`[profile.ci]` inheriting from `[profile.default]`)
+We have parser, linter, text-utils, line-index, symbol-index, reference-index,
+rename, semantic-tokens, and call-hierarchy tests. Still missing:
 
-**Fix**: Use the `toml` package (already in package.json, never imported).
+- `DefinitionProvider` (cross-file, remappings, dotted access)
+- `HoverProvider` (natspec surfacing, builtin members)
+- `CompletionProvider` (context detection, member resolution)
+- `SignatureHelpProvider` (arg parsing through nested calls, overloads)
+- `InlayHintsProvider` (argument name hints with nested calls)
+- `CodeActionsProvider` (implement-interface, add-natspec stubs)
+- `AutoImportProvider` (candidate dedup, remapping preference)
+- `DiagnosticsProvider` (solc JSON → diagnostics mapping through `LineIndex`)
+- `FormattingProvider` (stable behavior under concurrent calls)
 
-**Effort**: 2 hours.
+**Effort**: 3-4 days.
 
-### 12. Test Suite
+### 7. VSCode end-to-end tests
 
-**Current state**: Zero tests. No unit tests, no integration tests,
-no E2E tests.
+`@vscode/test-electron` is not configured. We have no automated smoke tests that
+the extension actually activates or that LSP requests succeed inside a real
+editor.
 
-**Fix**:
-1. Unit tests for the parser (known inputs → expected AST)
-2. Unit tests for each LSP provider (mock documents → expected responses)
-3. Integration tests using `vscode-languageserver-textdocument` in-memory
-4. E2E tests using `@vscode/test-electron` for the extension client
+**Effort**: 2 days.
 
-Priority test coverage:
-- Parser: 20+ test cases covering all contract/function/event patterns
-- Diagnostics: verify correct source positions
-- Completions: verify context detection and member resolution
-- Definition: verify cross-file navigation with remappings
+### 8. Completion of members through variable type resolution
 
-**Effort**: 3-5 days for meaningful coverage.
+`provideMemberCompletions` handles `ContractName.|` but not `instance.|` where
+`instance` is a variable of a contract type. Depends on P1 #1 (SolcBridge wiring).
 
-### 13. Clean Up Dead Code
+### 9. Deploy contract picker via compiled artifacts
 
-**Current state**:
-- `definition.ts:provideReferences()` exists but is superseded by
-  `references.ts:ReferencesProvider`
-- `solc-bridge.ts:buildStandardInput()` is never called
-- `solc-bridge.ts:compileSingle()` references `inputJson` but doesn't use it
-- Unused `import type` statements after lint fix
+Current picker regex-scans `src/` for `contract Foo`. Should read `out/*.json`
+from the forge build to get the authoritative list of deployable contracts and
+their constructor ABI.
 
-**Fix**: Remove all dead code paths and unused functions.
+**Effort**: 1 day.
 
-**Effort**: 1 hour.
+### 10. `rpc_endpoints` / `etherscan` / `fuzz.*` / `invariant.*` in foundry.toml IntelliSense
 
-### 14. Performance Optimization
+`FoundryTomlProvider` schema currently covers only top-level keys plus `[fmt]`.
 
-**Current state**:
-- References provider does O(n×m) scan on every query (n files, m = file size)
-- Symbol index does linear scans for workspace symbol search
-- No incremental parsing — full re-parse on every keystroke
-- No caching of forge build output between saves
+**Effort**: 1 day.
 
-**Fix**:
-1. Build an inverted index for references (pre-computed per file on parse)
-2. Use a trie or fuzzy matcher for workspace symbol search
-3. Implement incremental parsing with the ANTLR4 parser's error recovery
-4. Cache forge build output and only rebuild changed files
+### 11. Selector computation canonicalizes structs and UDTs
 
-**Effort**: 1-2 weeks for significant impact.
+`canonicalType` in `code-lens.ts` doesn't flatten struct parameters to their
+tuple form. For displayed selectors, prefer `forge inspect <Contract>
+method-identifiers --json` and cache the result.
+
+**Effort**: Half day.
+
+### 12. Cancellation token support across providers
+
+Long-running references / rename / semantic-tokens queries don't observe
+`params.token`. They should early-exit when the client cancels.
+
+**Effort**: 1 day.
+
+### 13. Status bar reflects server state
+
+Currently static. Should show: LSP ready/error, latest forge build result,
+active anvil, coverage %, snapshot delta summary.
+
+**Effort**: 1 day.
+
+### 14. Extension icon, README, CHANGELOG, marketplace screenshots
+
+None exist. Required for a credible marketplace listing.
+
+**Effort**: 1-2 days including design.
+
+### 15. Reentrancy / missing-event linters use stricter AST matching
+
+Current linters are line-regex heavy; use the parser's statement AST to reduce
+false positives. P2 because current behavior is best-effort hints, not errors.
+
+**Effort**: 2-3 days.
 
 ---
 
 ## P3 — Enhancement
 
-### 15. Migrate to Solar/Rust for Parser Hot Path
+### 16. Real DAP debugger
 
-**Current state**: TypeScript-based parser with regex extraction.
+Today's "debugger" is three terminal-wrapped `forge debug` / `forge test --debug`
+invocations. The `debuggers` contribution that used to be in `package.json` was
+removed because the DAP factory returned `undefined`.
 
-**Fix**: When Paradigm's Solar compiler exposes stable Rust crates with WASM
-bindings, replace the parser and type resolver with Solar's implementation.
-This would give us:
-- 40x faster parsing
-- Full type resolution (no more regex guessing)
-- Scope-aware reference resolution
-- Accurate cross-contract call resolution
+Building a real DAP adapter means:
 
-**Status**: Solar's LSP has 0/6 tracked subtasks as of April 2026. Monitor
-`paradigmxyz/solar#394` for progress.
+1. Launch forge with trace output (`-vvvvv --json`).
+2. Parse the source map from compiled artifacts (`out/Contract.sol/Contract.json`
+   `sourceMap` + `generatedSources`).
+3. Walk EVM opcodes step-by-step, mapping back to Solidity source positions.
+4. Implement DAP `stackTrace`, `scopes`, `variables`, `stepIn`/`stepOut`/`stepOver`.
+5. Expose storage and memory reads as "globals".
 
-**Effort**: 2-3 weeks when Solar is ready.
+**Effort**: 3-4 weeks. Simbolik is the commercial gold standard here.
 
-### 16. Full DAP Debugger Implementation
+### 17. Migrate to Solar LSP when it releases
 
-**Current state**: Debugger uses terminal-based `forge debug` / `forge test
---debug`. No stepping, no variable inspection, no breakpoints in the editor.
+`paradigmxyz/solar` PR #401 is merged but not yet in a released Solar crate
+(status as of April 2026). When Solar ships a stable LSP, evaluate swapping the
+parser/resolver hot path via WASM or native addon for ~40× speed and real type
+resolution.
 
-**Fix**: Implement a proper Debug Adapter Protocol server that:
-1. Launches forge with trace output
-2. Parses source maps to map EVM opcodes to Solidity lines
-3. Implements step/continue/breakpoint via the DAP protocol
-4. Surfaces local variables, storage, and memory state
+**Effort**: 2-3 weeks once Solar is ready.
 
-**Effort**: 2-4 weeks. Requires deep EVM source map understanding.
+### 18. Chisel webview with evaluation history
 
-### 17. Chisel REPL Integration
-
-**Current state**: Not implemented.
-
-**Fix**: Add a webview panel or terminal integration for Foundry's Chisel
-REPL. Allow users to evaluate Solidity expressions in-context with the
-current project's contracts available.
+Current chisel integration is a terminal wrapper. A webview that persists the
+session, shows structured output, and supports re-running prior expressions
+would be much more useful.
 
 **Effort**: 1 week.
 
-### 18. Multi-root Workspace Support
+### 19. Workspace symbol trigram / fuzzy index
 
-**Current state**: Server assumes a single workspace root.
+`findWorkspaceSymbols` does a linear substring scan capped at 100 results. A
+trigram index gives O(1) lookup per character and supports fuzzy queries. Low
+priority until we see slowness on large monorepos.
 
-**Fix**: Handle `workspace/didChangeWorkspaceFolders` and maintain per-root
-state (foundry.toml, remappings, symbol index).
+**Effort**: 2-3 days.
 
-**Effort**: 1-2 days.
+### 20. Publish workflow
 
-### 19. Foundry.toml Intellisense
+Package workflow exists (and verifies server bundling). Still need:
 
-**Current state**: No language support for foundry.toml itself.
+- `vsce publish` step gated on a tag push.
+- Open VSX publish for Cursor / VSCodium users.
+- Publisher `uniswap` must be registered and have credentials in CI secrets.
 
-**Fix**: Register a TOML language contribution with a JSON schema for
-`foundry.toml` so users get completions, validation, and hover docs for
-Foundry configuration keys.
+**Effort**: Half day of workflow + whatever it takes to reserve the publisher.
 
-**Effort**: 1-2 days.
+### 21. Aderyn / Wake / Mythril integrations alongside Slither
 
-### 20. VS Code Marketplace Publishing Pipeline
+Current static analysis is Slither only. Wake and Aderyn are increasingly
+popular; Mythril is the classic. Each has a different output format and
+severity scheme to normalize.
 
-**Current state**: No CI/CD, no packaging, no marketplace listing.
+**Effort**: 1 week per integration.
 
-**Fix**:
-1. GitHub Actions workflow: lint → test → build → package `.vsix`
-2. Automated publishing to VS Code Marketplace
-3. Also publish to Open VSX (for Cursor and other editors)
-4. Extension icon, README, screenshots, changelog
+### 22. Subgraph scaffold generator
 
-**Effort**: 1-2 days.
+Read contract ABI, emit a starter `subgraph.yaml` + `schema.graphql` +
+AssemblyScript mappings. Useful adjacent feature for protocol developers.
+
+**Effort**: 3-5 days.
+
+### 23. Remote chain interaction UI
+
+Webview that wraps `cast call` / `cast send` against a chain picker, with ABI
+awareness so args are typed. Unique differentiator nobody else has.
+
+**Effort**: 1 week.
 
 ---
 
 ## Summary
 
-| Priority | Count | Effort Estimate |
-|----------|-------|-----------------|
-| P0 — Blocking | 3 | 3-4 days |
-| P1 — Critical | 5 | 1-2 days |
-| P2 — Important | 6 | 2-3 weeks |
-| P3 — Enhancement | 6 | 1-2 months |
-| **Total to public beta** | **8** | **~1 week** |
-| **Total to v1.0** | **14** | **~1 month** |
+| Priority | Count | Cumulative effort |
+|----------|-------|-------------------|
+| P1 | 4 | ~1 week |
+| P2 | 11 | ~3 weeks |
+| P3 | 8 | ~2 months |
+| **Total to public beta** | **4** | **~1 week** |
+| **Total to v1.0** | **15** | **~1 month** |
 
-The single most impactful change is **replacing the regex parser with
-`@solidity-parser/parser`** (P0 #1). This unlocks correctness for every
-downstream feature — completions, definition, references, semantic tokens,
-code actions, and the linter all depend on parse quality.
+The previously-listed P0 blockers are all resolved; the extension now activates,
+bundles correctly, sends real diagnostics, and 111 unit tests pass. Remaining
+work is about depth (type-resolved navigation via Solc AST, line-level coverage,
+DAP debugger) rather than correctness of the core scaffolding.
