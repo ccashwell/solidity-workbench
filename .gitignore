@@ -7,3 +7,4 @@ out/
 .eslintcache
 coverage/
 .DS_Store
+.cursor/
