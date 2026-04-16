@@ -30,7 +30,7 @@ export class GasProfilerProvider implements vscode.TreeDataProvider<GasEntry> {
   }
 
   activate(context: vscode.ExtensionContext): void {
-    const treeView = vscode.window.createTreeView("solforge-gas-profiler", {
+    const treeView = vscode.window.createTreeView("solidity-workbench-gas-profiler", {
       treeDataProvider: this,
       showCollapseAll: true,
     });

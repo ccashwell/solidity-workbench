@@ -14,7 +14,7 @@ export function registerAnvilCommands(context: vscode.ExtensionContext): void {
   // ── anvil start ─────────────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.anvil.start", async () => {
+    vscode.commands.registerCommand("solidity-workbench.anvil.start", async () => {
       if (anvilTerminal && !anvilTerminal.exitStatus) {
         vscode.window.showInformationMessage("Anvil is already running. Stop it first.");
         anvilTerminal.show();
@@ -61,7 +61,7 @@ export function registerAnvilCommands(context: vscode.ExtensionContext): void {
   // ── anvil stop ──────────────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.anvil.stop", async () => {
+    vscode.commands.registerCommand("solidity-workbench.anvil.stop", async () => {
       if (anvilTerminal && !anvilTerminal.exitStatus) {
         anvilTerminal.dispose();
         anvilTerminal = undefined;

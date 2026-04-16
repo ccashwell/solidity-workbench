@@ -58,11 +58,13 @@ export class CoverageProvider {
     context.subscriptions.push(this.statusBarItem);
 
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.coverage", () => this.runCoverage()),
+      vscode.commands.registerCommand("solidity-workbench.coverage", () => this.runCoverage()),
     );
 
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.coverageClear", () => this.clearCoverage()),
+      vscode.commands.registerCommand("solidity-workbench.coverageClear", () =>
+        this.clearCoverage(),
+      ),
     );
 
     // Update decorations when active editor changes
@@ -77,7 +79,7 @@ export class CoverageProvider {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) return;
 
-    const config = vscode.workspace.getConfiguration("solforge");
+    const config = vscode.workspace.getConfiguration("solidity-workbench");
     const forgePath = config.get<string>("foundryPath") || "forge";
 
     await vscode.window.withProgress(
@@ -184,8 +186,8 @@ export class CoverageProvider {
     const avgCoverage = totalLines > 0 ? (coveredCount / totalLines).toFixed(1) : "0";
 
     this.statusBarItem.text = `$(shield) ${avgCoverage}% coverage`;
-    this.statusBarItem.tooltip = `Solforge: ${this.coverageData.size} files analyzed`;
-    this.statusBarItem.command = "solforge.coverageClear";
+    this.statusBarItem.tooltip = `Solidity Workbench: ${this.coverageData.size} files analyzed`;
+    this.statusBarItem.command = "solidity-workbench.coverageClear";
     this.statusBarItem.show();
   }
 

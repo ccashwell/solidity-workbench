@@ -1,7 +1,7 @@
 import type { CodeAction, CodeActionContext, Range } from "vscode-languageserver/node.js";
 import { CodeActionKind, TextEdit, WorkspaceEdit } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
-import type { ContractDefinition, FunctionDefinition } from "@solforge/common";
+import type { ContractDefinition, FunctionDefinition } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 

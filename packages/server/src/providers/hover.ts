@@ -1,7 +1,7 @@
 import type { Hover, Position } from "vscode-languageserver/node.js";
 import { MarkupContent, MarkupKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
-import type { NatspecComment, SolSymbol } from "@solforge/common";
+import type { NatspecComment, SolSymbol } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 

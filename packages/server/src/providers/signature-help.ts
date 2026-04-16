@@ -6,7 +6,7 @@ import type {
   NatspecComment,
   EventDefinition,
   ErrorDefinition,
-} from "@solforge/common";
+} from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 

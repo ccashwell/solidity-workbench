@@ -11,7 +11,7 @@ import type {
   EnumDefinition,
   ModifierDefinition,
   StateVariableDeclaration,
-} from "@solforge/common";
+} from "@solidity-workbench/common";
 
 /**
  * Provides the document symbol outline (breadcrumbs, outline panel).

@@ -4,17 +4,17 @@ import * as vscode from "vscode";
  * Registers Foundry-related commands in the extension.
  *
  * Commands:
- * - solforge.build: Run `forge build`
- * - solforge.test: Run `forge test`
- * - solforge.testFile: Run tests in the current file
- * - solforge.testFunction: Run the test at cursor
- * - solforge.format: Run `forge fmt`
- * - solforge.gasSnapshot: Run `forge snapshot`
- * - solforge.flatten: Flatten the current contract
- * - solforge.inspectStorage: Inspect storage layout
+ * - solidity-workbench.build: Run `forge build`
+ * - solidity-workbench.test: Run `forge test`
+ * - solidity-workbench.testFile: Run tests in the current file
+ * - solidity-workbench.testFunction: Run the test at cursor
+ * - solidity-workbench.format: Run `forge fmt`
+ * - solidity-workbench.gasSnapshot: Run `forge snapshot`
+ * - solidity-workbench.flatten: Flatten the current contract
+ * - solidity-workbench.inspectStorage: Inspect storage layout
  */
 export function registerFoundryCommands(context: vscode.ExtensionContext): void {
-  const config = () => vscode.workspace.getConfiguration("solforge");
+  const config = () => vscode.workspace.getConfiguration("solidity-workbench");
 
   function getForge(): string {
     return config().get<string>("foundryPath") || "forge";
@@ -23,7 +23,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
   // ── forge build ─────────────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.build", async () => {
+    vscode.commands.registerCommand("solidity-workbench.build", async () => {
       const terminal = getOrCreateTerminal();
       terminal.show();
       terminal.sendText(`${getForge()} build`);
@@ -33,7 +33,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
   // ── forge test ──────────────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.test", async () => {
+    vscode.commands.registerCommand("solidity-workbench.test", async () => {
       const terminal = getOrCreateTerminal();
       terminal.show();
       const verbosity = config().get<number>("test.verbosity") ?? 2;
@@ -44,7 +44,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
   // ── forge test (current file) ──────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.testFile", async () => {
+    vscode.commands.registerCommand("solidity-workbench.testFile", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor || editor.document.languageId !== "solidity") {
         vscode.window.showWarningMessage("Open a Solidity test file first.");
@@ -62,7 +62,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
   // ── forge test (function at cursor) ────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.testFunction", async () => {
+    vscode.commands.registerCommand("solidity-workbench.testFunction", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor || editor.document.languageId !== "solidity") {
         vscode.window.showWarningMessage("Open a Solidity test file first.");
@@ -87,7 +87,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
   // ── forge fmt ───────────────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.format", async () => {
+    vscode.commands.registerCommand("solidity-workbench.format", async () => {
       const editor = vscode.window.activeTextEditor;
       if (editor && editor.document.languageId === "solidity") {
         await vscode.commands.executeCommand("editor.action.formatDocument");
@@ -102,7 +102,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
   // ── forge snapshot ──────────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.gasSnapshot", async () => {
+    vscode.commands.registerCommand("solidity-workbench.gasSnapshot", async () => {
       const terminal = getOrCreateTerminal();
       terminal.show();
       terminal.sendText(`${getForge()} snapshot`);
@@ -112,7 +112,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
   // ── forge flatten ───────────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.flatten", async () => {
+    vscode.commands.registerCommand("solidity-workbench.flatten", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor || editor.document.languageId !== "solidity") {
         vscode.window.showWarningMessage("Open a Solidity file first.");
@@ -129,7 +129,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
   // ── copy selector ──────────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.copySelector", async (selector: string) => {
+    vscode.commands.registerCommand("solidity-workbench.copySelector", async (selector: string) => {
       await vscode.env.clipboard.writeText(selector);
       vscode.window.showInformationMessage(`Copied: ${selector}`);
     }),
@@ -138,7 +138,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
   // ── forge inspect (storage layout) ─────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.inspectStorage", async () => {
+    vscode.commands.registerCommand("solidity-workbench.inspectStorage", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor || editor.document.languageId !== "solidity") {
         vscode.window.showWarningMessage("Open a Solidity file first.");
@@ -163,17 +163,17 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-let solforgeTerminal: vscode.Terminal | undefined;
+let workbenchTerminal: vscode.Terminal | undefined;
 
 function getOrCreateTerminal(): vscode.Terminal {
-  if (solforgeTerminal && !solforgeTerminal.exitStatus) {
-    return solforgeTerminal;
+  if (workbenchTerminal && !workbenchTerminal.exitStatus) {
+    return workbenchTerminal;
   }
-  solforgeTerminal = vscode.window.createTerminal({
-    name: "Solforge",
+  workbenchTerminal = vscode.window.createTerminal({
+    name: "Solidity Workbench",
     iconPath: new vscode.ThemeIcon("beaker"),
   });
-  return solforgeTerminal;
+  return workbenchTerminal;
 }
 
 /**

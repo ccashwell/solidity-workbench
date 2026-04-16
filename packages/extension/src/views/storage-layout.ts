@@ -23,7 +23,7 @@ export class StorageLayoutPanel {
 
   activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.inspectStoragePanel", () =>
+      vscode.commands.registerCommand("solidity-workbench.inspectStoragePanel", () =>
         this.showPanel(context),
       ),
     );
@@ -71,7 +71,7 @@ export class StorageLayoutPanel {
       this.panel.reveal();
     } else {
       this.panel = vscode.window.createWebviewPanel(
-        "solforge-storage-layout",
+        "solidity-workbench-storage-layout",
         `Storage: ${contractName}`,
         vscode.ViewColumn.Beside,
         { enableScripts: true },
@@ -89,7 +89,7 @@ export class StorageLayoutPanel {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) return null;
 
-    const config = vscode.workspace.getConfiguration("solforge");
+    const config = vscode.workspace.getConfiguration("solidity-workbench");
     const forgePath = config.get<string>("foundryPath") || "forge";
 
     try {

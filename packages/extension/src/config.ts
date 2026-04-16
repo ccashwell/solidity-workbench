@@ -4,7 +4,7 @@ import * as vscode from "vscode";
  * Extension configuration accessor.
  * Wraps vscode.workspace.getConfiguration for type-safe access.
  */
-export interface SolforgeConfig {
+export interface WorkbenchConfig {
   foundryPath: string;
   formatOnSave: boolean;
   diagnostics: {
@@ -27,8 +27,8 @@ export interface SolforgeConfig {
   };
 }
 
-export function getConfig(): SolforgeConfig {
-  const config = vscode.workspace.getConfiguration("solforge");
+export function getConfig(): WorkbenchConfig {
+  const config = vscode.workspace.getConfiguration("solidity-workbench");
 
   return {
     foundryPath: config.get<string>("foundryPath") || "forge",

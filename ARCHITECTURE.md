@@ -1,4 +1,4 @@
-# Solforge: A Modern Solidity IDE Plugin for VSCode/Cursor
+# Solidity Workbench: A Modern Solidity IDE Plugin for VSCode/Cursor
 
 ## Vision
 
@@ -69,7 +69,7 @@ TypeScript and Java developers take these for granted:
                            │ LSP Protocol (JSON-RPC over stdio)
                            │
 ┌──────────────────────────┴───────────────────────────────────┐
-│                     Solforge LSP Server                       │
+│                     Solidity Workbench LSP Server                       │
 │                      (TypeScript / Node)                      │
 │                                                              │
 │  ┌──────────────────────────────────────────────────────────┐│

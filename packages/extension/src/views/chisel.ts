@@ -14,15 +14,19 @@ export class ChiselIntegration {
 
   activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.chisel.start", () => this.startChisel()),
+      vscode.commands.registerCommand("solidity-workbench.chisel.start", () => this.startChisel()),
     );
 
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.chisel.startFork", () => this.startChiselFork()),
+      vscode.commands.registerCommand("solidity-workbench.chisel.startFork", () =>
+        this.startChiselFork(),
+      ),
     );
 
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.chisel.sendSelection", () => this.sendSelection()),
+      vscode.commands.registerCommand("solidity-workbench.chisel.sendSelection", () =>
+        this.sendSelection(),
+      ),
     );
 
     context.subscriptions.push(

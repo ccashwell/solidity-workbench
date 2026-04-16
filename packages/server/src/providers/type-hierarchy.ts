@@ -3,7 +3,7 @@ import { SymbolKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
-import type { ContractDefinition } from "@solforge/common";
+import type { ContractDefinition } from "@solidity-workbench/common";
 import { getWordAtPosition } from "../utils/text.js";
 
 /**

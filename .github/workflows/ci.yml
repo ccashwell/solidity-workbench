@@ -92,5 +92,5 @@ jobs:
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
-          name: solforge-vsix
+          name: solidity-workbench-vsix
           path: packages/extension/*.vsix

@@ -38,7 +38,7 @@ importers:
 
   packages/extension:
     dependencies:
-      '@solforge/common':
+      '@solidity-workbench/common':
         specifier: workspace:*
         version: link:../common
       vscode-languageclient:
@@ -60,12 +60,12 @@ importers:
 
   packages/server:
     dependencies:
-      '@solforge/common':
-        specifier: workspace:*
-        version: link:../common
       '@solidity-parser/parser':
         specifier: ^0.18.0
         version: 0.18.0
+      '@solidity-workbench/common':
+        specifier: workspace:*
+        version: link:../common
       js-sha3:
         specifier: ^0.9.3
         version: 0.9.3

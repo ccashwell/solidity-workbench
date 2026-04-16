@@ -6,7 +6,7 @@ import {
   MarkupKind,
 } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
-import type { SymbolKind } from "@solforge/common";
+import type { SymbolKind } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 

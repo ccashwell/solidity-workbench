@@ -16,14 +16,14 @@ export function registerScriptCommands(context: vscode.ExtensionContext): void {
   // ── forge script (simulate) ───────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.script.simulate", async () => {
+    vscode.commands.registerCommand("solidity-workbench.script.simulate", async () => {
       const scriptFile = await pickScriptFile();
       if (!scriptFile) return;
 
       const rpcUrl = await pickNetwork();
       if (!rpcUrl) return;
 
-      const config = vscode.workspace.getConfiguration("solforge");
+      const config = vscode.workspace.getConfiguration("solidity-workbench");
       const forgePath = config.get<string>("foundryPath") || "forge";
 
       const terminal = getOrCreateScriptTerminal();
@@ -37,7 +37,7 @@ export function registerScriptCommands(context: vscode.ExtensionContext): void {
   // ── forge script (broadcast) ──────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.script.broadcast", async () => {
+    vscode.commands.registerCommand("solidity-workbench.script.broadcast", async () => {
       const scriptFile = await pickScriptFile();
       if (!scriptFile) return;
 
@@ -54,7 +54,7 @@ export function registerScriptCommands(context: vscode.ExtensionContext): void {
 
       if (!confirm) return;
 
-      const config = vscode.workspace.getConfiguration("solforge");
+      const config = vscode.workspace.getConfiguration("solidity-workbench");
       const forgePath = config.get<string>("foundryPath") || "forge";
       const terminal = getOrCreateScriptTerminal();
       terminal.show();
@@ -63,7 +63,7 @@ export function registerScriptCommands(context: vscode.ExtensionContext): void {
         terminal.sendText(`${forgePath} script ${scriptFile} --rpc-url ${rpcUrl} -vvvv`);
         // After simulation, user can re-run with broadcast
         vscode.window.showInformationMessage(
-          "Simulation complete. Run 'Solforge: Broadcast Script' to send transactions.",
+          "Simulation complete. Run 'Solidity Workbench: Broadcast Script' to send transactions.",
         );
       } else {
         // Ask for private key source
@@ -134,14 +134,14 @@ export function registerScriptCommands(context: vscode.ExtensionContext): void {
   // ── forge script resume ───────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.script.resume", async () => {
+    vscode.commands.registerCommand("solidity-workbench.script.resume", async () => {
       const scriptFile = await pickScriptFile();
       if (!scriptFile) return;
 
       const rpcUrl = await pickNetwork();
       if (!rpcUrl) return;
 
-      const config = vscode.workspace.getConfiguration("solforge");
+      const config = vscode.workspace.getConfiguration("solidity-workbench");
       const forgePath = config.get<string>("foundryPath") || "forge";
       const terminal = getOrCreateScriptTerminal();
       terminal.show();

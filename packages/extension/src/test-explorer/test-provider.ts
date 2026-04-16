@@ -21,7 +21,10 @@ export class FoundryTestProvider {
   private testItems: Map<string, vscode.TestItem> = new Map();
 
   activate(context: vscode.ExtensionContext): void {
-    this.controller = vscode.tests.createTestController("solforge-foundry-tests", "Foundry Tests");
+    this.controller = vscode.tests.createTestController(
+      "solidity-workbench-foundry-tests",
+      "Foundry Tests",
+    );
     context.subscriptions.push(this.controller);
 
     // Set up run profiles
@@ -158,7 +161,7 @@ export class FoundryTestProvider {
     token: vscode.CancellationToken,
   ): Promise<void> {
     const run = this.controller.createTestRun(request);
-    const config = vscode.workspace.getConfiguration("solforge");
+    const config = vscode.workspace.getConfiguration("solidity-workbench");
     const forgePath = config.get<string>("foundryPath") || "forge";
     const verbosity = config.get<number>("test.verbosity") ?? 2;
 

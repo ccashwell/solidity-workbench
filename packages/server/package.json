@@ -1,5 +1,5 @@
 {
-  "name": "@solforge/server",
+  "name": "@solidity-workbench/server",
   "version": "0.1.0",
   "private": true,
   "main": "./dist/server.js",
@@ -10,7 +10,7 @@
     "test": "tsc -b && node --test dist/__tests__/*.test.js"
   },
   "dependencies": {
-    "@solforge/common": "workspace:*",
+    "@solidity-workbench/common": "workspace:*",
     "@solidity-parser/parser": "^0.18.0",
     "js-sha3": "^0.9.3",
     "toml": "^3.0.0",

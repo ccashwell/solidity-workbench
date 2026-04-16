@@ -19,7 +19,7 @@ export function registerDeployCommands(context: vscode.ExtensionContext): void {
   // ── forge create (simple deploy) ──────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.deploy.create", async () => {
+    vscode.commands.registerCommand("solidity-workbench.deploy.create", async () => {
       // Step 1: Pick the contract
       const contractInfo = await pickContract();
       if (!contractInfo) return;
@@ -42,7 +42,7 @@ export function registerDeployCommands(context: vscode.ExtensionContext): void {
       );
 
       // Build the command
-      const config = vscode.workspace.getConfiguration("solforge");
+      const config = vscode.workspace.getConfiguration("solidity-workbench");
       const forgePath = config.get<string>("foundryPath") || "forge";
 
       let cmd = `${forgePath} create ${contractInfo.path}:${contractInfo.name}`;
@@ -79,7 +79,7 @@ export function registerDeployCommands(context: vscode.ExtensionContext): void {
   // ── Verify existing contract ──────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.deploy.verify", async () => {
+    vscode.commands.registerCommand("solidity-workbench.deploy.verify", async () => {
       const address = await vscode.window.showInputBox({
         title: "Contract Address",
         placeHolder: "0x...",
@@ -96,7 +96,7 @@ export function registerDeployCommands(context: vscode.ExtensionContext): void {
       const chainId = await getChainId(rpcUrl);
       const etherscanKey = await getEtherscanApiKey();
 
-      const config = vscode.workspace.getConfiguration("solforge");
+      const config = vscode.workspace.getConfiguration("solidity-workbench");
       const forgePath = config.get<string>("foundryPath") || "forge";
 
       let cmd = `${forgePath} verify-contract ${address} ${contractInfo.path}:${contractInfo.name}`;
@@ -120,7 +120,7 @@ export function registerDeployCommands(context: vscode.ExtensionContext): void {
   // ── Check verification status ─────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.deploy.verifyCheck", async () => {
+    vscode.commands.registerCommand("solidity-workbench.deploy.verifyCheck", async () => {
       const guid = await vscode.window.showInputBox({
         title: "Verification GUID",
         placeHolder: "The GUID returned by the verify command",
@@ -133,7 +133,7 @@ export function registerDeployCommands(context: vscode.ExtensionContext): void {
       });
 
       const etherscanKey = await getEtherscanApiKey();
-      const config = vscode.workspace.getConfiguration("solforge");
+      const config = vscode.workspace.getConfiguration("solidity-workbench");
       const forgePath = config.get<string>("foundryPath") || "forge";
 
       let cmd = `${forgePath} verify-check ${guid}`;

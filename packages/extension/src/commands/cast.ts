@@ -15,7 +15,7 @@ export function registerCastCommands(context: vscode.ExtensionContext): void {
   // ── cast sig — get function selector ──────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.cast.sig", async () => {
+    vscode.commands.registerCommand("solidity-workbench.cast.sig", async () => {
       const input = await vscode.window.showInputBox({
         title: "Function Signature",
         placeHolder: 'transfer(address,uint256) or "function transfer(address to, uint256 amount)"',
@@ -32,7 +32,7 @@ export function registerCastCommands(context: vscode.ExtensionContext): void {
   // ── cast 4byte — decode selector ──────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.cast.4byte", async () => {
+    vscode.commands.registerCommand("solidity-workbench.cast.4byte", async () => {
       const selector = await getSelectionOrInput(
         "Function Selector",
         "0xa9059cbb",
@@ -49,7 +49,7 @@ export function registerCastCommands(context: vscode.ExtensionContext): void {
   // ── cast calldata-decode ──────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.cast.calldataDecode", async () => {
+    vscode.commands.registerCommand("solidity-workbench.cast.calldataDecode", async () => {
       const sig = await vscode.window.showInputBox({
         title: "Function Signature",
         placeHolder: "transfer(address,uint256)",
@@ -71,7 +71,7 @@ export function registerCastCommands(context: vscode.ExtensionContext): void {
   // ── cast abi-encode ───────────────────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.cast.abiEncode", async () => {
+    vscode.commands.registerCommand("solidity-workbench.cast.abiEncode", async () => {
       const sig = await vscode.window.showInputBox({
         title: "Function Signature",
         placeHolder: "transfer(address,uint256)",
@@ -93,7 +93,7 @@ export function registerCastCommands(context: vscode.ExtensionContext): void {
   // ── cast keccak — hash computation ────────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.cast.keccak", async () => {
+    vscode.commands.registerCommand("solidity-workbench.cast.keccak", async () => {
       const input = await getSelectionOrInput(
         "Input to Hash",
         "Transfer(address,address,uint256)",
@@ -110,7 +110,7 @@ export function registerCastCommands(context: vscode.ExtensionContext): void {
   // ── cast to-wei / from-wei — unit conversion ─────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.cast.toWei", async () => {
+    vscode.commands.registerCommand("solidity-workbench.cast.toWei", async () => {
       const amount = await vscode.window.showInputBox({
         title: "Amount in ether",
         placeHolder: "1.5",
@@ -124,7 +124,7 @@ export function registerCastCommands(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.cast.fromWei", async () => {
+    vscode.commands.registerCommand("solidity-workbench.cast.fromWei", async () => {
       const amount = await vscode.window.showInputBox({
         title: "Amount in wei",
         placeHolder: "1500000000000000000",
@@ -140,7 +140,7 @@ export function registerCastCommands(context: vscode.ExtensionContext): void {
   // ── cast balance — check address balance ──────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.cast.balance", async () => {
+    vscode.commands.registerCommand("solidity-workbench.cast.balance", async () => {
       const address = await getSelectionOrInput(
         "Address",
         "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
@@ -158,7 +158,7 @@ export function registerCastCommands(context: vscode.ExtensionContext): void {
   // ── cast storage — read storage slot ──────────────────────────────
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("solforge.cast.storage", async () => {
+    vscode.commands.registerCommand("solidity-workbench.cast.storage", async () => {
       const address = await vscode.window.showInputBox({
         title: "Contract Address",
         placeHolder: "0x...",

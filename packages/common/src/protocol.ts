@@ -1,12 +1,12 @@
 /**
- * Custom LSP protocol extensions for Solforge.
+ * Custom LSP protocol extensions for Solidity Workbench.
  * These extend the standard LSP with Solidity/Foundry-specific notifications and requests.
  */
 
 // ── Custom Notifications (server → client) ───────────────────────────
 
 /** Notification sent when forge build completes */
-export const ForgeBuildComplete = "solforge/forgeBuildComplete";
+export const ForgeBuildComplete = "solidity-workbench/forgeBuildComplete";
 
 export interface ForgeBuildCompleteParams {
   success: boolean;
@@ -16,7 +16,7 @@ export interface ForgeBuildCompleteParams {
 }
 
 /** Notification sent when forge test results are available */
-export const ForgeTestResults = "solforge/forgeTestResults";
+export const ForgeTestResults = "solidity-workbench/forgeTestResults";
 
 export interface ForgeTestResultsParams {
   file: string;
@@ -30,7 +30,7 @@ export interface ForgeTestResultsParams {
 }
 
 /** Notification for gas snapshot updates */
-export const GasSnapshotUpdate = "solforge/gasSnapshotUpdate";
+export const GasSnapshotUpdate = "solidity-workbench/gasSnapshotUpdate";
 
 export interface GasSnapshotUpdateParams {
   snapshots: {
@@ -45,7 +45,7 @@ export interface GasSnapshotUpdateParams {
 // ── Custom Requests (client → server) ────────────────────────────────
 
 /** Request to get the storage layout for a contract */
-export const GetStorageLayout = "solforge/getStorageLayout";
+export const GetStorageLayout = "solidity-workbench/getStorageLayout";
 
 export interface GetStorageLayoutParams {
   contractPath: string;
@@ -63,7 +63,7 @@ export interface StorageLayoutResult {
 }
 
 /** Request to get the inheritance graph for a contract */
-export const GetInheritanceGraph = "solforge/getInheritanceGraph";
+export const GetInheritanceGraph = "solidity-workbench/getInheritanceGraph";
 
 export interface GetInheritanceGraphParams {
   contractPath: string;

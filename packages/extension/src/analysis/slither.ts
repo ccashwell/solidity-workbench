@@ -34,7 +34,7 @@ export class SlitherIntegration {
    * Run slither analysis on the workspace.
    */
   async analyze(): Promise<void> {
-    const config = vscode.workspace.getConfiguration("solforge");
+    const config = vscode.workspace.getConfiguration("solidity-workbench");
     const enabled = config.get<boolean>("slither.enabled");
     if (!enabled) return;
 
