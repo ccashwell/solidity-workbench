@@ -15,7 +15,7 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
  * - Gas estimates
  *
  * We use two compilation strategies:
- * 1. `forge build --format-json` for full project compilation (on save)
+ * 1. `forge build --json` for full project compilation (on save)
  * 2. Direct `solc --standard-json` for single-file quick checks (on demand)
  *
  * The solc standard JSON I/O format is documented at:
@@ -32,7 +32,7 @@ export class SolcBridge {
   async buildAndExtractAst(): Promise<Map<string, SolcSourceUnit>> {
     const result = await this.workspace.runForge([
       "build",
-      "--format-json",
+      "--json",
       "--force", // Force recompile to get fresh AST
     ]);
 
@@ -56,12 +56,7 @@ export class SolcBridge {
    */
   async compileSingle(filePath: string): Promise<SolcOutput | null> {
     // Use forge to get the right solc version
-    const result = await this.workspace.runForge([
-      "build",
-      "--format-json",
-      "--match-path",
-      filePath,
-    ]);
+    const result = await this.workspace.runForge(["build", "--json", "--match-path", filePath]);
 
     if (result.exitCode !== 0) return null;
 

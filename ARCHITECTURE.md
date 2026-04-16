@@ -128,7 +128,7 @@ Rust stack if we need it.
 
 ### 2. Forge as Primary Compilation Backend
 
-Instead of shelling out to raw `solc`, we use `forge build --format-json` as
+Instead of shelling out to raw `solc`, we use `forge build --json` as
 the compilation driver. This means:
 
 - Automatic solc version management (forge handles it)

@@ -2,35 +2,19 @@ import type { Connection, Diagnostic, TextDocuments } from "vscode-languageserve
 import { DiagnosticSeverity } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import * as fs from "node:fs";
+import * as path from "node:path";
+import { URI } from "vscode-uri";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import { SolidityLinter } from "./linter.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
-
-/**
- * Convert a byte offset in a text string to a 0-based line/character position.
- */
-function byteOffsetToPosition(text: string, offset: number): { line: number; character: number } {
-  const lines = text.split("\n");
-  let remaining = offset;
-  for (let i = 0; i < lines.length; i++) {
-    // +1 accounts for the newline character that was split out
-    const lineLen = lines[i].length + 1;
-    if (remaining < lineLen) {
-      return { line: i, character: remaining };
-    }
-    remaining -= lineLen;
-  }
-  // If offset is beyond the text, return end of file
-  const lastLine = lines.length - 1;
-  return { line: lastLine, character: lines[lastLine].length };
-}
+import { LineIndex } from "../utils/line-index.js";
 
 /**
  * Provides diagnostics (errors/warnings) from three sources:
  *
  * 1. **Fast path** (on every change): Parser-based syntax errors
  * 2. **Lint path** (on change, debounced): Custom security/best-practice rules
- * 3. **Full path** (on save): `forge build --format-json` for compiler errors
+ * 3. **Full path** (on save): `forge build --json` for compiler errors
  *
  * The triple-path approach gives instant feedback for typos and syntax,
  * security warnings from our linter, and full compiler diagnostics on save.
@@ -82,7 +66,7 @@ export class DiagnosticsProvider {
    */
   async provideFullDiagnostics(uri: string): Promise<void> {
     try {
-      const result = await this.workspace.runForge(["build", "--format-json"]);
+      const result = await this.workspace.runForge(["build", "--json"]);
 
       // Parse forge build JSON output for errors
       const diagnosticsByFile = this.parseForgeOutput(result.stdout, result.stderr);
@@ -132,7 +116,7 @@ export class DiagnosticsProvider {
             },
             message:
               "Missing SPDX license identifier. Consider adding: // SPDX-License-Identifier: MIT",
-            source: "solforge",
+            source: "solidity-workbench",
             code: "missing-spdx",
           });
         }
@@ -153,7 +137,7 @@ export class DiagnosticsProvider {
               },
               message:
                 "Floating pragma detected. Consider pinning the Solidity version for deployable contracts.",
-              source: "solforge",
+              source: "solidity-workbench",
               code: "floating-pragma",
             });
           }
@@ -169,7 +153,7 @@ export class DiagnosticsProvider {
             end: { line: i, character: line.indexOf("tx.origin") + 9 },
           },
           message: "Avoid using tx.origin for authorization. Use msg.sender instead.",
-          source: "solforge",
+          source: "solidity-workbench",
           code: "tx-origin",
         });
       }
@@ -188,7 +172,7 @@ export class DiagnosticsProvider {
           },
           message:
             "selfdestruct is deprecated (EIP-6049). It no longer destroys the contract on most EVM chains.",
-          source: "solforge",
+          source: "solidity-workbench",
           code: "deprecated-selfdestruct",
         });
       }
@@ -207,26 +191,27 @@ export class DiagnosticsProvider {
   private parseForgeOutput(stdout: string, stderr: string): Map<string, Diagnostic[]> {
     const diagnosticsByFile = new Map<string, Diagnostic[]>();
 
-    // Try parsing as JSON first (forge build --format-json)
+    // Try parsing as JSON first (forge build --json)
     try {
       const output = JSON.parse(stdout);
       if (output.errors) {
-        // Cache file texts so we only read each file once
-        const fileTextCache = new Map<string, string>();
+        // Cache LineIndex per file so we only read and index each file once
+        const lineIndexCache = new Map<string, LineIndex | null>();
         for (const error of output.errors) {
-          let fileText: string | undefined;
+          let lineIndex: LineIndex | null = null;
           if (error.sourceLocation?.file) {
-            const filePath = `${this.workspace.root}/${error.sourceLocation.file}`;
-            if (!fileTextCache.has(filePath)) {
+            const filePath = path.join(this.workspace.root, error.sourceLocation.file);
+            if (!lineIndexCache.has(filePath)) {
               try {
-                fileTextCache.set(filePath, fs.readFileSync(filePath, "utf-8"));
+                const text = fs.readFileSync(filePath, "utf-8");
+                lineIndexCache.set(filePath, LineIndex.fromText(text));
               } catch {
-                /* file not readable */
+                lineIndexCache.set(filePath, null);
               }
             }
-            fileText = fileTextCache.get(filePath);
+            lineIndex = lineIndexCache.get(filePath) ?? null;
           }
-          this.parseSolcError(error, diagnosticsByFile, fileText);
+          this.parseSolcError(error, diagnosticsByFile, lineIndex);
         }
       }
       return diagnosticsByFile;
@@ -252,7 +237,7 @@ export class DiagnosticsProvider {
 
       if (!file) continue;
 
-      const fileUri = `file://${this.workspace.root}/${file}`;
+      const fileUri = URI.file(path.join(this.workspace.root, file)).toString();
       const diags = diagnosticsByFile.get(fileUri) ?? [];
 
       diags.push({
@@ -280,25 +265,25 @@ export class DiagnosticsProvider {
   private parseSolcError(
     error: any,
     diagnosticsByFile: Map<string, Diagnostic[]>,
-    fileText?: string,
+    lineIndex: LineIndex | null,
   ): void {
     if (!error.sourceLocation) return;
 
     const file = error.sourceLocation.file;
     if (!file) return;
 
-    const fileUri = `file://${this.workspace.root}/${file}`;
+    const fileUri = URI.file(path.join(this.workspace.root, file)).toString();
     const diags = diagnosticsByFile.get(fileUri) ?? [];
 
-    // Convert solc byte offsets to line/col using the file text
+    // Convert solc UTF-8 byte offsets to LSP Positions via the line index
     let start = { line: 0, character: 0 };
     let end = { line: 0, character: 0 };
-    if (fileText) {
+    if (lineIndex) {
       if (typeof error.sourceLocation.start === "number") {
-        start = byteOffsetToPosition(fileText, error.sourceLocation.start);
+        start = lineIndex.positionAt(error.sourceLocation.start);
       }
       if (typeof error.sourceLocation.end === "number") {
-        end = byteOffsetToPosition(fileText, error.sourceLocation.end);
+        end = lineIndex.positionAt(error.sourceLocation.end);
       } else {
         end = start;
       }
