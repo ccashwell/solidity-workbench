@@ -55,6 +55,43 @@ jobs:
       - name: Test
         run: pnpm -r test
 
+  e2e:
+    name: Extension E2E (VSCode)
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: "pnpm"
+
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: stable
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm -r build
+
+      # `@vscode/test-electron` needs a display to launch VSCode;
+      # xvfb-run provides a virtual one on GitHub's Linux runners.
+      - name: Run extension E2E tests
+        run: xvfb-run -a pnpm --filter solidity-workbench test:e2e
+        env:
+          CI: "true"
+
   package:
     runs-on: ubuntu-latest
     needs: build

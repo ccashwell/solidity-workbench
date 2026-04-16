@@ -46,8 +46,13 @@
     "languages": [
       {
         "id": "solidity",
-        "aliases": ["Solidity", "solidity"],
-        "extensions": [".sol"],
+        "aliases": [
+          "Solidity",
+          "solidity"
+        ],
+        "extensions": [
+          ".sol"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -297,7 +302,9 @@
     "taskDefinitions": [
       {
         "type": "forge",
-        "required": ["command"],
+        "required": [
+          "command"
+        ],
         "properties": {
           "command": {
             "type": "string",
@@ -314,7 +321,10 @@
       {
         "name": "forge",
         "owner": "solidity-workbench",
-        "fileLocation": ["relative", "${workspaceFolder}"],
+        "fileLocation": [
+          "relative",
+          "${workspaceFolder}"
+        ],
         "pattern": {
           "regexp": "^Error \\(\\d+\\): (.*)$\\n --> (.*?):(\\d+):(\\d+):",
           "message": 1,
@@ -329,6 +339,8 @@
     "build": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap && esbuild ../server/src/server.ts --bundle --outfile=dist/server.js --external:vscode --format=cjs --platform=node --sourcemap",
     "watch": "pnpm build --watch",
     "package": "vsce package --no-dependencies",
+    "build:test": "tsc -p tsconfig.test.json",
+    "test:e2e": "pnpm build && pnpm build:test && node ./dist/test/runTest.js",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
@@ -336,9 +348,13 @@
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/vscode": "^1.85.0",
+    "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^2.22.0",
     "esbuild": "^0.20.0",
+    "glob": "^13.0.6",
+    "mocha": "^11.7.5",
     "typescript": "^5.3.3"
   }
 }
