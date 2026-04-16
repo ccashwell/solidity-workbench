@@ -115,13 +115,13 @@ contract Fee {
   });
 
   describe("suppression comments", () => {
-    it("respects solforge-disable-next-line", () => {
+    it("respects solidity-workbench-disable-next-line", () => {
       const diags = lint(`
 pragma solidity ^0.8.24;
 
 contract Proxy {
     function forward(address impl) external {
-        // solforge-disable-next-line
+        // solidity-workbench-disable-next-line
         impl.delegatecall("");
     }
 }
@@ -129,6 +129,57 @@ contract Proxy {
 
       const dc = diags.filter((d) => d.code === "dangerous-delegatecall");
       assert.equal(dc.length, 0, "Should suppress with disable comment");
+    });
+  });
+
+  describe("missing zero-address check detection", () => {
+    it("flags missing zero-address check and points at the parameter name", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+
+contract Token {
+    address public owner;
+
+    function setOwner(address newOwner) external {
+        owner = newOwner;
+    }
+}
+`);
+      const missing = diags.filter((d) => d.code === "missing-zero-check");
+      assert.equal(missing.length, 1);
+      // The range should point somewhere inside the function header, not at line 0
+      assert.ok(missing[0].range.start.line >= 1);
+      // And the character range should cover the param name "newOwner" (8 chars)
+      assert.equal(
+        missing[0].range.end.character - missing[0].range.start.character,
+        "newOwner".length,
+      );
+    });
+
+    it("emits one diagnostic per missing address param", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+
+contract Vault {
+    function set(address a, address b) external {}
+}
+`);
+      const missing = diags.filter((d) => d.code === "missing-zero-check");
+      assert.equal(missing.length, 2);
+    });
+
+    it("does not flag when zero-check is present", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+
+contract Safe {
+    function init(address addr) external {
+        require(addr != address(0), "zero addr");
+    }
+}
+`);
+      const missing = diags.filter((d) => d.code === "missing-zero-check");
+      assert.equal(missing.length, 0);
     });
   });
 });

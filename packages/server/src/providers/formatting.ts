@@ -5,6 +5,7 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import * as crypto from "node:crypto";
 
 /**
  * Provides document formatting via `forge fmt`.
@@ -63,7 +64,7 @@ export class FormattingProvider {
 
     // Write to a temp file, run forge fmt, read back
     const tmpDir = os.tmpdir();
-    const tmpFile = path.join(tmpDir, `solforge-fmt-${Date.now()}.sol`);
+    const tmpFile = path.join(tmpDir, `solidity-workbench-fmt-${crypto.randomUUID()}.sol`);
 
     try {
       fs.writeFileSync(tmpFile, text, "utf-8");

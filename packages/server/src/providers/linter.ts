@@ -1,6 +1,10 @@
-import type { Diagnostic } from "vscode-languageserver/node.js";
-import { DiagnosticSeverity, Range } from "vscode-languageserver/node.js";
-import type { SoliditySourceUnit, ContractDefinition, FunctionDefinition } from "@solforge/common";
+import type { Diagnostic, Range } from "vscode-languageserver/node.js";
+import { DiagnosticSeverity } from "vscode-languageserver/node.js";
+import type {
+  SoliditySourceUnit,
+  ContractDefinition,
+  FunctionDefinition,
+} from "@solidity-workbench/common";
 
 /**
  * Custom linting rules for Solidity — security and best-practice checks
@@ -51,11 +55,11 @@ export class SolidityLinter {
     return diagnostics.filter((d) => {
       if (d.range.start.line === 0) return true;
       const prevLine = lines[d.range.start.line - 1]?.trim() ?? "";
-      if (prevLine.includes("solforge-disable-next-line")) {
+      if (prevLine.includes("solidity-workbench-disable-next-line")) {
         // Check if specific rule is mentioned
         if (d.code && prevLine.includes(String(d.code))) return false;
         // If no specific rule, suppress all
-        if (!prevLine.includes("solforge-disable-next-line ")) return false;
+        if (!prevLine.includes("solidity-workbench-disable-next-line ")) return false;
       }
       return true;
     });
@@ -120,7 +124,7 @@ export class SolidityLinter {
                   end: { line: absLine, character: lines[absLine]?.length ?? 0 },
                 },
                 message: `Potential reentrancy: state variable '${varName}' is modified after an external call on line ${externalCallLine + 1}. Follow the Checks-Effects-Interactions pattern.`,
-                source: "solforge",
+                source: "solidity-workbench",
                 code: "reentrancy",
               });
             }
@@ -162,7 +166,7 @@ export class SolidityLinter {
             },
             message:
               "Low-level call return value not checked. Use (bool success, ) = addr.call(...) and check success.",
-            source: "solforge",
+            source: "solidity-workbench",
             code: "unchecked-call",
           });
         }
@@ -204,11 +208,12 @@ export class SolidityLinter {
           (bodyText.includes(`require(${param.name}`) && bodyText.includes("address(0)"));
 
         if (!hasCheck) {
+          const range = this.paramRange(param.name, lines, func.range.start.line) ?? func.nameRange;
           diagnostics.push({
             severity: DiagnosticSeverity.Information,
-            range: func.range,
+            range,
             message: `Address parameter '${param.name}' not checked against zero address.`,
-            source: "solforge",
+            source: "solidity-workbench",
             code: "missing-zero-check",
           });
         }
@@ -216,6 +221,48 @@ export class SolidityLinter {
     }
 
     return diagnostics;
+  }
+
+  /**
+   * Locate a parameter name within a function header by text-scanning.
+   *
+   * The AST does not carry per-parameter ranges, so we compute one by:
+   *  - Taking lines from `startLine` up to the first line containing `{` or `;`
+   *    (capped at `startLine + 20` to bound the search for defensive cases).
+   *  - Finding a word-boundary match of the parameter name in that header text.
+   *  - Converting the flat match index back to a `(line, character)` position.
+   *
+   * Returns `null` if the name is not found in the header region.
+   */
+  private paramRange(paramName: string, lines: string[], startLine: number): Range | null {
+    const maxLine = Math.min(startLine + 20, lines.length - 1);
+    let lastHeaderLine = maxLine;
+    for (let i = startLine; i <= maxLine; i++) {
+      const line = lines[i] ?? "";
+      if (line.includes("{") || line.includes(";")) {
+        lastHeaderLine = i;
+        break;
+      }
+    }
+
+    const headerLines = lines.slice(startLine, lastHeaderLine + 1);
+    const headerText = headerLines.join("\n");
+
+    const match = new RegExp(`\\b${paramName}\\b`).exec(headerText);
+    if (!match) return null;
+
+    let idx = match.index;
+    let lineOffset = 0;
+    while (lineOffset < headerLines.length - 1 && idx > headerLines[lineOffset].length) {
+      idx -= headerLines[lineOffset].length + 1; // +1 for the newline separator
+      lineOffset++;
+    }
+
+    const absLine = startLine + lineOffset;
+    return {
+      start: { line: absLine, character: idx },
+      end: { line: absLine, character: idx + paramName.length },
+    };
   }
 
   /**
@@ -247,7 +294,7 @@ export class SolidityLinter {
           severity: DiagnosticSeverity.Information,
           range: func.nameRange,
           message: `State-changing function '${func.name}' does not emit any events. Consider adding events for off-chain indexing.`,
-          source: "solforge",
+          source: "solidity-workbench",
           code: "missing-event",
         });
       }
@@ -285,7 +332,7 @@ export class SolidityLinter {
             end: { line: i, character: match.index + match[1].length },
           },
           message: `Magic number ${match[1]} — consider using a named constant.`,
-          source: "solforge",
+          source: "solidity-workbench",
           code: "large-literal",
         });
       }
@@ -340,7 +387,7 @@ export class SolidityLinter {
                   end: { line: absLine, character: lines[absLine]?.length ?? 0 },
                 },
                 message: `State variable '${varName}' accessed inside a loop. Cache it in a local variable for gas savings.`,
-                source: "solforge",
+                source: "solidity-workbench",
                 code: "storage-in-loop",
               });
             }
@@ -369,7 +416,7 @@ export class SolidityLinter {
           },
           message:
             "delegatecall detected. Ensure the target address is trusted and not user-controlled.",
-          source: "solforge",
+          source: "solidity-workbench",
           code: "dangerous-delegatecall",
         });
       }
@@ -405,7 +452,7 @@ export class SolidityLinter {
             severity: DiagnosticSeverity.Error,
             range: func.nameRange,
             message: `Function '${func.name}' contains selfdestruct without access control.`,
-            source: "solforge",
+            source: "solidity-workbench",
             code: "unprotected-selfdestruct",
           });
         }
