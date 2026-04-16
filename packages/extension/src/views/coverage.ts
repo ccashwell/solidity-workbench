@@ -4,8 +4,19 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import {
+  parseLcov,
+  summarizeBranches,
+  type FileCoverage,
+  type BranchRecord,
+} from "@solidity-workbench/common";
 
 const execFileAsync = promisify(execFile);
+
+// Re-export for any callers / tests that were importing the parser
+// from the extension package's coverage module.
+export { parseLcov, summarizeBranches };
+export type { FileCoverage, BranchRecord };
 
 /**
  * Forge coverage visualization.
@@ -259,151 +270,4 @@ export class CoverageProvider {
     editor.setDecorations(this.uncoveredDecoration, uncovered);
     editor.setDecorations(this.partialDecoration, partial);
   }
-}
-
-// ── LCOV parsing ─────────────────────────────────────────────────────
-
-export interface FileCoverage {
-  file: string;
-  /** 1-based line number → hit count */
-  lines: Map<number, number>;
-  /** Parallel list of branch-level records for partial-coverage detection */
-  branches: BranchRecord[];
-  lineTotal: number;
-  lineHit: number;
-  branchTotal: number;
-  branchHit: number;
-  fnTotal: number;
-  fnHit: number;
-}
-
-interface BranchRecord {
-  line: number;
-  branchId: string;
-  taken: number;
-}
-
-/**
- * Parse LCOV tracefile content into a map of file-relative-path → coverage
- * record. Exported for testability. Supports the subset of LCOV records
- * forge emits: `SF`, `DA`, `BRDA`, `FN`, `FNDA`, `LF`, `LH`, `BRF`, `BRH`,
- * `FNF`, `FNH`, `end_of_record`.
- */
-export function parseLcov(text: string): Map<string, FileCoverage> {
-  const result = new Map<string, FileCoverage>();
-  let current: FileCoverage | null = null;
-
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
-
-    if (line === "end_of_record") {
-      if (current) {
-        // LCOV-reported totals may be 0 when LF/BRF aren't emitted; fall
-        // back to derived counts so the status bar still works.
-        if (current.lineTotal === 0) current.lineTotal = current.lines.size;
-        if (current.lineHit === 0) {
-          let hit = 0;
-          for (const hits of current.lines.values()) if (hits > 0) hit++;
-          current.lineHit = hit;
-        }
-        result.set(current.file, current);
-      }
-      current = null;
-      continue;
-    }
-
-    const colonIdx = line.indexOf(":");
-    if (colonIdx < 0) continue;
-    const tag = line.slice(0, colonIdx);
-    const payload = line.slice(colonIdx + 1);
-
-    if (tag === "SF") {
-      current = {
-        file: payload,
-        lines: new Map(),
-        branches: [],
-        lineTotal: 0,
-        lineHit: 0,
-        branchTotal: 0,
-        branchHit: 0,
-        fnTotal: 0,
-        fnHit: 0,
-      };
-      continue;
-    }
-
-    if (!current) continue;
-
-    switch (tag) {
-      case "DA": {
-        // DA:<line>,<hits>[,<checksum>]
-        const parts = payload.split(",");
-        const lineNo = parseInt(parts[0], 10);
-        const hits = parseInt(parts[1] ?? "0", 10);
-        if (!Number.isFinite(lineNo)) break;
-        current.lines.set(lineNo, (current.lines.get(lineNo) ?? 0) + (hits || 0));
-        break;
-      }
-      case "BRDA": {
-        // BRDA:<line>,<block>,<branch>,<taken | "-">
-        const parts = payload.split(",");
-        if (parts.length < 4) break;
-        const lineNo = parseInt(parts[0], 10);
-        const branchId = `${parts[1]}/${parts[2]}`;
-        const takenStr = parts[3];
-        const taken = takenStr === "-" ? 0 : parseInt(takenStr, 10);
-        if (!Number.isFinite(lineNo)) break;
-        current.branches.push({ line: lineNo, branchId, taken: taken || 0 });
-        break;
-      }
-      case "LF":
-        current.lineTotal = parseInt(payload, 10) || 0;
-        break;
-      case "LH":
-        current.lineHit = parseInt(payload, 10) || 0;
-        break;
-      case "BRF":
-        current.branchTotal = parseInt(payload, 10) || 0;
-        break;
-      case "BRH":
-        current.branchHit = parseInt(payload, 10) || 0;
-        break;
-      case "FNF":
-        current.fnTotal = parseInt(payload, 10) || 0;
-        break;
-      case "FNH":
-        current.fnHit = parseInt(payload, 10) || 0;
-        break;
-      default:
-        break;
-    }
-  }
-
-  return result;
-}
-
-/**
- * Bucket each branch-bearing line into `fully` / `partial` / `missed` based
- * on how many of its branches have taken > 0. Exported for testability.
- */
-export function summarizeBranches(
-  branches: BranchRecord[],
-): Map<number, "fully" | "partial" | "missed"> {
-  const byLine = new Map<number, { total: number; taken: number }>();
-
-  for (const br of branches) {
-    const entry = byLine.get(br.line) ?? { total: 0, taken: 0 };
-    entry.total += 1;
-    if (br.taken > 0) entry.taken += 1;
-    byLine.set(br.line, entry);
-  }
-
-  const out = new Map<number, "fully" | "partial" | "missed">();
-  for (const [line, { total, taken }] of byLine) {
-    if (taken === 0) out.set(line, "missed");
-    else if (taken === total) out.set(line, "fully");
-    else out.set(line, "partial");
-  }
-  return out;
 }
