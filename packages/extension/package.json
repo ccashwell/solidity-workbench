@@ -101,11 +101,6 @@
           "default": true,
           "description": "Show parameter name inlay hints in function calls."
         },
-        "solidity-workbench.inlayHints.variableTypes": {
-          "type": "boolean",
-          "default": false,
-          "description": "Show inferred type inlay hints for variables."
-        },
         "solidity-workbench.gasEstimates.enabled": {
           "type": "boolean",
           "default": true,
@@ -269,6 +264,14 @@
       {
         "command": "solidity-workbench.inspectStoragePanel",
         "title": "Solidity Workbench: Storage Layout Visualization"
+      },
+      {
+        "command": "solidity-workbench.copySelector",
+        "title": "Solidity Workbench: Copy Selector to Clipboard"
+      },
+      {
+        "command": "solidity-workbench.showOutput",
+        "title": "Solidity Workbench: Show Output Channel"
       }
     ],
     "views": {

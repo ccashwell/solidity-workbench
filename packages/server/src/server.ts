@@ -86,7 +86,6 @@ interface ServerSettings {
   };
   inlayHints?: {
     parameterNames?: boolean;
-    variableTypes?: boolean;
   };
   gasEstimates?: {
     enabled?: boolean;
@@ -162,7 +161,6 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       definitionProvider: true,
       typeDefinitionProvider: true,
       referencesProvider: true,
-      implementationProvider: true,
 
       hoverProvider: true,
 
@@ -344,6 +342,8 @@ documents.onDidChangeContent(async (change) => {
 });
 
 documents.onDidSave(async (event) => {
+  if (currentSettings.diagnostics?.compileOnSave === false) return;
+
   pushServerState({ phase: "building" });
   const startedAt = Date.now();
   const { errorCount, warningCount } = await diagnosticsProvider.provideFullDiagnostics(

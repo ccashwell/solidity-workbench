@@ -1,5 +1,3 @@
-import * as path from "node:path";
-import * as fs from "node:fs";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
 /**
@@ -14,9 +12,9 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
  * - Storage layout information
  * - Gas estimates
  *
- * We use two compilation strategies:
- * 1. `forge build --json` for full project compilation (on save)
- * 2. Direct `solc --standard-json` for single-file quick checks (on demand)
+ * Compilation strategy:
+ * - `forge build --json` for full project compilation (on save)
+ * - `forge build --json --match-path` for single-file quick checks (on demand)
  *
  * The solc standard JSON I/O format is documented at:
  * https://docs.soliditylang.org/en/latest/using-the-compiler.html#compiler-input-and-output-json-description
@@ -317,29 +315,6 @@ export class SolcBridge {
 
   // ── Private helpers ────────────────────────────────────────────────
 
-  private buildStandardInput(filePath: string): SolcStandardInput {
-    const content = fs.readFileSync(filePath, "utf-8");
-    const relativePath = path.relative(this.workspace.root, filePath);
-
-    return {
-      language: "Solidity",
-      sources: {
-        [relativePath]: { content },
-      },
-      settings: {
-        outputSelection: {
-          "*": {
-            "*": ["abi", "evm.methodIdentifiers", "storageLayout"],
-            "": ["ast"],
-          },
-        },
-        remappings: this.workspace
-          .getRemappings()
-          .map((r) => `${r.context ? r.context + ":" : ""}${r.prefix}=${r.path}`),
-      },
-    };
-  }
-
   private extractAsts(output: any): void {
     if (!output.sources) return;
 
@@ -508,13 +483,3 @@ export interface StorageLayoutEntry {
   type: string;
 }
 
-export interface SolcStandardInput {
-  language: "Solidity";
-  sources: Record<string, { content: string }>;
-  settings: {
-    outputSelection: Record<string, Record<string, string[]>>;
-    remappings?: string[];
-    optimizer?: { enabled: boolean; runs: number };
-    evmVersion?: string;
-  };
-}
