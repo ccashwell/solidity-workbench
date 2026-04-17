@@ -8,6 +8,7 @@ import {
   type ListTestsResult,
   type TestContractInfo,
 } from "@solidity-workbench/common";
+import { forgeVerbosityFlag } from "../config.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -206,7 +207,8 @@ export class FoundryTestProvider {
           args.push("--match-path", parts[0]);
         }
 
-        args.push(`${"-".repeat(verbosity)}v`);
+        const verbosityFlag = forgeVerbosityFlag(verbosity);
+        if (verbosityFlag) args.push(verbosityFlag);
 
         const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
         if (!workspaceFolder) continue;

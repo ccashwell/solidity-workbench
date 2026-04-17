@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { forgeVerbosityFlag } from "../config.js";
 
 /**
  * Registers Foundry-related commands in the extension.
@@ -37,7 +38,8 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
       const terminal = getOrCreateTerminal();
       terminal.show();
       const verbosity = config().get<number>("test.verbosity") ?? 2;
-      terminal.sendText(`${getForge()} test ${"-".repeat(verbosity)}v`);
+      const flag = forgeVerbosityFlag(verbosity);
+      terminal.sendText(`${getForge()} test${flag ? " " + flag : ""}`);
     }),
   );
 
@@ -55,7 +57,10 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
       const terminal = getOrCreateTerminal();
       terminal.show();
       const verbosity = config().get<number>("test.verbosity") ?? 2;
-      terminal.sendText(`${getForge()} test --match-path ${filePath} ${"-".repeat(verbosity)}v`);
+      const flag = forgeVerbosityFlag(verbosity);
+      terminal.sendText(
+        `${getForge()} test --match-path ${filePath}${flag ? " " + flag : ""}`,
+      );
     }),
   );
 
@@ -80,7 +85,10 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
       const terminal = getOrCreateTerminal();
       terminal.show();
       const verbosity = config().get<number>("test.verbosity") ?? 2;
-      terminal.sendText(`${getForge()} test --match-test ${testName} ${"-".repeat(verbosity)}v`);
+      const flag = forgeVerbosityFlag(verbosity);
+      terminal.sendText(
+        `${getForge()} test --match-test ${testName}${flag ? " " + flag : ""}`,
+      );
     }),
   );
 

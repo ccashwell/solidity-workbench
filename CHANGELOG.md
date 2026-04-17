@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`forge test` verbosity flag was malformed.** Every command that
+  invoked `forge test` was building the verbosity flag as
+  `"-".repeat(n) + "v"` — producing `--v` for the default
+  `test.verbosity=2`, which forge rejects with
+  `error: unexpected argument '--v' found`. Coverage, the test
+  explorer, and the palette `test` / `testFile` / `testFunction`
+  commands all hit it. Centralized the flag building in a new
+  `forgeVerbosityFlag` helper in `@solidity-workbench/common` (short
+  flag shape: `-v`, `-vv`, `-vvv`, `-vvvv`, `-vvvvv`; empty for
+  level 0; clamped at 5) so it can't be re-introduced. 6 unit
+  tests cover every boundary including a `/^-v+$/` assertion that
+  would have caught the original bug.
 - **Auto-import quick fixes no longer offer to import symbols that
   are declared in the current file, and no longer leak into Quick
   Fix menus invoked on unrelated diagnostics.** Three fixes in

@@ -53,3 +53,7 @@ export function getConfig(): WorkbenchConfig {
     },
   };
 }
+
+// Forge CLI helpers live in `@solidity-workbench/common/foundry-cli`
+// so the server's `node --test` runner can exercise them.
+export { forgeVerbosityFlag } from "@solidity-workbench/common";
