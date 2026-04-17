@@ -1,4 +1,4 @@
-import type { CodeAction, Diagnostic } from "vscode-languageserver/node.js";
+import type { CodeAction, Diagnostic, Range } from "vscode-languageserver/node.js";
 import { CodeActionKind, TextEdit } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
@@ -31,15 +31,35 @@ export class AutoImportProvider {
   ) {}
 
   /**
-   * Provide auto-import code actions for unresolved identifiers.
+   * Provide auto-import code actions.
+   *
+   * Two independent surfaces produce import candidates:
+   *
+   *   1. **Diagnostic-triggered.** When the incoming diagnostic
+   *      includes "Undeclared identifier" / "not found" / "not
+   *      visible" (or the matching solc error codes), we offer
+   *      imports for that specific identifier. These fire
+   *      regardless of the cursor range since they're already
+   *      range-anchored to the diagnostic itself.
+   *
+   *   2. **Proactive.** For names that aren't yet flagged by solc
+   *      (e.g. between saves when full diagnostics haven't run),
+   *      we scan the source for uppercase-starting identifiers that
+   *      aren't locally declared or imported and offer imports for
+   *      them. These are **scoped to the requested code-action
+   *      range** so they don't bleed into Quick Fix menus invoked
+   *      on unrelated diagnostics elsewhere in the file.
    */
-  provideImportActions(document: TextDocument, diagnostics: Diagnostic[]): CodeAction[] {
+  provideImportActions(
+    document: TextDocument,
+    diagnostics: Diagnostic[],
+    range?: Range,
+  ): CodeAction[] {
     const actions: CodeAction[] = [];
     const text = document.getText();
     const uri = document.uri;
     const existingImports = this.getExistingImports(uri);
 
-    // Find undeclared identifiers from diagnostics
     for (const diag of diagnostics) {
       // solc error 7576 = "Undeclared identifier"
       // solc error 9582 = "Member not found"
@@ -53,24 +73,19 @@ export class AutoImportProvider {
 
       if (!isUndeclared) continue;
 
-      // Extract the symbol name from the diagnostic message
       const symbolName = this.extractSymbolFromDiagnostic(diag, text);
       if (!symbolName) continue;
 
-      // Find candidate imports
       const candidates = this.findImportCandidates(symbolName, uri, existingImports);
       for (const candidate of candidates) {
         actions.push(this.createImportAction(uri, text, symbolName, candidate));
       }
     }
 
-    // Also provide import suggestions for symbols that exist in the workspace
-    // but aren't imported (even without diagnostics, for proactive importing)
-    const unresolvedSymbols = this.findUnresolvedSymbols(text, uri, existingImports);
+    const unresolvedSymbols = this.findUnresolvedSymbols(document, existingImports, range);
     for (const { name, candidates } of unresolvedSymbols) {
       for (const candidate of candidates) {
         const action = this.createImportAction(uri, text, name, candidate);
-        // Mark as non-preferred so they don't auto-apply
         action.isPreferred = false;
         actions.push(action);
       }
@@ -81,6 +96,13 @@ export class AutoImportProvider {
 
   /**
    * Find import candidates for a symbol name.
+   *
+   * Short-circuit: if *any* declaration with this name lives in the
+   * current file, we return `[]`. Otherwise same-file declarations
+   * would coexist with cross-file imports, and the user would be
+   * offered to import a name that's already in scope — the exact
+   * mis-UX that produced "Import 'CountChanged' from ./interfaces/…"
+   * suggestions for a symbol declared in the active contract.
    */
   private findImportCandidates(
     symbolName: string,
@@ -88,12 +110,10 @@ export class AutoImportProvider {
     existingImports: Set<string>,
   ): ImportCandidate[] {
     const symbols = this.symbolIndex.findSymbols(symbolName);
+    if (symbols.some((s) => s.filePath === currentUri)) return [];
+
     const candidates: ImportCandidate[] = [];
-
     for (const sym of symbols) {
-      if (sym.filePath === currentUri) continue; // Same file, no import needed
-
-      // Check if already imported
       if (existingImports.has(sym.filePath)) continue;
 
       const importPath = this.computeImportPath(currentUri, sym.filePath, symbolName);
@@ -107,7 +127,6 @@ export class AutoImportProvider {
       }
     }
 
-    // Deduplicate by import path
     const seen = new Set<string>();
     return candidates.filter((c) => {
       if (seen.has(c.importPath)) return false;
@@ -228,46 +247,49 @@ export class AutoImportProvider {
   }
 
   /**
-   * Find symbols used in the document that exist in the workspace
-   * but aren't imported.
+   * Find uppercase-starting identifiers used in the document that are
+   * neither locally declared nor imported.
+   *
+   * Scope of "local":
+   *   - Contract, interface, and library names
+   *   - Struct, enum, event, error, modifier, and function names
+   *     declared inside any of those contracts
+   *   - File-level user-defined value types, free functions, and
+   *     custom errors (Solidity ≥ 0.8.4)
+   *   - Every imported symbol alias
+   *
+   * The scan regex matches uppercase-starting words in the raw text.
+   * That includes matches inside comments and string literals. That's
+   * fine for correctness (they're filtered downstream by the local
+   * name set / candidate lookup), but we additionally filter by the
+   * requested code-action range when one is supplied — a Quick Fix
+   * invoked on the pragma line shouldn't surface imports for names
+   * that appear 40 lines below.
    */
   private findUnresolvedSymbols(
-    text: string,
-    uri: string,
+    document: TextDocument,
     existingImports: Set<string>,
+    range?: Range,
   ): { name: string; candidates: ImportCandidate[] }[] {
-    const results: { name: string; candidates: ImportCandidate[] }[] = [];
+    const uri = document.uri;
+    const text = document.getText();
 
-    // Get all type-position identifiers that start with uppercase
-    // (likely contract/interface/library/struct/enum references)
     const typeRefs = new Set<string>();
     const typeRefRe = /\b([A-Z]\w+)\b/g;
     let match: RegExpExecArray | null;
 
     while ((match = typeRefRe.exec(text)) !== null) {
+      if (range) {
+        const start = document.positionAt(match.index);
+        const end = document.positionAt(match.index + match[0].length);
+        if (!rangesOverlap({ start, end }, range)) continue;
+      }
       typeRefs.add(match[1]);
     }
 
-    // Check which of these are defined in the current file
-    const result = this.parser.get(uri);
-    const localNames = new Set<string>();
-    if (result) {
-      for (const contract of result.sourceUnit.contracts) {
-        localNames.add(contract.name);
-        for (const s of contract.structs) localNames.add(s.name);
-        for (const e of contract.enums) localNames.add(e.name);
-      }
-      // Also add imported symbols
-      for (const imp of result.sourceUnit.imports) {
-        if (imp.symbolAliases) {
-          for (const alias of imp.symbolAliases) {
-            localNames.add(alias.alias ?? alias.symbol);
-          }
-        }
-      }
-    }
+    const localNames = this.collectLocalNames(uri);
 
-    // Find candidates for unresolved type references
+    const results: { name: string; candidates: ImportCandidate[] }[] = [];
     for (const name of typeRefs) {
       if (localNames.has(name)) continue;
       if (this.isBuiltinType(name)) continue;
@@ -279,6 +301,45 @@ export class AutoImportProvider {
     }
 
     return results;
+  }
+
+  /**
+   * Every identifier that's already in scope in the current file —
+   * declarations from the file itself plus names brought in by
+   * imports. Used by `findUnresolvedSymbols` to decide which
+   * identifiers deserve a proactive import suggestion.
+   */
+  private collectLocalNames(uri: string): Set<string> {
+    const result = this.parser.get(uri);
+    const names = new Set<string>();
+    if (!result) return names;
+
+    const su = result.sourceUnit;
+
+    for (const contract of su.contracts) {
+      names.add(contract.name);
+      for (const s of contract.structs) names.add(s.name);
+      for (const e of contract.enums) names.add(e.name);
+      for (const ev of contract.events) names.add(ev.name);
+      for (const er of contract.errors) names.add(er.name);
+      for (const m of contract.modifiers) if (m.name) names.add(m.name);
+      for (const f of contract.functions) if (f.name) names.add(f.name);
+    }
+
+    for (const udvt of su.userDefinedValueTypes) names.add(udvt.name);
+    for (const err of su.errors) names.add(err.name);
+    for (const fn of su.freeFunctions) if (fn.name) names.add(fn.name);
+
+    for (const imp of su.imports) {
+      if (imp.symbolAliases) {
+        for (const alias of imp.symbolAliases) {
+          names.add(alias.alias ?? alias.symbol);
+        }
+      }
+      if (imp.unitAlias) names.add(imp.unitAlias);
+    }
+
+    return names;
   }
 
   private isBuiltinType(name: string): boolean {
@@ -296,4 +357,18 @@ interface ImportCandidate {
   importPath: string;
   sourceUri: string;
   containerName?: string;
+}
+
+/**
+ * True when two LSP ranges share any byte of overlap. Used to filter
+ * proactive import suggestions to identifiers near the user's cursor
+ * rather than dumping every unresolved type reference in the file
+ * into every Quick Fix menu.
+ */
+function rangesOverlap(a: Range, b: Range): boolean {
+  if (a.end.line < b.start.line) return false;
+  if (b.end.line < a.start.line) return false;
+  if (a.end.line === b.start.line && a.end.character < b.start.character) return false;
+  if (b.end.line === a.start.line && b.end.character < a.start.character) return false;
+  return true;
 }

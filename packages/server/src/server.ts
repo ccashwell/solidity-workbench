@@ -425,7 +425,11 @@ connection.onCodeAction(async (params, token): Promise<CodeAction[]> => {
   if (!doc) return [];
   if (token.isCancellationRequested) return [];
   const actions = codeActionsProvider.provideCodeActions(doc, params.range, params.context);
-  const importActions = autoImportProvider.provideImportActions(doc, params.context.diagnostics);
+  const importActions = autoImportProvider.provideImportActions(
+    doc,
+    params.context.diagnostics,
+    params.range,
+  );
   return [...actions, ...importActions];
 });
 

@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Auto-import quick fixes no longer offer to import symbols that
+  are declared in the current file, and no longer leak into Quick
+  Fix menus invoked on unrelated diagnostics.** Three fixes in
+  `AutoImportProvider`:
+    - `collectLocalNames` now includes every kind of local
+      declaration — contracts, interfaces, libraries, structs,
+      enums, events, errors, modifiers, contract functions,
+      file-level errors, file-level free functions, UDVTs, import
+      aliases, and import unit aliases. Previously only
+      contracts / structs / enums were treated as local, so
+      locally-declared events / errors / UDVTs / free functions
+      got flagged as "unresolved" and the provider offered to
+      import same-named declarations from other files.
+    - `findImportCandidates` short-circuits to `[]` whenever any
+      symbol with the requested name is declared in the current
+      file. Defense-in-depth against stale / spurious "Undeclared
+      identifier" diagnostics that would otherwise still trigger
+      a wrong import suggestion.
+    - Proactive import suggestions are now scoped to the
+      code-action request's `range`. Quick Fix invoked on an
+      unrelated diagnostic — e.g. the pragma line's
+      floating-pragma warning — no longer shows a menu of imports
+      for every uppercase identifier in the file. 5 new
+      regression tests lock the behaviour in.
 - **`forge build --match-path` was invalid** — subgraph auto-compile
   emitted `forge build --match-path <file>`, but `--match-path` is a
   `forge test` flag; `forge build` expects positional path arguments.
