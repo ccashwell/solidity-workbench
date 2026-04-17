@@ -158,10 +158,10 @@ export function registerSubgraphCommand(context: vscode.ExtensionContext): void 
 
 /**
  * Absolute path of the active editor's file if it's a Solidity source
- * file inside the given workspace root; `null` otherwise. Test files
- * and files outside the workspace are intentionally excluded — we
- * don't want to accidentally point `forge build --match-path` at a
- * transient buffer.
+ * file inside the given workspace root; `null` otherwise. Files
+ * outside the workspace are intentionally excluded — we don't want
+ * to accidentally pass a transient buffer path as a `forge build`
+ * positional argument.
  */
 function currentSolFilePath(workspaceRoot: string): string | null {
   const editor = vscode.window.activeTextEditor;
@@ -187,9 +187,18 @@ function hasArtifactForSource(artifacts: ForgeArtifact[], sourceAbsPath: string)
 
 /**
  * Run `forge build` in the workspace root, optionally narrowed to a
- * single file via `--match-path`. Emits progress to the notification
- * area and surfaces stderr on failure via an error message + the
- * Output panel so users aren't left guessing what went wrong.
+ * single file by passing its relative path as a positional argument.
+ *
+ * Note: `--match-path` is a `forge test` flag, **not** a `forge build`
+ * flag — `forge build` expects positional paths. Passing
+ * `--match-path` here fails with "unexpected argument". Forge
+ * resolves positional paths by searching the configured source
+ * trees, so passing the path relative to the workspace root works
+ * for sources laid out under `src/` or `contracts/`.
+ *
+ * Emits progress to the notification area and surfaces stderr on
+ * failure via an error message + the Output panel so users aren't
+ * left guessing what went wrong.
  *
  * Returns `true` when the build succeeded, `false` otherwise.
  */
@@ -201,7 +210,7 @@ async function ensureCompiled(
   const forgePath = config.get<string>("foundryPath") || "forge";
 
   const args = targetFile
-    ? ["build", "--match-path", path.relative(workspaceRoot, targetFile)]
+    ? ["build", path.relative(workspaceRoot, targetFile)]
     : ["build"];
   const title = targetFile
     ? `Compiling ${path.basename(targetFile)} for subgraph scaffold…`

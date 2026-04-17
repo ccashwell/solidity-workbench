@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`forge build --match-path` was invalid** — subgraph auto-compile
+  emitted `forge build --match-path <file>`, but `--match-path` is a
+  `forge test` flag; `forge build` expects positional path arguments.
+  Switched to `forge build <relative-path>`, which forge resolves
+  against the configured `src/` / `contracts/` trees.
+- **Word-at-cursor highlighting no longer leaks into comments and
+  strings.** Without a `DocumentHighlightProvider`, VSCode falls back
+  to a regex-based highlighter that lights up every textual match of
+  the cursor's word — including inside `///` natspec comments, `//`
+  line comments, block comments, and string literals. The visible
+  symptom was an identifier-styled "overlay" applied to ordinary
+  prose inside comment blocks. New `DocumentHighlightProvider` routes
+  highlights through the existing comment- and string-aware
+  `ReferenceIndex`, scoped to the current file. 7 new regression
+  tests cover the comment, line-comment, and string-literal cases
+  plus whitespace and multi-file isolation.
+
+### Added
+
+- **Code lens: error selectors.** Custom errors now get a
+  `selector: 0x…` code lens identical in shape to the function
+  selector lens — clicking copies the 4-byte selector to the
+  clipboard. Contract-level and file-level (global) errors are both
+  covered. `SolcBridge` now extracts error selectors from the ABI on
+  each `forge build` and caches them for accurate struct / UDVT
+  parameter types; cold-cache and pre-build states fall back to
+  local keccak over the parser-level canonical signature. 4 new
+  regression tests lock in zero-arg, primitive, file-level, and
+  multi-error cases.
+
 ### Added (third production-readiness sweep — P3 landings)
 
 - **Trigram-indexed fuzzy workspace symbols.** New
