@@ -204,6 +204,10 @@
         "title": "Solidity Workbench: Run Aderyn Analysis"
       },
       {
+        "command": "solidity-workbench.indexer.scaffold",
+        "title": "Solidity Workbench: Generate Indexer Scaffold (Graph / Ponder / Envio)"
+      },
+      {
         "command": "solidity-workbench.subgraph.scaffold",
         "title": "Solidity Workbench: Generate Subgraph Scaffold"
       },

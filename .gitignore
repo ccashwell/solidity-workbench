@@ -1,6 +1,15 @@
 node_modules/
 dist/
 out/
+# Forge's build cache, populated whenever `forge build` runs at the
+# repo root (e.g. the indexer scaffold's auto-compile when the active
+# project root IS the repo root).
+cache/
+# Indexer scaffolds written by the `indexer.scaffold` / `subgraph.scaffold`
+# command. The generator is pure — we don't track its output.
+/subgraph/
+/ponder/
+/envio/
 *.vsix
 .vscode-test/
 *.tsbuildinfo

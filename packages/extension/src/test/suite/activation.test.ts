@@ -59,6 +59,7 @@ describe("Extension activation", () => {
       "solidity-workbench.script.simulate",
       "solidity-workbench.slither",
       "solidity-workbench.aderyn",
+      "solidity-workbench.indexer.scaffold",
       "solidity-workbench.subgraph.scaffold",
       // Client-side shim invoked by code lenses.
       "solidity-workbench.findReferencesAt",

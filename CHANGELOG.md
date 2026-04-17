@@ -28,6 +28,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Indexer scaffolds beyond Graph Protocol.** The subgraph scaffold
+  generator now has two peers in `@solidity-workbench/common`:
+  - `generatePonderScaffold` — emits `ponder.config.ts`,
+    `ponder.schema.ts` (Drizzle `onchainTable` entries), an
+    `src/index.ts` with `ponder.on` handlers, an
+    `abis/<Contract>Abi.ts` TypeScript `as const` module, plus
+    `package.json`, `.env.example`, and a brief README. Column
+    types map Solidity → Drizzle (`address` → `t.hex()`, `uintN`
+    → `t.bigint()`, arrays → `.array()`, tuples → `t.json()` with
+    TODO). Chain ids auto-resolve from the network slug.
+  - `generateEnvioScaffold` — emits `config.yaml`, `schema.graphql`,
+    `src/EventHandlers.ts` with `<Contract>.<Event>.handler`
+    registrations, plus `package.json`, `.env.example`, and README.
+    Event signatures drop the `indexed` keyword (Envio infers it
+    from the ABI), id derivation uses `chainId_blockNumber_logIndex`
+    for cross-chain uniqueness.
+  Shared ABI / event-signature / type-mapping helpers now live in
+  `indexer-shared.ts` so all three generators stay in lockstep.
+  New command `solidity-workbench.indexer.scaffold` prompts for a
+  backend (Graph / Ponder / Envio), shares the contract picker,
+  auto-compile, and prompt flow with the legacy subgraph command
+  (which stays as a direct shortcut to the subgraph backend).
+  Ponder and Envio generators each get 10+ unit tests
+  (manifest shape, type mapping, tuple warnings, unnamed params,
+  empty-ABI stub, package.json sanity) — server test count
+  263 → 282.
+
 - **Code lens: error selectors.** Custom errors now get a
   `selector: 0x…` code lens identical in shape to the function
   selector lens — clicking copies the 4-byte selector to the

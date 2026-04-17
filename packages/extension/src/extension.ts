@@ -11,7 +11,7 @@ import { registerAnvilCommands } from "./commands/anvil.js";
 import { registerCastCommands } from "./commands/cast.js";
 import { registerScriptCommands } from "./commands/script.js";
 import { registerDeployCommands } from "./commands/deploy.js";
-import { registerSubgraphCommand } from "./commands/subgraph.js";
+import { registerIndexerCommands } from "./commands/indexer.js";
 import { FoundryTestProvider } from "./test-explorer/test-provider.js";
 import { GasProfilerProvider } from "./views/gas-profiler.js";
 import { CoverageProvider } from "./views/coverage.js";
@@ -76,7 +76,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerCastCommands(context);
   registerScriptCommands(context);
   registerDeployCommands(context);
-  registerSubgraphCommand(context);
+  registerIndexerCommands(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("solidity-workbench.restartServer", async () => {
