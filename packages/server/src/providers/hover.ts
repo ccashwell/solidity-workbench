@@ -1,5 +1,5 @@
 import type { Hover, Position } from "vscode-languageserver/node.js";
-import { MarkupContent, MarkupKind } from "vscode-languageserver/node.js";
+import { MarkupKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { NatspecComment, SolSymbol } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
@@ -41,6 +41,17 @@ export class HoverProvider {
     const word = this.parser.getWordAtPosition(text, position.line, position.character);
     if (!word) return null;
 
+    // Dotted access `Receiver.member` is handled BEFORE we consult the
+    // global symbol index. Without this short-circuit, hovering the
+    // `unwrap` in `Currency.unwrap(x)` could surface an unrelated
+    // `IWstETH.unwrap(uint256)` simply because they share a name. When
+    // the receiver is identified but the member can't be found on it,
+    // we return `null` — no hover is better than a misleading one.
+    const dotted = this.getDottedAccessAtPosition(text, position);
+    if (dotted && dotted.member === word) {
+      return this.resolveDottedHover(dotted.receiver, dotted.member);
+    }
+
     const builtinHover = this.getBuiltinHover(word);
     if (builtinHover) return builtinHover;
 
@@ -71,6 +82,168 @@ export class HoverProvider {
     if (!sym) sym = symbols.find((s) => s.filePath === document.uri) ?? symbols[0];
 
     return this.buildHover(sym);
+  }
+
+  /**
+   * When the cursor is on `member` in a `Receiver.member` expression,
+   * resolve the hover through the receiver's type rather than through
+   * the global name lookup. This prevents the classic "two unrelated
+   * contracts happen to share a method name" misresolution.
+   *
+   * Resolution order:
+   *   1. Receiver is a user-defined value type (UDVT): the only valid
+   *      members are the built-in `wrap` / `unwrap`; return a synthetic
+   *      hover for those or `null` for anything else.
+   *   2. Receiver is a contract / interface / library: walk the `is`
+   *      inheritance chain and look for a function, state variable,
+   *      event, error, struct, or enum with the requested name.
+   *   3. Receiver is a struct: search its members.
+   *
+   * Returns `null` (not a global fallback) when the receiver is
+   * identified but the member can't be located — surfacing the wrong
+   * symbol is worse than surfacing no symbol.
+   */
+  private resolveDottedHover(receiver: string, member: string): Hover | null {
+    const receiverSymbols = this.symbolIndex.findSymbols(receiver);
+    if (receiverSymbols.length === 0) return null;
+
+    // UDVT builtins: `wrap(underlying) -> UDVT`, `unwrap(UDVT) -> underlying`.
+    const udvt = receiverSymbols.find((s) => s.kind === "userDefinedValueType");
+    if (udvt) {
+      return this.getUdvtBuiltinHover(udvt, member);
+    }
+
+    for (const receiverSym of receiverSymbols) {
+      if (receiverSym.kind === "contract" || receiverSym.kind === "interface") {
+        const hit = this.findMemberInInheritanceChain(receiver, member);
+        if (hit) return this.buildHover(hit);
+      } else if (receiverSym.kind === "library") {
+        const hit = this.findMemberInContract(receiver, member);
+        if (hit) return this.buildHover(hit);
+      } else if (receiverSym.kind === "struct") {
+        const hit = this.findStructMember(receiverSym, member);
+        if (hit) return hit;
+      }
+    }
+
+    return null;
+  }
+
+  private findMemberInInheritanceChain(receiver: string, member: string): SolSymbol | null {
+    const chain = this.symbolIndex.getInheritanceChain(receiver);
+    for (const contract of chain) {
+      const sym = this.lookupMember(contract.name, contract, member);
+      if (sym) return sym;
+    }
+    return null;
+  }
+
+  private findMemberInContract(receiver: string, member: string): SolSymbol | null {
+    const entry = this.symbolIndex.getContract(receiver);
+    if (!entry) return null;
+    return this.lookupMember(entry.contract.name, entry.contract, member);
+  }
+
+  /**
+   * Search one contract/library's own declared members (NOT inherited)
+   * and return a matching symbol-index entry for the member name. We
+   * round-trip through the symbol index so the returned `SolSymbol`
+   * has a populated `natspec`, `detail`, and `containerName`.
+   */
+  private lookupMember(
+    containerName: string,
+    contract: { functions: { name: string | null }[];
+                stateVariables: { name: string }[];
+                events: { name: string }[];
+                errors: { name: string }[];
+                structs: { name: string }[];
+                enums: { name: string }[] },
+    member: string,
+  ): SolSymbol | null {
+    const hasMember =
+      contract.functions.some((f) => f.name === member) ||
+      contract.stateVariables.some((v) => v.name === member) ||
+      contract.events.some((e) => e.name === member) ||
+      contract.errors.some((e) => e.name === member) ||
+      contract.structs.some((s) => s.name === member) ||
+      contract.enums.some((e) => e.name === member);
+    if (!hasMember) return null;
+
+    const candidates = this.symbolIndex.findSymbols(member);
+    return candidates.find((s) => s.containerName === containerName) ?? null;
+  }
+
+  private findStructMember(structSym: SolSymbol, member: string): Hover | null {
+    // Struct members aren't individually registered in the symbol index
+    // today, so emit a best-effort synthetic hover that at least says
+    // "this is a member of struct X".
+    return {
+      contents: {
+        kind: MarkupKind.Markdown,
+        value: `\`\`\`solidity\n${structSym.name}.${member}\n\`\`\`\n\n*Struct member of* \`${structSym.name}\``,
+      },
+    };
+  }
+
+  private getUdvtBuiltinHover(udvt: SolSymbol, member: string): Hover | null {
+    const name = udvt.name;
+    const underlying = udvt.detail ?? "underlying";
+    if (member === "wrap") {
+      return {
+        contents: {
+          kind: MarkupKind.Markdown,
+          value:
+            `\`\`\`solidity\nfunction ${name}.wrap(${underlying}) pure returns (${name})\n\`\`\`\n\n` +
+            `Implicit converter from the underlying type \`${underlying}\` to the user-defined value type \`${name}\`. No runtime cost; identity at the EVM level.`,
+        },
+      };
+    }
+    if (member === "unwrap") {
+      return {
+        contents: {
+          kind: MarkupKind.Markdown,
+          value:
+            `\`\`\`solidity\nfunction ${name}.unwrap(${name}) pure returns (${underlying})\n\`\`\`\n\n` +
+            `Implicit converter from the user-defined value type \`${name}\` to its underlying type \`${underlying}\`. No runtime cost; identity at the EVM level.`,
+        },
+      };
+    }
+    // UDVTs only expose wrap/unwrap; anything else is a type error.
+    return null;
+  }
+
+  /**
+   * Detect a dotted access of the form `Receiver.member` where the
+   * cursor is on the `member` side. Returns the receiver identifier
+   * and the member identifier, or `null` if the cursor isn't on the
+   * right-hand side of a dotted access.
+   */
+  private getDottedAccessAtPosition(
+    text: string,
+    position: Position,
+  ): { receiver: string; member: string } | null {
+    const line = text.split("\n")[position.line] ?? "";
+    // Walk backward from the cursor through identifier chars to find
+    // the start of the member, then require the preceding char to be
+    // a dot.
+    let memberStart = position.character;
+    while (memberStart > 0 && /[\w$]/.test(line[memberStart - 1])) memberStart--;
+    if (memberStart === 0 || line[memberStart - 1] !== ".") return null;
+
+    let receiverEnd = memberStart - 1;
+    let receiverStart = receiverEnd;
+    while (receiverStart > 0 && /[\w$]/.test(line[receiverStart - 1])) receiverStart--;
+    if (receiverStart === receiverEnd) return null;
+
+    // Walk forward to capture the full member identifier (cursor may
+    // be in the middle of it).
+    let memberEnd = position.character;
+    while (memberEnd < line.length && /[\w$]/.test(line[memberEnd])) memberEnd++;
+
+    const receiver = line.slice(receiverStart, receiverEnd);
+    const member = line.slice(memberStart, memberEnd);
+    if (!receiver || !member) return null;
+    return { receiver, member };
   }
 
   /**
@@ -226,20 +399,20 @@ export class HoverProvider {
     };
   }
 
+  /**
+   * Hover for Solidity elementary types. Rather than hand-maintaining
+   * 65+ entries (uint8..uint256, int8..int256, bytes1..bytes32), we
+   * recognise the family programmatically so every legal variant gets
+   * the same quality of documentation.
+   *
+   * See https://docs.soliditylang.org/en/latest/types.html#value-types
+   * for the complete list. `fixed` / `ufixed` are reserved but not yet
+   * implemented by the compiler; we still emit a hover so users who
+   * write them get a pointer to why the code won't compile.
+   */
   private getTypeHover(word: string): Hover | null {
-    const types: Record<string, string> = {
-      address: "`address` — 20-byte Ethereum address. Use `address payable` for transfer/send.",
-      bool: "`bool` — Boolean value (`true` or `false`)",
-      string: "`string` — Dynamically-sized UTF-8 string",
-      bytes: "`bytes` — Dynamically-sized byte array",
-      uint256: "`uint256` — Unsigned 256-bit integer (0 to 2^256 - 1)",
-      int256: "`int256` — Signed 256-bit integer (-2^255 to 2^255 - 1)",
-      bytes32: "`bytes32` — Fixed-size 32-byte array",
-    };
-
-    const doc = types[word];
+    const doc = describeElementaryType(word);
     if (!doc) return null;
-
     return {
       contents: {
         kind: MarkupKind.Markdown,
@@ -247,4 +420,75 @@ export class HoverProvider {
       },
     };
   }
+}
+
+function describeElementaryType(word: string): string | null {
+  if (word === "address") {
+    return "```solidity\naddress\n```\n20-byte Ethereum address. Holds a `balance` and can receive Ether when typed as `address payable`.";
+  }
+  if (word === "bool") {
+    return "```solidity\nbool\n```\nBoolean value — either `true` or `false`.";
+  }
+  if (word === "string") {
+    return "```solidity\nstring\n```\nDynamically-sized UTF-8-encoded string. Equal to a `bytes` array without fixed-length access.";
+  }
+  if (word === "bytes") {
+    return "```solidity\nbytes\n```\nDynamically-sized byte array. Cheaper than `byte[]` because elements are tightly packed.";
+  }
+  if (word === "fixed" || word === "ufixed") {
+    return `\`\`\`solidity\n${word}\n\`\`\`\nFixed-point decimal number. Reserved by the language but **not yet implemented** by the compiler — you can declare variables of this type but cannot assign to them.`;
+  }
+
+  // uint8, uint16, ..., uint256 (step 8). `uint` is an alias for uint256.
+  if (word === "uint" || /^uint(\d+)$/.test(word)) {
+    const bits = word === "uint" ? 256 : Number(word.slice(4));
+    if (bits >= 8 && bits <= 256 && bits % 8 === 0) {
+      const alias = word === "uint" ? ` (alias for \`uint256\`)` : "";
+      return (
+        "```solidity\n" +
+        word +
+        "\n```\n" +
+        `Unsigned ${bits}-bit integer${alias}. Range: \`0\` to \`2**${bits} - 1\`. Overflow reverts under Solidity 0.8+ unless inside an \`unchecked { ... }\` block.`
+      );
+    }
+  }
+
+  // int8, int16, ..., int256 (step 8). `int` is an alias for int256.
+  if (word === "int" || /^int(\d+)$/.test(word)) {
+    const bits = word === "int" ? 256 : Number(word.slice(3));
+    if (bits >= 8 && bits <= 256 && bits % 8 === 0) {
+      const alias = word === "int" ? ` (alias for \`int256\`)` : "";
+      return (
+        "```solidity\n" +
+        word +
+        "\n```\n" +
+        `Signed ${bits}-bit integer${alias}. Range: \`-2**${bits - 1}\` to \`2**${bits - 1} - 1\`. Overflow reverts under Solidity 0.8+ unless inside an \`unchecked { ... }\` block.`
+      );
+    }
+  }
+
+  // bytes1, bytes2, ..., bytes32. `byte` is the deprecated alias for bytes1.
+  if (word === "byte" || /^bytes(\d+)$/.test(word)) {
+    const size = word === "byte" ? 1 : Number(word.slice(5));
+    if (size >= 1 && size <= 32) {
+      const alias = word === "byte" ? ` — **deprecated** alias for \`bytes1\`` : "";
+      return (
+        "```solidity\n" +
+        word +
+        "\n```\n" +
+        `Fixed-size byte array of length ${size}${alias}. Indexable per-byte; cheaper than \`bytes\` when the size is known and ≤ 32.`
+      );
+    }
+  }
+
+  // ufixedMxN / fixedMxN — reserved but not implemented.
+  if (/^u?fixed\d+x\d+$/.test(word)) {
+    return (
+      "```solidity\n" +
+      word +
+      "\n```\nFixed-point decimal number. Reserved by the language but **not yet implemented** by the compiler — you can declare variables of this type but cannot assign to them."
+    );
+  }
+
+  return null;
 }

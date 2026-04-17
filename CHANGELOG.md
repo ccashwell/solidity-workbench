@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Hover on dotted access no longer picks an unrelated same-named
+  function.** Hovering `Currency.unwrap(x)` could surface
+  `IWstETH.unwrap(uint256)` simply because both declared an `unwrap`
+  method — the hover fell through to a raw name lookup with no
+  receiver check. `HoverProvider` now detects the `Receiver.member`
+  pattern at the cursor, resolves the receiver through the symbol
+  index (contract / interface / library / struct / UDVT), and returns
+  only a member that actually belongs to that receiver. UDVTs
+  synthesise a hover for their implicit `wrap` / `unwrap` functions,
+  including the underlying type. When the receiver is identified but
+  the member can't be found on it we return `null` rather than
+  surfacing the wrong symbol.
+- **Hover now covers every elementary Solidity type.** Previously only
+  `address`, `bool`, `string`, `bytes`, `uint256`, `int256`, and
+  `bytes32` had a hover — hovering `uint8`, `uint128`, `int24`,
+  `bytes16`, etc. returned nothing. Replaced the static map with a
+  generator that recognises every legal width (`uint8` / `int8` …
+  `uint256` / `int256` in steps of 8, `bytes1` … `bytes32`, plus the
+  `uint` / `int` / `byte` aliases and the reserved `fixed` /
+  `ufixed(MxN)` syntax). 8 new regression tests lock the coverage in.
 - **"N references" code lens no longer throws "unexpected type" when
   clicked.** The lens was wired directly to VSCode's
   `editor.action.findReferences`, which requires a `vscode.Uri`
