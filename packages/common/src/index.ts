@@ -3,4 +3,7 @@ export * from "./foundry-config.js";
 export * from "./protocol.js";
 export * from "./lcov.js";
 export * from "./aderyn-report.js";
+export * from "./indexer-shared.js";
 export * from "./subgraph-scaffold.js";
+export * from "./ponder-scaffold.js";
+export * from "./envio-scaffold.js";
