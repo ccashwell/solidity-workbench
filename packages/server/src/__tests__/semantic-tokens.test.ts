@@ -132,6 +132,194 @@ describe("SemanticTokensProvider", () => {
     });
   });
 
+  describe("struct members", () => {
+    it("tokenizes user-defined member types and member names inside a struct", () => {
+      // Mirrors the real-world shape that was rendering as plain
+      // identifiers before the raw-AST rewrite: user-defined types
+      // (`PoolKey`, `MarketId`) and their member names (`poolKey`,
+      // `marketId`) both need semantic tokens.
+      const code = `contract C {
+    struct EscrowedPosition {
+        PoolKey poolKey;
+        int24 tickLower;
+        MarketId marketId;
+        address borrower;
+    }
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+
+      // struct name is tokenized as `struct`
+      assert.ok(
+        tokens.some((t) => t.type === "struct" && t.length === "EscrowedPosition".length),
+        `expected struct name token; got ${JSON.stringify(tokens)}`,
+      );
+
+      // user-defined member type references are tokenized as `type`
+      const typeTokens = tokens.filter((t) => t.type === "type");
+      assert.ok(
+        typeTokens.some((t) => t.length === "PoolKey".length),
+        `expected a \`type\` token for PoolKey; got ${JSON.stringify(typeTokens)}`,
+      );
+      assert.ok(
+        typeTokens.some((t) => t.length === "MarketId".length),
+        `expected a \`type\` token for MarketId; got ${JSON.stringify(typeTokens)}`,
+      );
+
+      // member names are tokenized as `property`
+      const memberNames = ["poolKey", "tickLower", "marketId", "borrower"];
+      const propertyLengths = new Set(
+        tokens.filter((t) => t.type === "property").map((t) => t.length),
+      );
+      for (const n of memberNames) {
+        assert.ok(
+          propertyLengths.has(n.length),
+          `expected a property token with length ${n.length} (for ${n}); got ${JSON.stringify([...propertyLengths])}`,
+        );
+      }
+
+      // elementary types (int24, address) must NOT be emitted as semantic
+      // `type` tokens — TextMate handles primitives.
+      assert.ok(
+        !typeTokens.some((t) => t.length === "int24".length && t.char >= 0),
+        "elementary type int24 should not produce a `type` token",
+      );
+    });
+  });
+
+  describe("event / error / function parameters", () => {
+    it("tokenizes event parameter names and user-defined parameter types", () => {
+      const code = `interface I {
+    event Transfer(address indexed from, address indexed to, uint256 value);
+    event Custom(MyStruct indexed s, MyType v);
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+
+      const paramTokens = tokens.filter((t) => t.type === "parameter");
+      const paramLengths = new Set(paramTokens.map((t) => t.length));
+      for (const n of ["from", "to", "value", "s", "v"]) {
+        assert.ok(
+          paramLengths.has(n.length),
+          `expected a parameter token with length ${n.length} (for ${n}); got ${JSON.stringify([...paramLengths])}`,
+        );
+      }
+
+      const typeTokens = tokens.filter((t) => t.type === "type");
+      assert.ok(
+        typeTokens.some((t) => t.length === "MyStruct".length),
+        "expected a `type` token for MyStruct",
+      );
+      assert.ok(
+        typeTokens.some((t) => t.length === "MyType".length),
+        "expected a `type` token for MyType",
+      );
+    });
+
+    it("tokenizes function parameter names and return-type references", () => {
+      const code = `contract C {
+    function quote(MarketId id, uint256 amount) external view returns (Quote memory q) {}
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+
+      const paramLengths = new Set(
+        tokens.filter((t) => t.type === "parameter").map((t) => t.length),
+      );
+      for (const n of ["id", "amount", "q"]) {
+        assert.ok(
+          paramLengths.has(n.length),
+          `expected a parameter token for ${n}; got ${JSON.stringify([...paramLengths])}`,
+        );
+      }
+
+      const typeLengths = tokens.filter((t) => t.type === "type").map((t) => t.length);
+      assert.ok(typeLengths.includes("MarketId".length), "expected a `type` token for MarketId");
+      assert.ok(typeLengths.includes("Quote".length), "expected a `type` token for Quote");
+    });
+  });
+
+  describe("user-defined types as type references", () => {
+    it("tokenizes base contracts in `is A, B` as type references", () => {
+      const code = `interface IBase {}
+abstract contract Mixin {}
+contract Foo is IBase, Mixin { uint256 public x; }`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+
+      const typeLengths = tokens.filter((t) => t.type === "type").map((t) => t.length);
+      assert.ok(typeLengths.includes("IBase".length), "expected a `type` token for IBase");
+      assert.ok(typeLengths.includes("Mixin".length), "expected a `type` token for Mixin");
+    });
+
+    it("tokenizes a user-defined value type declaration and its references", () => {
+      const code = `type MarketId is uint256;
+contract C {
+    function f(MarketId id) external pure returns (MarketId) { return id; }
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+
+      const typeTokens = tokens.filter((t) => t.type === "type");
+      // Declaration + two reference sites (parameter type + return type)
+      const marketIdCount = typeTokens.filter((t) => t.length === "MarketId".length).length;
+      assert.ok(
+        marketIdCount >= 3,
+        `expected at least 3 MarketId \`type\` tokens (decl + param + return); got ${marketIdCount}`,
+      );
+    });
+
+    it("tokenizes a user-defined type referenced inside a function body", () => {
+      const code = `contract C {
+    struct Point { uint256 x; uint256 y; }
+    function f() external pure returns (uint256) {
+        Point memory p = Point(1, 2);
+        return p.x;
+    }
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+
+      // Reference to Point in the body should receive a `struct`
+      // semantic token (we register structs in nameKinds).
+      const structTokens = tokens.filter(
+        (t) => t.type === "struct" && t.length === "Point".length,
+      );
+      assert.ok(
+        structTokens.length >= 2,
+        `expected at least 2 struct tokens for Point (decl + body ref); got ${structTokens.length}`,
+      );
+    });
+  });
+
+  describe("mapping and array element types", () => {
+    it("tokenizes the user-defined value type of a mapping", () => {
+      const code = `contract C {
+    mapping(address => UserData) public users;
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+
+      assert.ok(
+        tokens.some((t) => t.type === "type" && t.length === "UserData".length),
+        "expected a `type` token for UserData inside the mapping value type",
+      );
+    });
+
+    it("tokenizes the user-defined element type of an array", () => {
+      const code = `contract C {
+    Order[] public orders;
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+
+      assert.ok(
+        tokens.some((t) => t.type === "type" && t.length === "Order".length),
+        "expected a `type` token for Order[] element type",
+      );
+    });
+  });
+
   describe("range request", () => {
     it("returns fewer tokens when given a sub-range that excludes declarations", () => {
       const code = `contract C {

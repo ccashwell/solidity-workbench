@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Semantic tokens now cover struct members, event / error / function
+  parameters, state variable types, base contracts, user-defined value
+  types, and cross-body references to user-defined types.** The
+  previous implementation only tokenized declaration names; struct
+  bodies like `struct EscrowedPosition { PoolKey poolKey; MarketId
+  marketId; }` rendered with no type/field colouring at all. The
+  `SemanticTokensProvider.collectDeclarationTokens` implementation now
+  walks the raw `@solidity-parser/parser` AST so every sub-node's
+  precise `loc` is used, including `.identifier.loc` on variable
+  declarations and `.typeName.loc` on user-defined type references.
+  `buildNameKinds` also registers contracts, interfaces, structs,
+  enums, UDVTs, and errors so function-body references receive the
+  correct `type` / `struct` / `enum` / `interface` colour. 8 new
+  regression tests cover the cases the old provider missed.
+
 ### Added (second production-readiness sweep)
 
 - **AST-based linter rules**. `reentrancy`, `missing-event`,
