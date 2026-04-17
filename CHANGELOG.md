@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Test Explorer ran `forge test` but never displayed any results.**
+  Four compounding bugs, all fixed together:
+    - stdout was split by `\n` and each line parsed as JSON. Real
+      forge `--json` output is a single JSON blob on one line, so
+      only stray valid-JSON lines ever parsed — typically nothing.
+    - `data.test_results` was read one level too shallow. The actual
+      shape is `{ "<file>:<Contract>": { test_results: {...} } }`,
+      so the lookup was always `undefined`.
+    - `findChildByName` compared the forge signature key
+      (`test_Increment()`) against the TestItem label
+      (`test_Increment`), so child matching always fell through to
+      the parent container.
+    - forge ran with `cwd = workspaceFolders[0]` regardless of where
+      the test actually lived. In a monorepo where the workspace
+      root sits above the Foundry project (the common case for this
+      repo's `test/fixtures/sample-project/`), forge picked up the
+      wrong `foundry.toml` (or none at all) and emitted an empty
+      result set, producing VSCode's "test run did not record any
+      output" message.
+  Now the parser consumes the whole blob as one JSON object, walks
+  both levels of the forge shape, matches children by stripping the
+  signature suffix (via `stripForgeTestSignature`), parses forge's
+  human-readable duration strings via `parseForgeDurationMs`, and
+  resolves the correct `cwd` by walking up from each test file to
+  the nearest `foundry.toml` via a new `findForgeRoot` helper.
+  Unknown / empty forge responses now resolve the parent item as
+  `skipped` instead of leaving it in the started state forever.
+  Added `stripForgeTestSignature`, `parseForgeDurationMs`, and
+  `findForgeRoot` helpers to `@solidity-workbench/common/foundry-cli.ts`,
+  with 13 unit tests across the real forge output shapes and
+  nested-project scenarios (including an outer stub
+  `foundry.toml` that must NOT shadow the real project config).
 - **`forge test` verbosity flag was malformed.** Every command that
   invoked `forge test` was building the verbosity flag as
   `"-".repeat(n) + "v"` — producing `--v` for the default

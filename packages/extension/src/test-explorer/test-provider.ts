@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { LanguageClient } from "vscode-languageclient/node";
@@ -7,6 +8,9 @@ import {
   type ListTestsParams,
   type ListTestsResult,
   type TestContractInfo,
+  findForgeRoot,
+  parseForgeDurationMs,
+  stripForgeTestSignature,
 } from "@solidity-workbench/common";
 import { forgeVerbosityFlag } from "../config.js";
 
@@ -194,8 +198,33 @@ export class FoundryTestProvider {
       run.started(item);
 
       try {
-        const args = ["test", "--json"];
+        // Each test runs in its own Foundry project root — the directory
+        // containing the nearest `foundry.toml` walking up from the test
+        // file. This lets the Test Explorer work in monorepos where the
+        // VSCode workspace root sits above the actual Foundry project
+        // (e.g. this repo's `test/fixtures/sample-project/`), and also
+        // across workspaces with several parallel Foundry projects.
+        const testFilePath = item.uri?.fsPath;
+        if (!testFilePath) {
+          run.failed(
+            item,
+            new vscode.TestMessage("Test item has no file URI; cannot locate its Foundry project."),
+          );
+          continue;
+        }
+        const forgeRoot = findForgeRoot(testFilePath);
+        if (!forgeRoot) {
+          run.failed(
+            item,
+            new vscode.TestMessage(
+              `No foundry.toml found walking up from ${testFilePath}. Is this test inside a Foundry project?`,
+            ),
+          );
+          continue;
+        }
+        const matchPath = path.relative(forgeRoot, testFilePath);
 
+        const args = ["test", "--json"];
         const parts = item.id.split("::");
         if (parts.length >= 3) {
           args.push("--match-test", parts[2]);
@@ -203,28 +232,28 @@ export class FoundryTestProvider {
         } else if (parts.length >= 2) {
           args.push("--match-contract", parts[1]);
         }
-        if (parts[0]) {
-          args.push("--match-path", parts[0]);
-        }
+        args.push("--match-path", matchPath);
 
         const verbosityFlag = forgeVerbosityFlag(verbosity);
         if (verbosityFlag) args.push(verbosityFlag);
 
-        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-        if (!workspaceFolder) continue;
-
         const result = await execFileAsync(forgePath, args, {
-          cwd: workspaceFolder.uri.fsPath,
+          cwd: forgeRoot,
           maxBuffer: 10 * 1024 * 1024,
           timeout: 120_000,
         });
 
         this.processTestOutput(run, item, result.stdout);
-      } catch (err: any) {
-        if (err.stdout) {
-          this.processTestOutput(run, item, err.stdout);
+      } catch (err: unknown) {
+        const e = err as { stdout?: string; stderr?: string; message?: string };
+        if (typeof e.stdout === "string" && e.stdout.length > 0) {
+          this.processTestOutput(run, item, e.stdout);
         } else {
-          run.failed(item, new vscode.TestMessage(err.message));
+          // Surface stderr when forge failed before producing any
+          // stdout (build error, binary missing, etc.) so the user
+          // sees why rather than an opaque "no output".
+          const detail = (e.stderr || e.message || "forge test failed").trim();
+          run.failed(item, new vscode.TestMessage(detail));
         }
       }
     }
@@ -250,46 +279,123 @@ export class FoundryTestProvider {
     }
   }
 
+  /**
+   * Parse a `forge test --json` payload and drive the TestRun.
+   *
+   * The output shape is a single JSON object (one line, no newlines
+   * inside) keyed by `<file>:<Contract>`:
+   *
+   *   {
+   *     "test/Counter.t.sol:CounterTest": {
+   *       "duration": "2ms 860µs 417ns",
+   *       "test_results": {
+   *         "test_Increment()": { "status": "Success", ... },
+   *         "testFuzz_IncrementBy(uint256)": { "status": "Failure", "counterexample": {...}, ... }
+   *       },
+   *       "warnings": []
+   *     }
+   *   }
+   *
+   * An earlier implementation split the output line-by-line and read
+   * `data.test_results` one level too shallow — both wrong against
+   * real forge output, so nothing ever got reported back to the Test
+   * Explorer. The pipeline now parses the whole blob and walks both
+   * levels.
+   */
   private processTestOutput(run: vscode.TestRun, item: vscode.TestItem, stdout: string): void {
+    const trimmed = stdout.trim();
+    if (!trimmed) {
+      run.failed(item, new vscode.TestMessage("forge test produced no output"));
+      return;
+    }
+
+    let data: unknown;
     try {
-      const lines = stdout.trim().split("\n");
-      for (const line of lines) {
-        try {
-          const data = JSON.parse(line);
-          this.processTestJson(run, item, data);
-        } catch {
-          /* Not JSON, skip */
-        }
-      }
+      data = JSON.parse(trimmed);
     } catch {
-      run.passed(item);
+      // Forge failed to produce a JSON blob — typically because the
+      // build crashed before any test ran. Surface the raw text so the
+      // user has something to work with.
+      run.failed(
+        item,
+        new vscode.TestMessage(
+          `forge test did not emit JSON. Raw output:\n\n${trimmed.slice(0, 4_000)}`,
+        ),
+      );
+      return;
+    }
+    if (!data || typeof data !== "object") {
+      run.failed(item, new vscode.TestMessage("forge test JSON was not an object"));
+      return;
+    }
+
+    let reportedAny = false;
+    for (const [, suite] of Object.entries(data as Record<string, unknown>)) {
+      if (!suite || typeof suite !== "object") continue;
+      const s = suite as { test_results?: Record<string, unknown> };
+      if (!s.test_results || typeof s.test_results !== "object") continue;
+      reportedAny ||= this.reportSuiteResults(run, item, s.test_results);
+    }
+
+    if (!reportedAny) {
+      // JSON parsed but contained no test_results for us — mark the
+      // parent as skipped rather than leaving it in the started state
+      // forever, which is what produced the "run but nothing shows"
+      // symptom.
+      run.skipped(item);
     }
   }
 
-  private processTestJson(run: vscode.TestRun, parentItem: vscode.TestItem, data: any): void {
-    if (data.test_results) {
-      for (const [name, result] of Object.entries(data.test_results) as any) {
-        const childItem = this.findChildByName(parentItem, name) ?? parentItem;
+  private reportSuiteResults(
+    run: vscode.TestRun,
+    parentItem: vscode.TestItem,
+    testResults: Record<string, unknown>,
+  ): boolean {
+    let reportedAny = false;
+    for (const [rawName, raw] of Object.entries(testResults)) {
+      if (!raw || typeof raw !== "object") continue;
+      const result = raw as {
+        status?: string;
+        reason?: string | null;
+        counterexample?: unknown;
+        duration?: unknown;
+      };
 
-        if (result.status === "Success") {
-          run.passed(childItem, result.duration?.secs ? result.duration.secs * 1000 : undefined);
-        } else if (result.status === "Failure") {
-          const message = new vscode.TestMessage(result.reason ?? "Test failed");
-          if (result.counterexample) {
-            message.message += `\n\nCounterexample: ${JSON.stringify(result.counterexample)}`;
-          }
-          run.failed(childItem, message);
-        } else {
-          run.skipped(childItem);
+      const childItem = this.findChildByName(parentItem, rawName) ?? parentItem;
+      const durationMs = parseForgeDurationMs(result.duration);
+      reportedAny = true;
+
+      if (result.status === "Success") {
+        run.passed(childItem, durationMs);
+      } else if (result.status === "Failure") {
+        const lines = [result.reason ?? "Test failed"];
+        if (result.counterexample) {
+          lines.push("", `Counterexample: ${JSON.stringify(result.counterexample)}`);
         }
+        run.failed(childItem, new vscode.TestMessage(lines.join("\n")), durationMs);
+      } else {
+        // "Skipped", "Warning", or any future status we don't recognize.
+        run.skipped(childItem);
       }
     }
+    return reportedAny;
   }
 
-  private findChildByName(parent: vscode.TestItem, name: string): vscode.TestItem | undefined {
+  /**
+   * Forge emits test names as Solidity signatures including parens
+   * and param types — `test_Increment()`, `testFuzz_Bound(uint256)` —
+   * but our TestItem labels are the bare Solidity identifier
+   * (`test_Increment`, `testFuzz_Bound`). Compare both forms, and
+   * fall back to matching the id suffix for defensiveness.
+   */
+  private findChildByName(parent: vscode.TestItem, rawName: string): vscode.TestItem | undefined {
+    const bareName = stripForgeTestSignature(rawName);
     let found: vscode.TestItem | undefined;
     parent.children.forEach((child) => {
-      if (child.label === name || child.id.endsWith(`::${name}`)) {
+      if (found) return;
+      if (child.label === rawName || child.label === bareName) {
+        found = child;
+      } else if (child.id.endsWith(`::${rawName}`) || child.id.endsWith(`::${bareName}`)) {
         found = child;
       }
     });
