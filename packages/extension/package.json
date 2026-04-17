@@ -3,7 +3,7 @@
   "displayName": "Solidity Workbench",
   "description": "Modern Solidity IDE — Foundry-native LSP, test explorer, and static analysis",
   "version": "0.1.0",
-  "publisher": "uniswap",
+  "publisher": "ccashwell",
   "license": "MIT",
   "icon": "resources/icon.png",
   "galleryBanner": {
@@ -12,12 +12,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/uniswap/solidity-workbench.git"
+    "url": "https://github.com/ccashwell/solidity-workbench.git"
   },
   "bugs": {
-    "url": "https://github.com/uniswap/solidity-workbench/issues"
+    "url": "https://github.com/ccashwell/solidity-workbench/issues"
   },
-  "homepage": "https://github.com/uniswap/solidity-workbench#readme",
+  "homepage": "https://github.com/ccashwell/solidity-workbench#readme",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -341,10 +341,10 @@
   "scripts": {
     "build": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap && esbuild ../server/src/server.ts --bundle --outfile=dist/server.js --external:vscode --format=cjs --platform=node --sourcemap",
     "watch": "pnpm build --watch",
-    "package": "vsce package --no-dependencies",
+    "package": "node ../../scripts/prepare-vsix-files.mjs && vsce package --no-dependencies",
     "build:test": "tsc -p tsconfig.test.json",
     "test:e2e": "pnpm build && pnpm build:test && node ./dist/test/runTest.js",
-    "clean": "rm -rf dist *.tsbuildinfo"
+    "clean": "rm -rf dist *.tsbuildinfo README.md LICENSE CHANGELOG.md"
   },
   "dependencies": {
     "@solidity-workbench/common": "workspace:*",

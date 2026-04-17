@@ -8,3 +8,10 @@ out/
 coverage/
 .DS_Store
 .cursor/
+
+# Copied into the extension package by scripts/prepare-vsix-files.mjs
+# at packaging time so the VSIX picks them up. The authoritative copies
+# live at the repo root.
+/packages/extension/README.md
+/packages/extension/LICENSE
+/packages/extension/CHANGELOG.md

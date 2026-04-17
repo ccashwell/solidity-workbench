@@ -53,6 +53,13 @@ jobs:
           grep -q 'extension/dist/server.js' /tmp/vsix-listing.txt
           grep -q 'extension/dist/extension.js' /tmp/vsix-listing.txt
           grep -q 'extension/resources/icon.png' /tmp/vsix-listing.txt
+          grep -q 'extension/README.md' /tmp/vsix-listing.txt
+          grep -q 'extension/LICENSE' /tmp/vsix-listing.txt
+          grep -q 'extension/CHANGELOG.md' /tmp/vsix-listing.txt
+          if grep -q 'extension/dist/test/' /tmp/vsix-listing.txt; then
+            echo "::error::VSIX contains dist/test/ artifacts — check .vscodeignore"
+            exit 1
+          fi
 
       - name: Publish to VS Code Marketplace
         env:

@@ -7,8 +7,12 @@ node_modules/**
 .eslintrc*
 .prettierrc*
 tsconfig*.json
-**/*.map
 **/*.ts
-!dist/**/*.js
-!dist/**/*.js.map
+# E2E test output from `pnpm build:test`; not relevant to end users.
+dist/test/**
+# Keep the two esbuild source maps (extension.js.map, server.js.map)
+# for Marketplace symbolication; drop everything else.
+dist/**/*.map
+!dist/extension.js.map
+!dist/server.js.map
 *.vsix

@@ -120,7 +120,7 @@ jobs:
       - name: Package VSIX
         run: cd packages/extension && pnpm package
 
-      - name: Verify VSIX contains bundled LSP server and icon
+      - name: Verify VSIX contents
         run: |
           VSIX=$(ls packages/extension/*.vsix | head -n 1)
           echo "Inspecting $VSIX"
@@ -137,6 +137,22 @@ jobs:
             echo "::error::VSIX is missing extension icon (extension/resources/icon.png)"
             exit 1
           }
+          grep -q 'extension/README.md' /tmp/vsix-listing.txt || {
+            echo "::error::VSIX is missing README.md (Marketplace overview tab will be empty)"
+            exit 1
+          }
+          grep -q 'extension/LICENSE' /tmp/vsix-listing.txt || {
+            echo "::error::VSIX is missing LICENSE"
+            exit 1
+          }
+          grep -q 'extension/CHANGELOG.md' /tmp/vsix-listing.txt || {
+            echo "::error::VSIX is missing CHANGELOG.md"
+            exit 1
+          }
+          if grep -q 'extension/dist/test/' /tmp/vsix-listing.txt; then
+            echo "::error::VSIX contains dist/test/ artifacts — check .vscodeignore"
+            exit 1
+          fi
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
