@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **"N references" code lens no longer throws "unexpected type" when
+  clicked.** The lens was wired directly to VSCode's
+  `editor.action.findReferences`, which requires a `vscode.Uri`
+  instance, but LSP emits URIs as strings over the wire so the command
+  argument coercion failed. Route the lens through a new client-side
+  shim `solidity-workbench.findReferencesAt(uri, position)` that
+  parses the URI into a `vscode.Uri` before invoking the editor
+  command. 3 new regression tests cover the argument shape, the title
+  format, and omission when a symbol has no usages.
 - **Semantic tokens now cover struct members, event / error / function
   parameters, state variable types, base contracts, user-defined value
   types, and cross-body references to user-defined types.** The

@@ -82,6 +82,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
+  // Client-side shim for the "N references" code lens. LSP sends URIs
+  // over the wire as strings, but VSCode's `editor.action.findReferences`
+  // command expects a proper `vscode.Uri` instance (passing a string
+  // raises "unexpected type"). This shim converts the wire arguments
+  // into the types the editor command requires.
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "solidity-workbench.findReferencesAt",
+      async (uri: string, position: { line: number; character: number }) => {
+        if (typeof uri !== "string" || !position) return;
+        await vscode.commands.executeCommand(
+          "editor.action.findReferences",
+          vscode.Uri.parse(uri),
+          new vscode.Position(position.line, position.character),
+        );
+      },
+    ),
+  );
+
   // ── Test Explorer ─────────────────────────────────────────────────
 
   const testProvider = new FoundryTestProvider();

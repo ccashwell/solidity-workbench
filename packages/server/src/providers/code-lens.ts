@@ -56,7 +56,11 @@ export class CodeLensProvider {
 
     for (const contract of result.sourceUnit.contracts) {
       // Contract-level lens: reference count (omit if 0 usages).
-      const contractLens = this.createReferenceLens(contract.name, contract.nameRange);
+      const contractLens = this.createReferenceLens(
+        contract.name,
+        contract.nameRange,
+        document.uri,
+      );
       if (contractLens) lenses.push(contractLens);
 
       // Contract-level lens: interface compliance
@@ -111,7 +115,7 @@ export class CodeLensProvider {
 
         // Reference count lens for non-test functions (omit if 0 usages).
         if (!isTestFile && func.name) {
-          const funcLens = this.createReferenceLens(func.name, func.nameRange);
+          const funcLens = this.createReferenceLens(func.name, func.nameRange, document.uri);
           if (funcLens) lenses.push(funcLens);
         }
 
@@ -243,8 +247,19 @@ export class CodeLensProvider {
    *
    * Returns `null` when the symbol has no usages, so callers can omit the
    * lens entirely rather than showing a misleading "0 references".
+   *
+   * The lens is wired to our client-side shim command
+   * `solidity-workbench.findReferencesAt`, which converts the URI string
+   * (the wire format LSP uses) into a `vscode.Uri` before calling VSCode's
+   * `editor.action.findReferences`. Passing the LSP wire arguments
+   * directly to that VSCode command would fail with "unexpected type"
+   * because the latter expects a real `Uri` instance.
    */
-  private createReferenceLens(symbolName: string, range: Range): CodeLens | null {
+  private createReferenceLens(
+    symbolName: string,
+    range: Range,
+    documentUri: string,
+  ): CodeLens | null {
     const totalOccurrences = this.symbolIndex.referenceCount(symbolName);
     const declarationCount = this.symbolIndex.findSymbols(symbolName).length;
     const usageCount = Math.max(0, totalOccurrences - declarationCount);
@@ -255,8 +270,8 @@ export class CodeLensProvider {
       range,
       command: {
         title: usageCount === 1 ? "1 reference" : `${usageCount} references`,
-        command: "editor.action.findReferences",
-        arguments: [range.start],
+        command: "solidity-workbench.findReferencesAt",
+        arguments: [documentUri, range.start],
       },
     };
   }
