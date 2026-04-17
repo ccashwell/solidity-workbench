@@ -15,4 +15,4 @@
 - Foundry-native by design — no Hardhat/Truffle support; assumes `forge`, `cast`, `anvil`, `chisel` on PATH
 - Zero telemetry; LSP server never opens a network socket
 - License: MIT, author: Chris Cashwell
-- GitHub org: `uniswap/solidity-workbench`
+- GitHub org: `ccashwell/solidity-workbench`
