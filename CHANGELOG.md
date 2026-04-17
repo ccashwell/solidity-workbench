@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `out/*.sol/*.json`, prompts for network / address / start block,
   and writes the scaffold plus an ABI copy to
   `subgraph/<ContractName>/`. 16 unit tests cover the generator.
+  The command now auto-compiles on demand: if no artifacts exist
+  (fresh clone, clean working copy) or the active `.sol` file has
+  no matching artifact, it runs `forge build` (narrowed via
+  `--match-path` when a specific file is targeted) inside a progress
+  notification before falling through to the quick-pick, instead of
+  erroring out. Build failures surface the stderr in a dedicated
+  output channel with an "Open Output" button. The active file's
+  contract is also hoisted to the top of the pick list.
 - **Expanded E2E coverage.** Fixed the stale
   `uniswap.solidity-workbench` extension ID (publisher is
   `ccashwell`) in the activation smoke tests. Added LSP round-trip

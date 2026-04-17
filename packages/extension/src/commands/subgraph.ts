@@ -1,7 +1,11 @@
 import * as vscode from "vscode";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { generateSubgraphScaffold } from "@solidity-workbench/common";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * Command — **Generate Subgraph Scaffold**. Pick a compiled contract,
@@ -15,6 +19,14 @@ import { generateSubgraphScaffold } from "@solidity-workbench/common";
  * domain-specific. Most of the real work lives in the pure
  * `@solidity-workbench/common/subgraph-scaffold` module; this command
  * is the thin UI layer.
+ *
+ * Build behaviour:
+ *   - If the user fires the command with a `.sol` file open and no
+ *     artifact for that file exists yet, we invoke `forge build
+ *     --match-path <file>` in the background and then retry.
+ *   - If no artifacts exist at all, we run a full `forge build`.
+ *   - We never error out on a missing build — the command acts like
+ *     "scaffold this, compiling on demand if needed".
  */
 export function registerSubgraphCommand(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
@@ -25,27 +37,53 @@ export function registerSubgraphCommand(context: vscode.ExtensionContext): void 
         return;
       }
 
-      const artifacts = findArtifacts(workspaceFolder.uri.fsPath);
-      if (artifacts.length === 0) {
-        vscode.window.showErrorMessage(
-          "No compiled artifacts found under `out/**/*.json`. Run `forge build` first.",
-        );
-        return;
+      // `.sol` file active at invocation time — used both to bias the
+      // auto-build (--match-path <file>) and to pre-select the user's
+      // contract of interest in the quick-pick.
+      const activeSolFile = currentSolFilePath(workspaceFolder.uri.fsPath);
+
+      let artifacts = findArtifacts(workspaceFolder.uri.fsPath);
+      const needsBuild =
+        artifacts.length === 0 ||
+        (activeSolFile !== null && !hasArtifactForSource(artifacts, activeSolFile));
+
+      if (needsBuild) {
+        const ok = await ensureCompiled(workspaceFolder.uri.fsPath, activeSolFile);
+        if (!ok) return;
+        artifacts = findArtifacts(workspaceFolder.uri.fsPath);
+        if (artifacts.length === 0) {
+          vscode.window.showErrorMessage(
+            "forge build produced no artifacts under `out/`. Check the Output panel for compile errors.",
+          );
+          return;
+        }
       }
 
-      const pick = await vscode.window.showQuickPick(
-        artifacts.map((a) => ({
-          label: a.contractName,
-          description: a.sourceFile,
-          detail: `${a.events} event${a.events === 1 ? "" : "s"} in ABI`,
-          artifact: a,
-        })),
-        {
-          placeHolder: "Select a contract to generate a subgraph scaffold for",
-          matchOnDescription: true,
-          matchOnDetail: true,
-        },
-      );
+      const activeContractName = activeSolFile
+        ? path.basename(activeSolFile, ".sol")
+        : null;
+      const picks = artifacts.map((a) => ({
+        label: a.contractName,
+        description: a.sourceFile,
+        detail: `${a.events} event${a.events === 1 ? "" : "s"} in ABI`,
+        artifact: a,
+      }));
+      // Surface the active file's contract(s) at the top of the list
+      // when possible, so the user doesn't need to scroll to find
+      // the thing they almost certainly want.
+      if (activeContractName) {
+        picks.sort((a, b) => {
+          const aHit = a.artifact.contractName === activeContractName ? 0 : 1;
+          const bHit = b.artifact.contractName === activeContractName ? 0 : 1;
+          return aHit - bHit;
+        });
+      }
+
+      const pick = await vscode.window.showQuickPick(picks, {
+        placeHolder: "Select a contract to generate a subgraph scaffold for",
+        matchOnDescription: true,
+        matchOnDetail: true,
+      });
       if (!pick) return;
 
       const network =
@@ -114,6 +152,100 @@ export function registerSubgraphCommand(context: vscode.ExtensionContext): void 
       vscode.window.showInformationMessage(msg);
     }),
   );
+}
+
+// ── Build-on-demand ──────────────────────────────────────────────────
+
+/**
+ * Absolute path of the active editor's file if it's a Solidity source
+ * file inside the given workspace root; `null` otherwise. Test files
+ * and files outside the workspace are intentionally excluded — we
+ * don't want to accidentally point `forge build --match-path` at a
+ * transient buffer.
+ */
+function currentSolFilePath(workspaceRoot: string): string | null {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) return null;
+  if (editor.document.languageId !== "solidity") return null;
+  const uri = editor.document.uri;
+  if (uri.scheme !== "file") return null;
+  const fsPath = uri.fsPath;
+  const rel = path.relative(workspaceRoot, fsPath);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return null;
+  return fsPath;
+}
+
+/**
+ * True when `artifacts` contains an entry whose Forge-derived source
+ * file matches `sourceAbsPath`. Forge lays artifacts out as
+ * `out/<File>.sol/<Contract>.json`, so we compare by basename.
+ */
+function hasArtifactForSource(artifacts: ForgeArtifact[], sourceAbsPath: string): boolean {
+  const basename = path.basename(sourceAbsPath);
+  return artifacts.some((a) => path.basename(a.sourceFile) === basename);
+}
+
+/**
+ * Run `forge build` in the workspace root, optionally narrowed to a
+ * single file via `--match-path`. Emits progress to the notification
+ * area and surfaces stderr on failure via an error message + the
+ * Output panel so users aren't left guessing what went wrong.
+ *
+ * Returns `true` when the build succeeded, `false` otherwise.
+ */
+async function ensureCompiled(
+  workspaceRoot: string,
+  targetFile: string | null,
+): Promise<boolean> {
+  const config = vscode.workspace.getConfiguration("solidity-workbench");
+  const forgePath = config.get<string>("foundryPath") || "forge";
+
+  const args = targetFile
+    ? ["build", "--match-path", path.relative(workspaceRoot, targetFile)]
+    : ["build"];
+  const title = targetFile
+    ? `Compiling ${path.basename(targetFile)} for subgraph scaffold…`
+    : "Compiling project for subgraph scaffold…";
+
+  let ok = false;
+  await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title,
+      cancellable: false,
+    },
+    async () => {
+      try {
+        await execFileAsync(forgePath, args, {
+          cwd: workspaceRoot,
+          maxBuffer: 50 * 1024 * 1024,
+          timeout: 600_000,
+        });
+        ok = true;
+      } catch (err: unknown) {
+        const e = err as { stderr?: string; stdout?: string; message?: string };
+        const detail = (e.stderr || e.stdout || e.message || "unknown error").trim();
+        const channel = getOrCreateBuildChannel();
+        channel.appendLine(`forge ${args.join(" ")} failed:`);
+        channel.appendLine(detail);
+        const showOutput = "Show Output";
+        const pick = await vscode.window.showErrorMessage(
+          "forge build failed. Fix the compile errors and re-run `Generate Subgraph Scaffold`.",
+          showOutput,
+        );
+        if (pick === showOutput) channel.show();
+      }
+    },
+  );
+  return ok;
+}
+
+let buildChannel: vscode.OutputChannel | null = null;
+function getOrCreateBuildChannel(): vscode.OutputChannel {
+  if (!buildChannel) {
+    buildChannel = vscode.window.createOutputChannel("Solidity Workbench — Subgraph Build");
+  }
+  return buildChannel;
 }
 
 // ── Artifact discovery ────────────────────────────────────────────────
