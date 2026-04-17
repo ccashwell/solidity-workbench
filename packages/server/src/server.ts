@@ -34,6 +34,7 @@ import { ReferencesProvider } from "./providers/references.js";
 import { AutoImportProvider } from "./providers/auto-import.js";
 import { CallHierarchyProvider } from "./providers/call-hierarchy.js";
 import { TypeHierarchyProvider } from "./providers/type-hierarchy.js";
+import { DocumentHighlightProvider } from "./providers/document-highlight.js";
 import { SolcBridge } from "./compiler/solc-bridge.js";
 import { listTests } from "./providers/list-tests.js";
 import {
@@ -71,6 +72,7 @@ let referencesProvider: ReferencesProvider;
 let autoImportProvider: AutoImportProvider;
 let callHierarchyProvider: CallHierarchyProvider;
 let typeHierarchyProvider: TypeHierarchyProvider;
+let documentHighlightProvider: DocumentHighlightProvider;
 let solcBridge: SolcBridge;
 
 /**
@@ -134,6 +136,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   autoImportProvider = new AutoImportProvider(symbolIndex, workspaceManager, parser);
   callHierarchyProvider = new CallHierarchyProvider(symbolIndex, workspaceManager, parser);
   typeHierarchyProvider = new TypeHierarchyProvider(symbolIndex, parser);
+  documentHighlightProvider = new DocumentHighlightProvider(symbolIndex, parser);
   solcBridge = new SolcBridge(workspaceManager);
 
   // Make the type-resolved AST cache available to providers that want it
@@ -199,6 +202,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 
       callHierarchyProvider: true,
       typeHierarchyProvider: true,
+      documentHighlightProvider: true,
 
       workspace: {
         workspaceFolders: {
@@ -528,6 +532,15 @@ connection.languages.typeHierarchy.onSupertypes(async (params) => {
 
 connection.languages.typeHierarchy.onSubtypes(async (params) => {
   return typeHierarchyProvider.getSubtypes(params.item);
+});
+
+// ── Document Highlight ──────────────────────────────────────────────
+
+connection.onDocumentHighlight(async (params, token) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  if (token.isCancellationRequested) return [];
+  return documentHighlightProvider.provideDocumentHighlights(doc, params.position);
 });
 
 // ── Custom requests ─────────────────────────────────────────────────
