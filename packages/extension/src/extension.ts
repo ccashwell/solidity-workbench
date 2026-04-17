@@ -11,11 +11,13 @@ import { registerAnvilCommands } from "./commands/anvil.js";
 import { registerCastCommands } from "./commands/cast.js";
 import { registerScriptCommands } from "./commands/script.js";
 import { registerDeployCommands } from "./commands/deploy.js";
+import { registerSubgraphCommand } from "./commands/subgraph.js";
 import { FoundryTestProvider } from "./test-explorer/test-provider.js";
 import { GasProfilerProvider } from "./views/gas-profiler.js";
 import { CoverageProvider } from "./views/coverage.js";
 import { StorageLayoutPanel } from "./views/storage-layout.js";
 import { SlitherIntegration } from "./analysis/slither.js";
+import { AderynIntegration } from "./analysis/aderyn.js";
 import { SolidityDebugProvider } from "./debugger/debug-adapter.js";
 import { ChiselIntegration } from "./views/chisel.js";
 import { FoundryTomlProvider } from "./views/foundry-toml-schema.js";
@@ -74,6 +76,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerCastCommands(context);
   registerScriptCommands(context);
   registerDeployCommands(context);
+  registerSubgraphCommand(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("solidity-workbench.restartServer", async () => {
@@ -147,14 +150,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("solidity-workbench.slither", () => slither.analyze()),
   );
 
+  const aderyn = new AderynIntegration();
+  context.subscriptions.push({ dispose: () => aderyn.dispose() });
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("solidity-workbench.aderyn", () => aderyn.analyze()),
+  );
+
+  // Opt-in on-save hooks for both analyzers. Each analyzer bails
+  // internally when its own `enabled` setting is false, so the
+  // handler just unconditionally delegates.
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
-      if (doc.languageId === "solidity") {
-        const config = vscode.workspace.getConfiguration("solidity-workbench");
-        if (config.get<boolean>("slither.enabled")) {
-          slither.analyze();
-        }
-      }
+      if (doc.languageId !== "solidity") return;
+      const config = vscode.workspace.getConfiguration("solidity-workbench");
+      if (config.get<boolean>("slither.enabled")) slither.analyze();
+      if (config.get<boolean>("aderyn.enabled")) aderyn.analyze();
     }),
   );
 

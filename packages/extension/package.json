@@ -96,6 +96,16 @@
           "default": "",
           "description": "Path to slither binary."
         },
+        "solidity-workbench.aderyn.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Aderyn (Cyfrin) static analysis integration. Runs on demand via the command palette and, when enabled, on save."
+        },
+        "solidity-workbench.aderyn.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the aderyn binary. Leave empty to use PATH."
+        },
         "solidity-workbench.inlayHints.parameterNames": {
           "type": "boolean",
           "default": true,
@@ -188,6 +198,14 @@
       {
         "command": "solidity-workbench.slither",
         "title": "Solidity Workbench: Run Slither Analysis"
+      },
+      {
+        "command": "solidity-workbench.aderyn",
+        "title": "Solidity Workbench: Run Aderyn Analysis"
+      },
+      {
+        "command": "solidity-workbench.subgraph.scaffold",
+        "title": "Solidity Workbench: Generate Subgraph Scaffold"
       },
       {
         "command": "solidity-workbench.cast.sig",
