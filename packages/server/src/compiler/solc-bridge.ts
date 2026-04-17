@@ -1,3 +1,4 @@
+import { keccak256 } from "js-sha3";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
 /**
@@ -32,6 +33,18 @@ export class SolcBridge {
    * should fall back to their local keccak256 computation.
    */
   private cachedSelectors: Map<string, Record<string, string>> = new Map();
+
+  /**
+   * Canonical error selectors keyed by bare contract name. Mirrors
+   * `cachedSelectors` but sourced from the ABI's `type: "error"`
+   * entries — forge doesn't pre-compute error selectors the way it
+   * does method identifiers, so we keccak them here over the
+   * solc-canonical signature (with struct / UDVT tuples recursively
+   * flattened). Cold cache means callers fall back to local keccak
+   * over the parser-level signature, which misses struct params but
+   * gets every primitive-typed error right.
+   */
+  private cachedErrorSelectors: Map<string, Record<string, string>> = new Map();
 
   constructor(private workspace: WorkspaceManager) {}
 
@@ -299,6 +312,17 @@ export class SolcBridge {
   }
 
   /**
+   * Read the error-selector cache synchronously. Keys are the
+   * solc-canonical error signatures (e.g. `"NotOwner(address,address)"`,
+   * or `"PriceMismatch((address,uint256))"` for a struct param).
+   * Values are 4-byte hex selectors without the `0x` prefix, to match
+   * the `methodIdentifiers` convention.
+   */
+  getCachedErrorSelectors(contractName: string): Record<string, string> | undefined {
+    return this.cachedErrorSelectors.get(contractName);
+  }
+
+  /**
    * Get the ABI for a contract.
    */
   async getAbi(contractName: string): Promise<any[] | null> {
@@ -358,8 +382,37 @@ export class SolcBridge {
         if (ids && typeof ids === "object") {
           this.cachedSelectors.set(contractName, ids as Record<string, string>);
         }
+        const errors = this.extractErrorSelectorsFromAbi(contractEntry?.abi);
+        if (errors) this.cachedErrorSelectors.set(contractName, errors);
       }
     }
+  }
+
+  /**
+   * Walk an ABI array and build `{ signature: 4-byte-selector-hex }`
+   * for every `type: "error"` entry. Selector is `keccak256(sig)[0:4]`
+   * hex-encoded without the `0x` prefix, matching the
+   * `methodIdentifiers` convention so downstream code can treat both
+   * caches uniformly.
+   *
+   * Struct parameters in errors are rare but legal; we recurse into
+   * `components` to expand `type: "tuple"` into the canonical
+   * `(type1,type2,...)` form. Returns `null` when the ABI has no
+   * error entries, so the cache doesn't get a useless empty record.
+   */
+  private extractErrorSelectorsFromAbi(abi: unknown): Record<string, string> | null {
+    if (!Array.isArray(abi)) return null;
+    const out: Record<string, string> = {};
+    for (const entry of abi) {
+      if (!entry || typeof entry !== "object") continue;
+      const e = entry as { type?: string; name?: string; inputs?: unknown[] };
+      if (e.type !== "error" || typeof e.name !== "string") continue;
+      const inputs = Array.isArray(e.inputs) ? e.inputs : [];
+      const types = inputs.map((i) => canonicalAbiType(i));
+      const signature = `${e.name}(${types.join(",")})`;
+      out[signature] = keccak256(signature).slice(0, 8);
+    }
+    return Object.keys(out).length > 0 ? out : null;
   }
 
   private findNodeAtOffset(node: any, offset: number): any | null {
@@ -423,6 +476,24 @@ export class SolcBridge {
     const parts = src.split(":");
     return [parseInt(parts[0], 10), parseInt(parts[1], 10)];
   }
+}
+
+/**
+ * Render a single ABI `input` entry as its canonical Solidity type
+ * for signature hashing. `type: "tuple"` gets expanded into
+ * `(type1,type2,...)` recursively; dynamic arrays of tuples
+ * (`tuple[]` / `tuple[5]`) preserve their suffix so
+ * `(address,uint256)[]` hashes the same way solc / ethers do.
+ */
+function canonicalAbiType(input: unknown): string {
+  if (!input || typeof input !== "object") return "";
+  const entry = input as { type?: string; components?: unknown[] };
+  const type = typeof entry.type === "string" ? entry.type : "";
+  if (!type.startsWith("tuple")) return type;
+  const components = Array.isArray(entry.components) ? entry.components : [];
+  const inner = components.map((c) => canonicalAbiType(c)).join(",");
+  const suffix = type.slice("tuple".length); // "", "[]", "[5]"
+  return `(${inner})${suffix}`;
 }
 
 // ── Types ────────────────────────────────────────────────────────────

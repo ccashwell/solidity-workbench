@@ -156,9 +156,70 @@ export class CodeLensProvider {
           });
         }
       }
+
+      // Error selector lenses — custom errors have the same 4-byte
+      // selector shape as external functions (`bytes4(keccak256(sig))`)
+      // and are just as useful to surface for debugging failed calls.
+      for (const err of contract.errors) {
+        const selector = this.resolveErrorSelector(contract.name, err.name, err.parameters);
+        if (selector) {
+          lenses.push({
+            range: err.range,
+            command: {
+              title: `selector: ${selector}`,
+              command: "solidity-workbench.copySelector",
+              arguments: [selector],
+            },
+          });
+        }
+      }
+    }
+
+    // File-level custom errors (Solidity >= 0.8.4) also get a selector
+    // lens. They have no containing contract so the solc cache lookup
+    // is skipped — we always compute locally.
+    for (const err of result.sourceUnit.errors) {
+      const selector = this.computeSelector(err.name, err.parameters);
+      lenses.push({
+        range: err.range,
+        command: {
+          title: `selector: ${selector}`,
+          command: "solidity-workbench.copySelector",
+          arguments: [selector],
+        },
+      });
     }
 
     return lenses;
+  }
+
+  /**
+   * Look up the 4-byte selector for `contract.error`.
+   *
+   * Mirrors `resolveFunctionSelector`: prefer the solc-cached error
+   * selectors populated from `forge build --json` (accurate for
+   * struct / UDVT params) and fall back to a local keccak256 over the
+   * parser-level canonical signature when the cache is cold.
+   */
+  private resolveErrorSelector(
+    contractName: string,
+    errorName: string,
+    params: ParameterDeclaration[],
+  ): string | null {
+    if (this.solcBridge) {
+      const table = this.solcBridge.getCachedErrorSelectors(contractName);
+      if (table) {
+        const prefix = `${errorName}(`;
+        const arity = params.length;
+        for (const [signature, selector] of Object.entries(table)) {
+          if (!signature.startsWith(prefix)) continue;
+          const inner = signature.slice(prefix.length, -1);
+          const sigArity = inner.length === 0 ? 0 : this.topLevelCommaCount(inner) + 1;
+          if (sigArity === arity) return `0x${selector}`;
+        }
+      }
+    }
+    return this.computeSelector(errorName, params);
   }
 
   /**
