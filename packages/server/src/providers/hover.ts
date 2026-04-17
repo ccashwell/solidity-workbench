@@ -152,12 +152,14 @@ export class HoverProvider {
    */
   private lookupMember(
     containerName: string,
-    contract: { functions: { name: string | null }[];
-                stateVariables: { name: string }[];
-                events: { name: string }[];
-                errors: { name: string }[];
-                structs: { name: string }[];
-                enums: { name: string }[] },
+    contract: {
+      functions: { name: string | null }[];
+      stateVariables: { name: string }[];
+      events: { name: string }[];
+      errors: { name: string }[];
+      structs: { name: string }[];
+      enums: { name: string }[];
+    },
     member: string,
   ): SolSymbol | null {
     const hasMember =
@@ -230,7 +232,7 @@ export class HoverProvider {
     while (memberStart > 0 && /[\w$]/.test(line[memberStart - 1])) memberStart--;
     if (memberStart === 0 || line[memberStart - 1] !== ".") return null;
 
-    let receiverEnd = memberStart - 1;
+    const receiverEnd = memberStart - 1;
     let receiverStart = receiverEnd;
     while (receiverStart > 0 && /[\w$]/.test(line[receiverStart - 1])) receiverStart--;
     if (receiverStart === receiverEnd) return null;

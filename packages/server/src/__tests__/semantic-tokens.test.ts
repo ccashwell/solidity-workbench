@@ -282,9 +282,7 @@ contract C {
 
       // Reference to Point in the body should receive a `struct`
       // semantic token (we register structs in nameKinds).
-      const structTokens = tokens.filter(
-        (t) => t.type === "struct" && t.length === "Point".length,
-      );
+      const structTokens = tokens.filter((t) => t.type === "struct" && t.length === "Point".length);
       assert.ok(
         structTokens.length >= 2,
         `expected at least 2 struct tokens for Point (decl + body ref); got ${structTokens.length}`,

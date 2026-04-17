@@ -144,8 +144,14 @@ contract C {
       // (params unrelatedName, anotherName). The first argument `x`
       // differs from `a`, so we expect `a:`; the second argument `1`
       // differs from `b`, so we expect `b:`.
-      assert.ok(labels.includes("a:"), `expected "a:" from SafeMath.add; got ${JSON.stringify(labels)}`);
-      assert.ok(labels.includes("b:"), `expected "b:" from SafeMath.add; got ${JSON.stringify(labels)}`);
+      assert.ok(
+        labels.includes("a:"),
+        `expected "a:" from SafeMath.add; got ${JSON.stringify(labels)}`,
+      );
+      assert.ok(
+        labels.includes("b:"),
+        `expected "b:" from SafeMath.add; got ${JSON.stringify(labels)}`,
+      );
       assert.ok(
         !labels.includes("unrelatedName:"),
         `must not leak param names from Other.add; got ${JSON.stringify(labels)}`,

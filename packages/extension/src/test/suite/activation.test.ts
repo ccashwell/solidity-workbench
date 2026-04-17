@@ -19,7 +19,9 @@ import * as vscode from "vscode";
  * separate suites that can spin up once the initial smoke tests are
  * green in CI.
  */
-const EXTENSION_ID = "uniswap.solidity-workbench";
+// Publisher is declared in packages/extension/package.json — keep this
+// constant in sync with that publisher + name pair.
+const EXTENSION_ID = "ccashwell.solidity-workbench";
 
 describe("Extension activation", () => {
   it("is present", () => {
@@ -55,6 +57,11 @@ describe("Extension activation", () => {
       "solidity-workbench.inspectStoragePanel",
       "solidity-workbench.deploy.create",
       "solidity-workbench.script.simulate",
+      "solidity-workbench.slither",
+      "solidity-workbench.aderyn",
+      "solidity-workbench.subgraph.scaffold",
+      // Client-side shim invoked by code lenses.
+      "solidity-workbench.findReferencesAt",
     ];
     for (const cmd of expected) {
       assert.ok(all.includes(cmd), `expected command '${cmd}' to be registered`);

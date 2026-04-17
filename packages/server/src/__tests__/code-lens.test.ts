@@ -78,9 +78,7 @@ contract User2 { Foo public b; }`;
       );
       assert.ok(refLenses.length >= 1, "expected at least one reference lens");
       // Title is either `N references` or `1 reference`.
-      const titleOk = refLenses.some(
-        (l) => /^\d+ references?$/.test(l.command?.title ?? ""),
-      );
+      const titleOk = refLenses.some((l) => /^\d+ references?$/.test(l.command?.title ?? ""));
       assert.ok(titleOk, `expected a "N references" title; got ${JSON.stringify(refLenses)}`);
     });
 

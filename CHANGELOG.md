@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added (third production-readiness sweep — P3 landings)
+
+- **Trigram-indexed fuzzy workspace symbols.** New
+  `packages/server/src/analyzer/trigram-index.ts` maintains a 3-gram
+  posting list for every indexed name. `findWorkspaceSymbols` now
+  prunes candidates via posting-list intersection for 3+-char queries
+  and ranks matches (exact → prefix → substring → ordered-subsequence
+  fuzzy). Typing `ctr` in the VSCode symbol picker now surfaces
+  `Counter`; long queries run sub-linearly on large workspaces. 15
+  new unit tests.
+- **Aderyn (Cyfrin) static-analysis integration.** Pure JSON-report
+  parser in `@solidity-workbench/common/aderyn-report` plus a VSCode
+  wrapper under `packages/extension/src/analysis/aderyn.ts` that
+  mirrors the Slither shape. New command
+  `solidity-workbench.aderyn`, settings `aderyn.enabled` /
+  `aderyn.path`, and opt-in on-save analysis. 11 unit tests cover the
+  parser, severity mapping, and summary helpers.
+- **Subgraph scaffold generator.** `generateSubgraphScaffold` in
+  `@solidity-workbench/common/subgraph-scaffold.ts` emits
+  `subgraph.yaml`, `schema.graphql`, and `src/<contract>.ts` from a
+  contract ABI — events-only scaffold with canonical
+  `indexed`-aware event signatures, scalar / array-type mapping to
+  GraphQL, and TODO markers for tuple params. New command
+  `solidity-workbench.subgraph.scaffold` picks a contract from
+  `out/*.sol/*.json`, prompts for network / address / start block,
+  and writes the scaffold plus an ABI copy to
+  `subgraph/<ContractName>/`. 16 unit tests cover the generator.
+- **Expanded E2E coverage.** Fixed the stale
+  `uniswap.solidity-workbench` extension ID (publisher is
+  `ccashwell`) in the activation smoke tests. Added LSP round-trip
+  tests for hover, workspace symbols (exact + fuzzy subsequence),
+  references, rename response, code actions response, and formatting
+  response — all with retry loops tolerating the async initial
+  indexing pass.
+
+Server unit-test count: 204 → **252**.
+
 ### Fixed
 
 - **Parameter-name inlay hints now respect the receiver of a dotted

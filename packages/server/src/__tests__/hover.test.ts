@@ -135,7 +135,11 @@ contract F { function f(address a) external {} }`,
         const h = provider.provideHover(doc, { line: 0, character: col });
         assert.ok(h, `expected hover on ${type}`);
         const value = (h!.contents as any).value as string;
-        assert.match(value, new RegExp(`Unsigned ${bits}-bit`), `hover for ${type} should describe ${bits}-bit`);
+        assert.match(
+          value,
+          new RegExp(`Unsigned ${bits}-bit`),
+          `hover for ${type} should describe ${bits}-bit`,
+        );
       }
     });
 
@@ -250,7 +254,11 @@ contract C {
       const line3b = code2.split("\n")[3];
       const nope2 = line3b.indexOf(".nope") + 1;
       const h2 = provider2.provideHover(doc2, { line: 3, character: nope2 });
-      assert.equal(h2, null, `expected null when Foo has no member nope; got ${JSON.stringify(h2)}`);
+      assert.equal(
+        h2,
+        null,
+        `expected null when Foo has no member nope; got ${JSON.stringify(h2)}`,
+      );
       void h;
     });
 

@@ -482,4 +482,3 @@ export interface StorageLayoutEntry {
   slot: string;
   type: string;
 }
-

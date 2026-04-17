@@ -137,7 +137,57 @@ None.
 
 ---
 
-## P3 — Enhancement
+## Recently fixed (third April 2026 sweep — P3 landings)
+
+### Trigram-indexed fuzzy workspace symbols (was P3 #4)
+
+- New `TrigramIndex` under `packages/server/src/analyzer/` maintains a
+  map from 3-grams to symbol names. `SymbolIndex.findWorkspaceSymbols`
+  now prunes candidates via posting-list intersection for queries of
+  3+ chars, ranks matches via `scoreName` (exact > prefix > substring
+  > ordered-subsequence fuzzy), and caps at 100 results. Includes full
+  add / remove lifecycle so symbols removed from the workspace no
+  longer leak into search. 15 new unit tests across
+  `trigram-index.test.ts` + `symbol-index.test.ts`.
+
+### Aderyn static-analysis integration (was P3 #5a)
+
+- Pure JSON-report parser added to `@solidity-workbench/common/aderyn-report`
+  with 11 unit tests covering malformed input, the three severity
+  buckets, tuple params, and schema drift tolerance.
+- `AderynIntegration` VSCode wrapper mirrors the Slither shape — new
+  `solidity-workbench.aderyn` command, `aderyn.enabled` /
+  `aderyn.path` settings, and opt-in on-save hook. Writes the report
+  to a tempdir, parses it, maps to `vscode.Diagnostic` with
+  related-information links between instances.
+
+### Subgraph scaffold generator (was P3 #6)
+
+- `generateSubgraphScaffold` in `@solidity-workbench/common` emits
+  `subgraph.yaml`, `schema.graphql`, and `src/<contract>.ts` for a
+  contract ABI. Events-only scaffold with correct indexed-param
+  canonical signatures, scalar / array type mapping, and explicit
+  `// TODO` markers for tuple params whose encoding is domain-specific.
+  16 unit tests cover the ABI → files transformation.
+- `solidity-workbench.subgraph.scaffold` command picks a compiled
+  contract from `out/*.sol/*.json`, prompts for network / address /
+  start block, writes the scaffold files plus a copy of the ABI into
+  `subgraph/<ContractName>/`, and opens the manifest.
+
+### Expanded E2E coverage (was P3 #8)
+
+- Corrected the stale `uniswap.solidity-workbench` extension ID in the
+  activation smoke tests (publisher is `ccashwell`).
+- Extended command-registration assertions to cover the three new
+  commands (`aderyn`, `subgraph.scaffold`, `findReferencesAt`).
+- Added `lsp-round-trip.test.ts` with tests for hover, workspace
+  symbols (exact + fuzzy subsequence), references, rename response,
+  code actions response, and formatting response. Retry loop
+  tolerates the asynchronous initial indexing pass.
+
+---
+
+## P3 — Enhancement (remaining)
 
 ### 1. Real DAP debugger
 
@@ -170,29 +220,13 @@ prior expressions would be much more useful.
 
 **Effort**: 1 week.
 
-### 4. Workspace symbol trigram / fuzzy index
+### 5. Wake / Mythril integrations alongside Slither and Aderyn
 
-`findWorkspaceSymbols` does a linear substring scan (now
-cancellation-aware and capped at 100). A trigram index gives O(1)
-lookup per character and supports fuzzy queries. Low priority until we
-see slowness on large monorepos.
-
-**Effort**: 2–3 days.
-
-### 5. Aderyn / Wake / Mythril integrations alongside Slither
-
-Current static analysis is Slither only. Wake and Aderyn are
-increasingly popular; Mythril is the classic. Each has a different
-output format and severity scheme to normalize.
+Aderyn landed in the third sweep. Wake and Mythril remain as natural
+next analyzer integrations — both share the same shape as
+Aderyn/Slither (run external tool → parse JSON → map to diagnostics).
 
 **Effort**: 1 week per integration.
-
-### 6. Subgraph scaffold generator
-
-Read contract ABI, emit a starter `subgraph.yaml` + `schema.graphql` +
-AssemblyScript mappings. Adjacent feature for protocol developers.
-
-**Effort**: 3–5 days.
 
 ### 7. Remote chain interaction UI
 
@@ -202,13 +236,14 @@ else has.
 
 **Effort**: 1 week.
 
-### 8. More E2E coverage
+### 8. More E2E coverage (ongoing)
 
-The E2E scaffold runs 6 smoke tests in ~3s locally. Natural next
-additions: rename round-trip, code-action application, test-explorer
-discovery after a `forge build`, coverage decoration rendering,
-storage-layout webview HTML shape. Tracked here so future work
-extends the suite rather than reinventing the scaffold.
+Third-sweep work added LSP round-trip tests for hover, workspace
+symbols (exact + fuzzy), references, rename, code actions, and
+formatting. Natural next additions: test-explorer discovery after a
+`forge build`, coverage decoration rendering, storage-layout webview
+HTML shape, Slither / Aderyn diagnostic round-trip with a fixture
+report.
 
 **Effort**: 1–2 days ongoing.
 
@@ -220,7 +255,7 @@ extends the suite rather than reinventing the scaffold.
 |----------|-------|-------------------|
 | P1 | 0 | — |
 | P2 | 0 | — |
-| P3 | 8 | ~2 months |
+| P3 | 5 | ~5–6 weeks |
 | **Total to public beta** | **0** | **ship the VSIX** |
 | **Total to v1.0** | **0** | **ship the VSIX** |
 
