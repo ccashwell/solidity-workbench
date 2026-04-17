@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Parameter-name inlay hints now respect the receiver of a dotted
+  call.** `Currency.unwrap(currency)` was annotated with
+  `_wstETHAmount:` — a parameter name belonging to an unrelated
+  interface's `unwrap(uint256)`. `InlayHintsProvider` now extracts
+  the receiver from `Receiver.funcName(...)` and either walks the
+  receiver's inheritance chain for the matching function or emits
+  no hints (when the receiver is a UDVT builtin like `wrap`/`unwrap`,
+  or a variable whose type can't be inferred). Plain unqualified
+  calls keep the existing lookup. 4 new regression tests.
 - **Hover on dotted access no longer picks an unrelated same-named
   function.** Hovering `Currency.unwrap(x)` could surface
   `IWstETH.unwrap(uint256)` simply because both declared an `unwrap`
