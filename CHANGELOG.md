@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Marketplace upload rejected with "suspicious content".** Two
+  GitHub URLs in the README still pointed at the old organization
+  the repository moved from. The Marketplace's content scanner
+  flags publisher/repository mismatches as potential
+  typosquatting. Repointed both URLs (the CI artifacts link and
+  the `git clone` command) at the current `ccashwell` repo.
+- **VSIX shipped 4.7 MB of unnecessary source maps.** Both
+  `extension.js.map` and `server.js.map` were being packaged even
+  though end users never consume them — they added bytes the
+  content scanner has to walk (maps embed the full `sourcesContent`
+  of our TS source) and tripled the VSIX size for no end-user
+  benefit. Drop them from the packaged artifact via `.vscodeignore`;
+  local `dist/` still has them for debugging. VSIX size now 416 KB
+  (was 1.17 MB).
 - **Test Explorer ran `forge test` but never displayed any results.**
   Four compounding bugs, all fixed together:
     - stdout was split by `\n` and each line parsed as JSON. Real

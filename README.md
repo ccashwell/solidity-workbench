@@ -178,7 +178,7 @@ The extension activates automatically in any workspace containing `foundry.toml`
 ### From VSIX
 
 1. Download `solidity-workbench-*.vsix` from the latest
-   [CI build artifacts](https://github.com/uniswap/solidity-workbench/actions/workflows/ci.yml).
+   [CI build artifacts](https://github.com/ccashwell/solidity-workbench/actions/workflows/ci.yml).
 2. Install:
    ```
    Cmd/Ctrl+Shift+P → Extensions: Install from VSIX...
@@ -187,7 +187,7 @@ The extension activates automatically in any workspace containing `foundry.toml`
 ### From source
 
 ```bash
-git clone https://github.com/uniswap/solidity-workbench
+git clone https://github.com/ccashwell/solidity-workbench
 cd solidity-workbench
 pnpm install
 pnpm build

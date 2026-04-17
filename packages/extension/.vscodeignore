@@ -10,9 +10,13 @@ tsconfig*.json
 **/*.ts
 # E2E test output from `pnpm build:test`; not relevant to end users.
 dist/test/**
-# Keep the two esbuild source maps (extension.js.map, server.js.map)
-# for Marketplace symbolication; drop everything else.
+# Drop all source maps from the packaged VSIX:
+#   1. End users never consume them — they just add ~5MB uncompressed
+#      that the Marketplace content scanner has to walk through.
+#   2. Maps embed `sourcesContent` reflecting our full TypeScript
+#      source, which contributes to the total bytes the Marketplace's
+#      "suspicious content" heuristic evaluates.
+#   3. Local development still has maps next to the bundles in `dist/`;
+#      only the packaged artifact ships without them.
 dist/**/*.map
-!dist/extension.js.map
-!dist/server.js.map
 *.vsix
