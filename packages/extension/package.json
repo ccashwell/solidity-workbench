@@ -1,7 +1,7 @@
 {
   "name": "solidity-workbench",
   "displayName": "Solidity Workbench",
-  "description": "Modern Solidity IDE — Foundry-native LSP, test explorer, and static analysis",
+  "description": "Modern Solidity IDE Integration with Foundry-native LSP, test explorer, and static analysis",
   "version": "0.1.0",
   "publisher": "ccashwell",
   "license": "MIT",
@@ -25,17 +25,12 @@
     "Programming Languages",
     "Linters",
     "Formatters",
-    "Testing",
-    "Debuggers"
+    "Testing"
   ],
   "keywords": [
     "solidity",
-    "ethereum",
     "foundry",
-    "forge",
-    "smart contracts",
-    "defi",
-    "evm"
+    "forge"
   ],
   "activationEvents": [
     "workspaceContains:**/foundry.toml",

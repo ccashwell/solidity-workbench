@@ -11,7 +11,6 @@ analysis, and deep Foundry toolchain integration — in a single extension.
 
 - [Why Solidity Workbench?](#why-solidity-workbench)
 - [Feature overview](#feature-overview)
-- [Comparison with existing extensions](#comparison-with-existing-extensions)
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick start](#quick-start)
@@ -29,17 +28,10 @@ analysis, and deep Foundry toolchain integration — in a single extension.
 
 ## Why Solidity Workbench?
 
-The three mainstream Solidity extensions each leave meaningful gaps:
-
-| Extension | Strength | Gap |
-| --- | --- | --- |
-| **JuanBlanco Solidity** (1.8M installs) | Broad framework support, mature ecosystem | No LSP, no rename, no call hierarchy, no test explorer, Foundry is not a first-class citizen |
-| **Nomic Foundation** (~412k installs) | LSP-backed, strong Hardhat integration | Foundry marked *experimental*; no call/type hierarchy, inlay hints, signature help, code lens, test explorer, or gas tools |
-| **Ackee Wake** (~44k installs) | Security-focused, call graphs, detectors | Requires Python runtime (`eth-wake`); limited forge script/deploy/gas/coverage tooling |
-
 Solidity Workbench is built for teams that already live in Foundry. Every feature assumes
-`forge`, `cast`, `anvil`, and `chisel` exist on PATH — no Hardhat compatibility layer, no
-Python runtime dependency.
+`forge`, `cast`, `anvil`, and `chisel` exist on `PATH`. The language server and client are
+written in TypeScript, run as part of the standard LSP pipeline, and require no Python
+runtime.
 
 ---
 
@@ -118,40 +110,6 @@ Completions, hover docs, and value validation for `[profile.default]`, `[fmt]`, 
 - `.gas-snapshot` tree view grouped by contract, with regression deltas (up/down/unchanged) against previous baseline
 - Inline gas decorations next to every test function
 - Line-level coverage via LCOV — covered / uncovered / partial gutter decorations; per-file totals in the status bar
-
----
-
-## Comparison with existing extensions
-
-Accurate as of April 2026. Entries verified against each extension's published documentation and marketplace listing.
-
-| Capability | Solidity Workbench | JuanBlanco | Nomic Foundation | Ackee Wake |
-| --- | --- | --- | --- | --- |
-| Architecture | LSP (TypeScript) | In-process (TS) | LSP (TypeScript) | LSP (Python) |
-| Foundry support | **Native** | Generic remappings | Experimental | Yes |
-| Hardhat support | No (by design) | Yes | **Native** | Yes |
-| Go-to definition | Yes | Yes | Yes | Yes |
-| Find references | Yes | Yes | Yes | Yes |
-| Rename symbol | Yes | No | Yes | Yes |
-| Semantic tokens | **Yes** (20 types) | No | Partial | Yes |
-| Inlay hints | **Yes** | No | No | No |
-| Signature help | **Yes** | No | No | Yes |
-| Call hierarchy | **Yes** | No | No | Partial |
-| Type hierarchy | **Yes** | No | No | Yes |
-| Auto-import | **Yes** | No | No | Yes |
-| Code lens (selectors, refs, gas) | **Yes** | Partial | No | Partial |
-| Built-in security linter | **Yes** (8 rules) | No | No | Yes (Wake) |
-| Slither integration | **Yes** | No | No | No |
-| Test Explorer | **Yes** | No | No | Partial |
-| Forge script runner | **Yes** | No | No | No |
-| `forge create` / verify UI | **Yes** | No | No | No |
-| Anvil / Chisel commands | **Yes** | No | No | Yes (Anvil) |
-| Storage layout webview | **Yes** | No | No | Yes |
-| Gas snapshot UI | **Yes** | No | No | No |
-| Coverage visualization | **Yes** (line-level) | No | No | No |
-| `foundry.toml` IntelliSense | **Yes** | No | No | No |
-| Runtime dependencies | Node 18+ | Node 18+ | Node 18+ | Python 3.8+ |
-| Marketplace installs | Pre-release | ~1.8M | ~412k | ~44k |
 
 ---
 
