@@ -1,0 +1,25 @@
+# This repository is a TypeScript monorepo, NOT a Foundry project.
+# The only Foundry project lives at `test/fixtures/sample-project/`.
+#
+# Why this file exists: running `forge build` / `forge test` /
+# `forge snapshot` at the repo root was falling through to forge's
+# defaults (`src = "src"`, `test = "test"`) and recursively
+# discovering every `.t.sol` under `test/fixtures/sample-project/lib/
+# forge-std/test/`. That ran forge-std's own test suite — file-read
+# permission failures, mainnet-RPC fork tests, and a stale Tenderly
+# URL assertion all show up — which is noisy and misleading.
+#
+# This config points forge at non-existent directories so it has
+# nothing to compile or run. Invocations inside the fixture
+# directory are unaffected: forge walks up from cwd and picks
+# `test/fixtures/sample-project/foundry.toml` before it ever reaches
+# this one.
+
+[profile.default]
+src = ".foundry-stub-src"
+test = ".foundry-stub-test"
+# Keep the build artifact directory isolated from anything real so
+# accidental builds don't collide with the fixture's out/ tree. The
+# repo root's /cache/ is already gitignored; /out/ is too.
+out = "out"
+libs = []

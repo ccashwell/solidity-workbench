@@ -5,6 +5,10 @@ out/
 # repo root (e.g. the indexer scaffold's auto-compile when the active
 # project root IS the repo root).
 cache/
+# Forge dependency lockfile (written by forge 1.x alongside foundry.toml).
+# Only the fixture project's lockfile should matter; the repo-root one is
+# produced by no-op forge invocations and is meaningless.
+foundry.lock
 # Indexer scaffolds written by the `indexer.scaffold` / `subgraph.scaffold`
 # command. The generator is pure — we don't track its output.
 /subgraph/
