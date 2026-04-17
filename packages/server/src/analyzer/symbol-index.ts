@@ -14,6 +14,7 @@ import type {
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import { ReferenceIndex } from "./reference-index.js";
+import { TrigramIndex, scoreName } from "./trigram-index.js";
 
 /**
  * Maintains a cross-file symbol index for the workspace.
@@ -38,6 +39,13 @@ export class SymbolIndex {
    * every file on every query.
    */
   private refIndex = new ReferenceIndex();
+
+  /**
+   * Trigram index over symbol names, used to short-circuit the workspace-
+   * symbol substring scan on large workspaces. Kept in sync with
+   * `symbolsByName` via the same add/remove transitions in `updateFile`.
+   */
+  private trigrams = new TrigramIndex();
 
   constructor(parser: SolidityParser, workspace: WorkspaceManager) {
     this.parser = parser;
@@ -99,6 +107,10 @@ export class SymbolIndex {
           this.symbolsByName.set(sym.name, filtered);
         } else {
           this.symbolsByName.delete(sym.name);
+          // Last symbol with this name is gone — drop it from the
+          // trigram index so stale names aren't returned by future
+          // workspace-symbol queries.
+          this.trigrams.remove(sym.name);
         }
       }
     }
@@ -265,6 +277,9 @@ export class SymbolIndex {
       const existing = this.symbolsByName.get(sym.name) ?? [];
       existing.push(sym);
       this.symbolsByName.set(sym.name, existing);
+      // `add` is idempotent, so re-indexing the same file doesn't
+      // bloat the trigram posting lists.
+      this.trigrams.add(sym.name);
     }
   }
 
@@ -316,30 +331,47 @@ export class SymbolIndex {
   /**
    * Find symbols matching a query (for workspace symbol search).
    *
-   * Supports cancellation: if the client cancels the request partway
-   * through a large result set we return whatever we've accumulated
-   * rather than finishing the full linear scan.
+   * Pipeline:
+   *   1. Trigram index prunes the candidate set. For queries of 3+
+   *      chars this examines only names whose trigrams overlap the
+   *      query's — typically a small fraction of the workspace.
+   *   2. Each candidate is scored by {@link scoreName}, which ranks
+   *      exact > prefix > substring > fuzzy subsequence, with shorter
+   *      names preferred within a tier.
+   *   3. Symbol entries for surviving candidates are emitted, sorted
+   *      by descending score, and capped at 100 results.
+   *
+   * Supports cancellation: if the client cancels we return whatever
+   * we've accumulated rather than finishing the full scan.
    */
   findWorkspaceSymbols(query: string, token?: CancellationToken): WorkspaceSymbol[] {
-    const results: WorkspaceSymbol[] = [];
-    const lowerQuery = query.toLowerCase();
+    // Collect all (symbol, score) pairs across the candidate names.
+    const scored: { sym: SolSymbol; score: number }[] = [];
+    const candidates = this.trigrams.candidates(query);
 
-    for (const [name, symbols] of this.symbolsByName) {
-      if (token?.isCancellationRequested) return results;
-      if (name.toLowerCase().includes(lowerQuery)) {
-        for (const sym of symbols) {
-          results.push({
-            name: sym.containerName ? `${sym.containerName}.${sym.name}` : sym.name,
-            kind: this.toLSPSymbolKind(sym.kind),
-            location: {
-              uri: sym.filePath,
-              range: sym.range,
-            },
-            containerName: sym.containerName,
-          });
-        }
-      }
-      if (results.length >= 100) break; // Limit results
+    for (const name of candidates) {
+      if (token?.isCancellationRequested) break;
+      const score = scoreName(name, query);
+      if (score <= 0) continue;
+      const symbols = this.symbolsByName.get(name);
+      if (!symbols) continue;
+      for (const sym of symbols) scored.push({ sym, score });
+    }
+
+    scored.sort((a, b) => b.score - a.score);
+
+    const results: WorkspaceSymbol[] = [];
+    for (const { sym } of scored) {
+      if (results.length >= 100) break;
+      results.push({
+        name: sym.containerName ? `${sym.containerName}.${sym.name}` : sym.name,
+        kind: this.toLSPSymbolKind(sym.kind),
+        location: {
+          uri: sym.filePath,
+          range: sym.range,
+        },
+        containerName: sym.containerName,
+      });
     }
 
     return results;

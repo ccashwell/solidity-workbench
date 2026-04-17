@@ -261,4 +261,99 @@ contract DiskOnly {
       fs.rmSync(tmp, { recursive: true, force: true });
     });
   });
+
+  describe("findWorkspaceSymbols ranking", () => {
+    const seed = (parser: SolidityParser, idx: SymbolIndex) => {
+      indexText(
+        parser,
+        idx,
+        "file:///w/A.sol",
+        `contract Token {
+    function transfer(address to, uint256 amount) external returns (bool) { to; amount; return true; }
+    function transferFrom(address from, address to, uint256 amount) external returns (bool) { from; to; amount; return true; }
+}
+contract Router {
+    function doTransferNow(uint256 x) external pure returns (uint256) { return x; }
+}
+contract Helper {
+    function unrelated() external pure {}
+}`,
+      );
+    };
+
+    it("ranks an exact match ahead of prefix, substring, and fuzzy matches", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      seed(parser, idx);
+
+      const results = idx.findWorkspaceSymbols("transfer");
+      assert.ok(results.length >= 3, `expected 3+ matches; got ${results.length}`);
+      // First result must be the exact-name "transfer" function; it
+      // could appear as "Token.transfer" because we prefix with the
+      // container name in the emitted WorkspaceSymbol.
+      assert.ok(
+        /^(Token\.)?transfer$/.test(results[0].name),
+        `exact match should rank first; got ${results[0].name}`,
+      );
+      // doTransferNow is only a substring match — it must rank after
+      // the exact and prefix matches.
+      const doTransferIdx = results.findIndex((r) => r.name.endsWith("doTransferNow"));
+      const exactIdx = results.findIndex((r) => /(^|\.)transfer$/.test(r.name));
+      const prefixIdx = results.findIndex((r) => /transferFrom$/.test(r.name));
+      assert.ok(exactIdx >= 0 && prefixIdx >= 0 && doTransferIdx >= 0);
+      assert.ok(exactIdx < prefixIdx, "exact should precede prefix");
+      assert.ok(prefixIdx < doTransferIdx, "prefix should precede substring");
+    });
+
+    it("prunes non-matches via the trigram index", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      seed(parser, idx);
+      // 'unrelated' exists; 'zzzzz' does not. The query 'zzzzz' has
+      // trigrams none of the indexed names contain, so the result
+      // must be empty without a full linear scan.
+      assert.deepEqual(idx.findWorkspaceSymbols("zzzzz"), []);
+    });
+
+    it("returns an empty array for a query whose trigrams none of the names contain", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      seed(parser, idx);
+      assert.deepEqual(idx.findWorkspaceSymbols("qqqq"), []);
+    });
+
+    it("short 1–2 char queries fall back to a name scan and still return matches", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      seed(parser, idx);
+      // 'ok' is a 2-char query — below the trigram threshold.
+      const results = idx.findWorkspaceSymbols("ok");
+      // Token contains 'ok' as a substring.
+      assert.ok(
+        results.some((r) => r.name.includes("Token")),
+        `got ${JSON.stringify(results)}`,
+      );
+    });
+
+    it("drops a name from search results after its last occurrence is removed", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      indexText(
+        parser,
+        idx,
+        "file:///w/Only.sol",
+        `contract OnlyHolder { uint256 public uniqueMarker; }`,
+      );
+      assert.ok(idx.findWorkspaceSymbols("uniqueMarker").length >= 1);
+
+      // Reindex the file with the symbol removed. The trigram entry
+      // for "uniqueMarker" should be dropped on the transition.
+      indexText(parser, idx, "file:///w/Only.sol", `contract OnlyHolder {}`);
+      assert.equal(
+        idx.findWorkspaceSymbols("uniqueMarker").length,
+        0,
+        "removed symbol must no longer appear in workspace-symbol search",
+      );
+    });
+  });
 });
