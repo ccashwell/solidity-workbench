@@ -2,10 +2,9 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import {
   LanguageClient,
-  LanguageClientOptions,
-  ServerOptions,
   TransportKind,
 } from "vscode-languageclient/node";
+import type { LanguageClientOptions, ServerOptions } from "vscode-languageclient/node";
 import { registerFoundryCommands } from "./commands/foundry.js";
 import { registerAnvilCommands } from "./commands/anvil.js";
 import { registerCastCommands } from "./commands/cast.js";
@@ -22,6 +21,9 @@ import { SolidityDebugProvider } from "./debugger/debug-adapter.js";
 import { ChiselIntegration } from "./views/chisel.js";
 import { FoundryTomlProvider } from "./views/foundry-toml-schema.js";
 import { StatusBar } from "./views/status-bar.js";
+import { InheritanceGraphPanel } from "./views/inheritance-graph.js";
+import { AbiPanel } from "./views/abi-panel.js";
+import { GasDiffProvider } from "./views/gas-diff.js";
 
 let client: LanguageClient;
 
@@ -140,6 +142,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const foundryToml = new FoundryTomlProvider();
   foundryToml.activate(context);
+
+  // ── Inheritance Graph ──────────────────────────────────────────────
+
+  const inheritanceGraph = new InheritanceGraphPanel();
+  inheritanceGraph.activate(context);
+
+  // ── ABI Explorer ─────────────────────────────────────────────────
+
+  const abiPanel = new AbiPanel();
+  abiPanel.activate(context);
+
+  // ── Gas Diff ──────────────────────────────────────────────────────
+
+  const gasDiff = new GasDiffProvider();
+  gasDiff.activate(context);
 
   // ── Static Analysis ───────────────────────────────────────────────
 
