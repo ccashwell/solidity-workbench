@@ -1,5 +1,5 @@
 import type { CodeAction, CodeActionContext, Range } from "vscode-languageserver/node.js";
-import { CodeActionKind, TextEdit, WorkspaceEdit } from "vscode-languageserver/node.js";
+import { CodeActionKind, TextEdit } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { ContractDefinition, FunctionDefinition } from "@solforge/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
@@ -89,6 +89,19 @@ export class CodeActionsProvider {
               }
             }
           }
+
+          // Offer to extract interface from concrete contracts
+          if (contract.kind === "contract" || contract.kind === "abstract") {
+            const externalFuncs = contract.functions.filter(
+              (f) =>
+                f.kind === "function" &&
+                f.name &&
+                (f.visibility === "external" || f.visibility === "public"),
+            );
+            if (externalFuncs.length > 0) {
+              actions.push(this.createExtractInterfaceAction(uri, text, contract));
+            }
+          }
         }
       }
     }
@@ -175,6 +188,92 @@ export class CodeActionsProvider {
     }
 
     return lines.join("\n");
+  }
+
+  private createExtractInterfaceAction(
+    uri: string,
+    text: string,
+    contract: ContractDefinition,
+  ): CodeAction {
+    const interfaceName = `I${contract.name}`;
+    const lines: string[] = [];
+
+    // Find the pragma from the file
+    const pragmaMatch = text.match(/pragma solidity[^;]+;/);
+    if (pragmaMatch) {
+      lines.push("// SPDX-License-Identifier: MIT");
+      lines.push(pragmaMatch[0]);
+      lines.push("");
+    }
+
+    lines.push(`interface ${interfaceName} {`);
+
+    // Extract events
+    for (const event of contract.events) {
+      const params = event.parameters
+        .map(
+          (p) =>
+            `${p.typeName}${p.indexed ? " indexed" : ""}${p.name ? " " + p.name : ""}`,
+        )
+        .join(", ");
+      lines.push(`    event ${event.name}(${params});`);
+    }
+
+    // Extract custom errors
+    for (const error of contract.errors) {
+      const params = error.parameters
+        .map((p) => `${p.typeName}${p.name ? " " + p.name : ""}`)
+        .join(", ");
+      lines.push(`    error ${error.name}(${params});`);
+    }
+
+    if ((contract.events.length > 0 || contract.errors.length > 0) && contract.functions.length > 0) {
+      lines.push("");
+    }
+
+    // Extract external/public function signatures
+    const externalFuncs = contract.functions.filter(
+      (f) =>
+        f.kind === "function" &&
+        f.name &&
+        (f.visibility === "external" || f.visibility === "public"),
+    );
+
+    for (const func of externalFuncs) {
+      const params = func.parameters
+        .map(
+          (p) =>
+            `${p.typeName}${p.storageLocation ? " " + p.storageLocation : ""}${p.name ? " " + p.name : ""}`,
+        )
+        .join(", ");
+      const returns =
+        func.returnParameters.length > 0
+          ? ` returns (${func.returnParameters.map((p) => `${p.typeName}${p.storageLocation ? " " + p.storageLocation : ""}${p.name ? " " + p.name : ""}`).join(", ")})`
+          : "";
+      const mut = func.mutability !== "nonpayable" ? ` ${func.mutability}` : "";
+      lines.push(`    function ${func.name}(${params}) external${mut}${returns};`);
+    }
+
+    lines.push("}");
+    lines.push("");
+
+    const interfaceText = lines.join("\n");
+
+    // Insert before the contract definition
+    return {
+      title: `Extract Interface '${interfaceName}'`,
+      kind: CodeActionKind.Refactor,
+      edit: {
+        changes: {
+          [uri]: [
+            TextEdit.insert(
+              { line: contract.range.start.line, character: 0 },
+              interfaceText + "\n",
+            ),
+          ],
+        },
+      },
+    };
   }
 
   private findUnimplementedMethods(

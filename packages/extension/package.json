@@ -235,6 +235,39 @@
       {
         "command": "solforge.inspectStoragePanel",
         "title": "Solforge: Storage Layout Visualization"
+      },
+      {
+        "command": "solforge.inheritanceGraph",
+        "title": "Solforge: Show Inheritance Graph"
+      },
+      {
+        "command": "solforge.showAbi",
+        "title": "Solforge: Show ABI Explorer"
+      },
+      {
+        "command": "solforge.gasDiff",
+        "title": "Solforge: Gas Diff (Compare Snapshots)"
+      },
+      {
+        "command": "solforge.gasDiffRefresh",
+        "title": "Solforge: Refresh Gas Diff",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "solforge.chisel.start",
+        "title": "Solforge: Start Chisel REPL"
+      },
+      {
+        "command": "solforge.chisel.startFork",
+        "title": "Solforge: Start Chisel REPL (Fork)"
+      },
+      {
+        "command": "solforge.chisel.sendSelection",
+        "title": "Solforge: Send Selection to Chisel"
+      },
+      {
+        "command": "solforge.copySelector",
+        "title": "Solforge: Copy Selector"
       }
     ],
     "breakpoints": [
@@ -318,6 +351,11 @@
           "id": "solforge-gas-profiler",
           "name": "Gas Profiler",
           "when": "workspaceFolderCount > 0"
+        },
+        {
+          "id": "solforge-gas-diff",
+          "name": "Gas Diff",
+          "when": "workspaceFolderCount > 0"
         }
       ]
     },
@@ -337,6 +375,21 @@
           "command": "solforge.cast.sig",
           "when": "resourceLangId == solidity && editorHasSelection",
           "group": "solforge@3"
+        },
+        {
+          "command": "solforge.showAbi",
+          "when": "resourceLangId == solidity",
+          "group": "solforge@4"
+        },
+        {
+          "command": "solforge.inheritanceGraph",
+          "when": "resourceLangId == solidity",
+          "group": "solforge@5"
+        },
+        {
+          "command": "solforge.chisel.sendSelection",
+          "when": "resourceLangId == solidity && editorHasSelection",
+          "group": "solforge@6"
         }
       ]
     },
