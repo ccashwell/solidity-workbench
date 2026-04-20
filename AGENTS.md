@@ -52,7 +52,8 @@ wire the packages together — do not use raw `tsc` without `-b`.
 
 ```
 VS Code extension host  ──┐
-  ├─ commands/            │  forge, cast, anvil, chisel, script, deploy
+  ├─ commands/            │  forge, cast, anvil, chisel, script, deploy,
+  │                       │  indexer scaffold (subgraph / Ponder / Envio)
   ├─ views/               │  status bar, gas profiler, coverage overlays,
   │                       │  storage layout webview, chisel, foundry.toml IntelliSense
   ├─ test-explorer/       │  VS Code Test API integration (listTests LSP request)
@@ -239,6 +240,36 @@ on type references), and the mapped AST's `nameRange` heuristic is too
 coarse for per-identifier tokenization. If you add tokenization for a new
 construct, follow the same raw-AST pattern.
 
+### Artifact-dependent commands must self-heal
+
+Commands that need `out/**/*.json` (subgraph/Ponder/Envio scaffolds, ABI
+pickers, anything consuming `forge build` output) must run a targeted
+`forge build <file>` when the artifact is missing, not fail with "no
+artifact". The scaffold pipeline in `packages/extension/src/commands/`
+(`subgraph.ts` → `indexer-shared.ts`) is the canonical example.
+
+Note: `forge build` takes **positional path arguments**, not
+`--match-path` (that's a `forge test` flag). Shelling out with the wrong
+flag silently builds the whole project — check the output channel if a
+build feels slower than it should.
+
+### Indexer scaffolds share one backend module
+
+`subgraph`, `ponder`, and `envio` generators live as peer modules under
+`packages/extension/src/commands/` and share `indexer-shared.ts` for
+event signature extraction, field-name conventions, and type mapping.
+The user-facing entry point is `solidity-workbench.indexer.scaffold`
+(prompts for backend); `solidity-workbench.subgraph.scaffold` is kept
+as a back-compat alias. When adding a backend, extend `indexer-shared.ts`
+rather than forking helpers.
+
+### Selector hovers must have parity across declarables
+
+Events show their `topic0` (keccak256 of the canonical signature),
+functions show the 4-byte selector, and errors must show the 4-byte
+selector too. If you add a new declarable that has a selector-style
+identifier, surface it in hover — silent asymmetry is a reported UX bug.
+
 ### Diagnostics are tiered; don't merge the tiers
 
 - **Fast** (`onDidChangeContent`): parser + lint + a few regex-ish sanity checks. Must stay under ~30ms.
@@ -278,9 +309,14 @@ coordinating the Azure DevOps PAT.
 | Passing an LSP-wire URI string to a VS Code command | "unexpected type" | Use a client-side shim that `vscode.Uri.parse`s it |
 | Using `findSymbols(name)` for dotted access | Wrong same-named method picked | Walk the receiver's inheritance chain first, return null on miss |
 | Only tokenizing declaration **names** in semantic tokens | Struct members, params, type refs render unstyled | Walk the raw AST; use `.identifier.loc` and `.typeName.loc` |
+| Tokenizing free text inside comment blocks | Comment body gets the identifier overlay | Skip `CommentBlock`/`CommentLine` ranges when walking the raw AST for tokens |
 | Static elementary-type list for hover | `uint8`/`uint128`/`bytes16` silently unsupported | Recognise the family programmatically (`/^uint(\d+)$/`, etc.) |
+| Using `forge build --match-path <path>` | `--match-path` is a `forge test` flag; build silently runs over the whole project | Pass the path **positionally**: `forge build <relative-path>` |
+| Scaffold/ABI command fails because artifact is missing | "no artifact found" after a clean checkout | Trigger a targeted `forge build <file>` from the command first, then proceed |
+| Showing `topic0` for events and `bytes4` for functions but nothing for errors | Reported UX asymmetry | Surface the error's 4-byte selector in hover the same way |
 | `.vscodeignore` `!` negations + broader exclusions | Dead files leak into the VSIX | Prefer positive allow-lists like `!dist/extension.js` over `!dist/**/*.js` + `dist/test/**` |
 | Forgetting to bump the icon PNG | CI fails the icon-drift check | `pnpm build:icon` and commit the result |
+| Committing scaffold/forge output at the repo root | `cache/`, `out/`, `subgraph/` land in git | They're gitignored; regenerate locally with `forge build` / scaffold commands |
 
 ---
 
@@ -290,6 +326,8 @@ coordinating the Azure DevOps PAT.
 - Commit scope should match logical change boundaries, not sweep everything into one `WIP` commit.
 - Use the `continual-learning` workflow to persist durable facts across sessions — this document is the primary output.
 - Prefer conventional-commit-style messages (`fix(scope): …`, `feat(scope): …`) with a short body explaining _why_.
+- When a feature gets a second implementation (e.g. a new indexer backend), extract the shared helpers into a peer module before adding the variant — do not fork-then-diverge.
+- Split unrelated fixes in a session into separate commits; don't sweep them into one "WIP".
 
 ---
 
@@ -299,6 +337,7 @@ coordinating the Azure DevOps PAT.
 | --- | --- |
 | Add a new LSP provider | `packages/server/src/providers/*.ts` + `server.ts` wiring |
 | Add a Foundry command | `packages/extension/src/commands/` (one file per subsurface) |
+| Add an indexer backend (Graph/Ponder/Envio/…) | `packages/extension/src/commands/indexer-shared.ts` + a peer `<backend>-scaffold.ts` |
 | Add a webview/tree view | `packages/extension/src/views/` |
 | Change the hover blurb for a built-in type | `packages/server/src/providers/hover.ts` → `describeElementaryType` / `getBuiltinHover` |
 | Add a security linter rule | `packages/server/src/providers/linter.ts` |

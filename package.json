@@ -1,5 +1,6 @@
 {
   "name": "solidity-workbench",
+  "publisher": "ccashwell",
   "private": true,
   "description": "Modern Solidity IDE plugin for VSCode/Cursor — Foundry-native, LSP-powered",
   "scripts": {
