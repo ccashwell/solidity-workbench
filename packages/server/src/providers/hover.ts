@@ -340,7 +340,7 @@ export class HoverProvider {
     const parts: string[] = [];
 
     if (natspec.notice) parts.push(natspec.notice);
-    if (natspec.dev) parts.push(`\n> **Dev:** ${natspec.dev}`);
+    if (natspec.dev) parts.push(`\n**Dev:** ${natspec.dev}`);
 
     if (natspec.params && Object.keys(natspec.params).length > 0) {
       parts.push("\n**Parameters:**");

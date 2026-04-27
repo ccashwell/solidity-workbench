@@ -342,24 +342,26 @@ contract DiskOnly {
     });
   });
 
-  describe("lazy on-miss indexing", () => {
+  describe("ensureImportsIndexed", () => {
     /**
-     * Drive `indexWorkspace` partially: yield after the project tier
-     * lands but before deps are processed. Used to simulate the window
-     * where a name lookup races against bulk indexing — the user types
-     * a query for a forge-std symbol while only `src/` has been seen.
+     * Build a fixture with a project file that imports a dep file via
+     * a relative path. We use real filesystem files so the import
+     * resolver inside `ensureImportsIndexed` has something to walk.
      */
-    function makeWorkspaceWithTwoFiles(): {
+    function makeImportFixture(): {
       tmp: string;
       projUri: string;
       depUri: string;
       ws: WorkspaceManager;
     } {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "solidx-lazy-"));
-      const projPath = path.join(tmp, "Proj.sol");
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "solidx-imp-"));
       const depPath = path.join(tmp, "Dep.sol");
-      fs.writeFileSync(projPath, `contract Project {}`);
+      const projPath = path.join(tmp, "Proj.sol");
       fs.writeFileSync(depPath, `contract LibraryDep { function helper() external {} }`);
+      fs.writeFileSync(
+        projPath,
+        `import "./Dep.sol";\ncontract Project is LibraryDep {}`,
+      );
       const projUri = URI.file(projPath).toString();
       const depUri = URI.file(depPath).toString();
       const ws = {
@@ -370,87 +372,96 @@ contract DiskOnly {
           deps: [depUri],
         }),
         uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        // Match the production `WorkspaceManager.resolveImport` shape
+        // for relative paths.
+        resolveImport: (importPath: string, fromFile: string) => {
+          if (importPath.startsWith(".")) {
+            const resolved = path.resolve(path.dirname(fromFile), importPath);
+            return fs.existsSync(resolved) ? resolved : null;
+          }
+          return null;
+        },
       } as unknown as WorkspaceManager;
       return { tmp, projUri, depUri, ws };
     }
 
-    it("findSymbols drains pending files when a query misses mid-index", async () => {
-      const { tmp, ws } = makeWorkspaceWithTwoFiles();
+    it("indexes a transitively imported dep file even if the bulk sweep hasn't reached it", async () => {
+      const { tmp, projUri, ws } = makeImportFixture();
       const parser = new SolidityParser();
       const idx = new SymbolIndex(parser, ws);
 
-      // Mid-flight: a query for the dep symbol should still resolve by
-      // draining the pending queue. We simulate the race by calling
-      // findSymbols *before* indexWorkspace runs at all — pending will
-      // be empty at construction time, so we trigger indexWorkspace
-      // first, then capture state at the first progress callback.
-      let depHitMidIndex = 0;
-      await idx.indexWorkspace(() => {
-        // Snapshot the very first time we get a callback (after the
-        // project tier batch, deps still pending).
-        if (depHitMidIndex === 0) {
-          depHitMidIndex = idx.findSymbols("LibraryDep").length;
-        }
-      });
+      // Simulate the document-open path: parse the project file and
+      // call updateFile, *without* running indexWorkspace at all (so
+      // the dep file is unindexed). ensureImportsIndexed must pull it
+      // in on its own.
+      parser.parse(projUri, fs.readFileSync(URI.parse(projUri).fsPath, "utf-8"));
+      idx.updateFile(projUri);
+      assert.equal(idx.findSymbols("LibraryDep").length, 0, "dep starts unindexed");
 
-      assert.equal(depHitMidIndex, 1, "miss on a pending symbol should drain and resolve");
-      assert.equal(idx.findSymbols("Project").length, 1);
+      await idx.ensureImportsIndexed(projUri);
+
       assert.equal(idx.findSymbols("LibraryDep").length, 1);
+      assert.ok(idx.getContract("LibraryDep"), "dep contract should be queryable");
 
       fs.rmSync(tmp, { recursive: true, force: true });
     });
 
-    it("getContract drains pending files for inheritance lookups", async () => {
-      const { tmp, ws } = makeWorkspaceWithTwoFiles();
+    it("removes imported targets from the bulk-sweep pending queue", async () => {
+      const { tmp, projUri, depUri, ws } = makeImportFixture();
       const parser = new SolidityParser();
       const idx = new SymbolIndex(parser, ws);
 
-      let contractHitMidIndex: { uri: string } | undefined;
-      await idx.indexWorkspace(() => {
-        if (!contractHitMidIndex) {
-          contractHitMidIndex = idx.getContract("LibraryDep");
-        }
-      });
-      assert.ok(contractHitMidIndex, "getContract miss must drain pending and find the contract");
-
-      fs.rmSync(tmp, { recursive: true, force: true });
-    });
-
-    it("findReferences drains pending files when no occurrences are indexed yet", async () => {
-      const { tmp, ws } = makeWorkspaceWithTwoFiles();
-      const parser = new SolidityParser();
-      const idx = new SymbolIndex(parser, ws);
-
-      let helperRefsMid = 0;
-      await idx.indexWorkspace(() => {
-        if (helperRefsMid === 0) {
-          helperRefsMid = idx.findReferences("helper").length;
-        }
-      });
-      assert.ok(helperRefsMid >= 1, "findReferences should find dep occurrences after drain");
-
-      fs.rmSync(tmp, { recursive: true, force: true });
-    });
-
-    it("editor-driven updateFile clears the pending entry and skips redundant re-index", async () => {
-      const { tmp, projUri, depUri, ws } = makeWorkspaceWithTwoFiles();
-      const parser = new SolidityParser();
-      const idx = new SymbolIndex(parser, ws);
-
-      // Pre-load the dep file via the editor path (`updateFile`) before
-      // bulk indexing reaches it. The bulk loop should observe pending
-      // already cleared and skip the second indexing pass.
-      parser.parse(depUri, fs.readFileSync(URI.parse(depUri).fsPath, "utf-8"));
-      // Calling indexWorkspace populates pending = {projUri, depUri},
-      // but we then simulate a document open that races ahead.
+      // Kick off bulk indexing so `pending` is populated, then yield
+      // once to enter the loop. Eager-imports against the open doc
+      // should pull `depUri` out of pending before the bulk sweep
+      // reaches the deps tier.
       const indexing = idx.indexWorkspace();
-      // Yield once so indexWorkspace has populated `pending`.
       await new Promise((resolve) => setImmediate(resolve));
-      idx.updateFile(depUri);
+      parser.parse(projUri, fs.readFileSync(URI.parse(projUri).fsPath, "utf-8"));
+      idx.updateFile(projUri);
+      await idx.ensureImportsIndexed(projUri);
       await indexing;
 
+      // Each contract appears exactly once in the by-name map (any
+      // double-indexing would push a second entry).
       assert.equal(idx.findSymbols("Project").length, 1);
       assert.equal(idx.findSymbols("LibraryDep").length, 1);
+      assert.equal(idx.findSymbols("helper").length, 1);
+      // Dep file's symbols (contract + function) are present.
+      assert.ok(idx.getFileSymbols(depUri).length >= 2);
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
+    it("is a no-op for already-indexed files (no infinite recursion on cycles)", async () => {
+      // Two files that import each other — must terminate.
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "solidx-cycle-"));
+      const aPath = path.join(tmp, "A.sol");
+      const bPath = path.join(tmp, "B.sol");
+      fs.writeFileSync(aPath, `import "./B.sol";\ncontract A {}`);
+      fs.writeFileSync(bPath, `import "./A.sol";\ncontract B {}`);
+      const aUri = URI.file(aPath).toString();
+      const bUri = URI.file(bPath).toString();
+
+      const ws = {
+        getAllFileUris: () => [aUri, bUri],
+        getFileUrisByTier: () => ({ project: [aUri, bUri], tests: [], deps: [] }),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, fromFile: string) => {
+          if (importPath.startsWith(".")) {
+            const resolved = path.resolve(path.dirname(fromFile), importPath);
+            return fs.existsSync(resolved) ? resolved : null;
+          }
+          return null;
+        },
+      } as unknown as WorkspaceManager;
+
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, ws);
+
+      await idx.ensureImportsIndexed(aUri);
+      assert.equal(idx.findSymbols("A").length, 1);
+      assert.equal(idx.findSymbols("B").length, 1);
 
       fs.rmSync(tmp, { recursive: true, force: true });
     });

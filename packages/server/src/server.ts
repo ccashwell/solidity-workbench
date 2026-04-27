@@ -344,6 +344,15 @@ documents.onDidChangeContent(async (change) => {
   symbolIndex.updateFile(uri);
   callHierarchyProvider.invalidateFile(uri);
 
+  // Eagerly index the document's transitive import graph so hover,
+  // inlay hints, definition, etc. can resolve symbols across the
+  // import tree without waiting for the bulk workspace sweep to
+  // reach `lib/`. Fire-and-forget — the diagnostics path below
+  // shouldn't block on dep-tree indexing.
+  void symbolIndex.ensureImportsIndexed(uri).catch((err) => {
+    connection.console.warn(`ensureImportsIndexed(${uri}) failed: ${err}`);
+  });
+
   await diagnosticsProvider.provideFastDiagnostics(uri, text);
 });
 

@@ -61,11 +61,10 @@ export class SymbolIndex {
 
   /**
    * Files queued for the initial workspace index that haven't been
-   * processed yet. Drains as `indexWorkspace` walks tiers and as
+   * processed yet. Drains as `indexWorkspace` walks tiers, as
    * documents are opened by the editor (which short-circuits to
-   * `updateFile`). When a name-based lookup misses while this set is
-   * non-empty we drain the rest synchronously and retry — see
-   * {@link flushPending}.
+   * `updateFile`), and as {@link ensureImportsIndexed} pulls in the
+   * transitive import graph of opened files.
    */
   private pending: Set<string> = new Set();
 
@@ -134,30 +133,42 @@ export class SymbolIndex {
   }
 
   /**
-   * Drain every still-pending file synchronously. Invoked as a
-   * correctness fallback by name-based lookups that miss while the
-   * initial workspace index is in flight: the priority sweep favors
-   * project source over deps, so a query for a forge-std symbol may
-   * legitimately have nothing in the index yet. Rather than silently
-   * returning empty, we finish indexing and retry once.
+   * Eagerly index the transitive import graph of `uri` so providers
+   * (hover, inlay hints, definition, etc.) can resolve any symbol
+   * reachable from an opened document without waiting for the bulk
+   * `indexWorkspace` sweep to reach `lib/`.
    *
-   * Bounded by the number of remaining files. After the first miss
-   * during startup the index is fully warm and subsequent queries hit
-   * the fast path.
+   * Bounded by the actual import graph of the file the user is
+   * touching — typically a few dozen files (forge-std, openzeppelin,
+   * project-internal helpers) instead of the entire dependency tree.
+   *
+   * Already-indexed files are skipped via the `visited` set; pending
+   * files are pulled out of the bulk-sweep queue and indexed
+   * immediately, which also prevents the bulk loop from
+   * double-indexing them later.
    */
-  private flushPending(): void {
-    if (this.pending.size === 0) return;
-    const drain = [...this.pending];
-    this.pending.clear();
-    for (const uri of drain) {
-      try {
-        const filePath = this.workspace.uriToPath(uri);
-        const text = readFileSync(filePath, "utf-8");
-        this.parser.parse(uri, text);
-        this.updateFile(uri);
-      } catch {
-        /* file unreadable, skip — same policy as `indexFile` */
-      }
+  async ensureImportsIndexed(uri: string, visited: Set<string> = new Set()): Promise<void> {
+    if (visited.has(uri)) return;
+    visited.add(uri);
+
+    // The opened document is parsed and `updateFile`'d separately by
+    // the LSP layer — but a transitively-imported file may not be in
+    // either cache yet. Index it before walking its imports so we can
+    // see what *it* imports.
+    if (!this.symbolsByFile.has(uri)) {
+      this.pending.delete(uri);
+      await this.indexFile(uri);
+    }
+
+    const result = this.parser.get(uri);
+    if (!result) return;
+
+    const fsPath = this.workspace.uriToPath(uri);
+    for (const imp of result.sourceUnit.imports) {
+      const targetPath = this.workspace.resolveImport(imp.path, fsPath);
+      if (!targetPath) continue;
+      const targetUri = URI.file(targetPath).toString();
+      await this.ensureImportsIndexed(targetUri, visited);
     }
   }
 
@@ -389,20 +400,16 @@ export class SymbolIndex {
   /**
    * Find symbols by name (exact match or prefix).
    *
-   * Hits the in-memory map first. On a miss while the initial
-   * workspace index is still in flight we drain the rest of the
-   * pending queue and retry once — see {@link flushPending} for the
-   * rationale. After the drain, all subsequent calls take the fast
-   * path.
+   * Returns whatever the in-memory map currently knows. During the
+   * initial workspace sweep this may legitimately be empty for a
+   * symbol that lives in an unindexed `lib/` file. Providers that
+   * have a known file URI to consult (e.g. an opened document)
+   * should call {@link ensureImportsIndexed} instead of expecting a
+   * cross-tree synchronous drain — that path used to live here and
+   * blocked the LSP for as long as it took to read every dep file.
    */
   findSymbols(name: string): SolSymbol[] {
-    const hit = this.symbolsByName.get(name);
-    if (hit && hit.length > 0) return hit;
-    if (this.pending.size > 0) {
-      this.flushPending();
-      return this.symbolsByName.get(name) ?? [];
-    }
-    return hit ?? [];
+    return this.symbolsByName.get(name) ?? [];
   }
 
   /**
@@ -412,31 +419,16 @@ export class SymbolIndex {
    * matches and already strips block comments, line comments, and string
    * literals.  Includes both declaration sites and usage sites; callers that
    * want to distinguish them can intersect with {@link findSymbols}.
-   *
-   * On an empty result with files still pending we drain the queue and
-   * retry, mirroring {@link findSymbols}.
    */
   findReferences(name: string): { uri: string; range: Range }[] {
-    const hit = this.refIndex.findReferences(name);
-    if (hit.length > 0) return hit;
-    if (this.pending.size > 0) {
-      this.flushPending();
-      return this.refIndex.findReferences(name);
-    }
-    return hit;
+    return this.refIndex.findReferences(name);
   }
 
   /**
    * Total count of indexed occurrences of `name` (declarations + usages).
    */
   referenceCount(name: string): number {
-    const n = this.refIndex.referenceCount(name);
-    if (n > 0) return n;
-    if (this.pending.size > 0) {
-      this.flushPending();
-      return this.refIndex.referenceCount(name);
-    }
-    return 0;
+    return this.refIndex.referenceCount(name);
   }
 
   /**
@@ -446,12 +438,7 @@ export class SymbolIndex {
    * yet (e.g. newly opened files not yet indexed).
    */
   hasReferences(name: string): boolean {
-    if (this.refIndex.has(name)) return true;
-    if (this.pending.size > 0) {
-      this.flushPending();
-      return this.refIndex.has(name);
-    }
-    return false;
+    return this.refIndex.has(name);
   }
 
   /**
@@ -522,19 +509,14 @@ export class SymbolIndex {
   /**
    * Get a contract definition by name.
    *
-   * Falls back to a pending-queue drain on miss — same rationale as
-   * {@link findSymbols}. Inheritance walks repeatedly hit this method
-   * (`getInheritanceChain`) and a single drain at the first miss
-   * warms the cache for the rest of the chain.
+   * Returns whatever the in-memory map currently knows. Inheritance
+   * walks (`getInheritanceChain`) hit this method repeatedly; we
+   * trust that any base contract reachable from the user's open
+   * document has already been pulled in by
+   * {@link ensureImportsIndexed}.
    */
   getContract(name: string): { uri: string; contract: ContractDefinition } | undefined {
-    const hit = this.contractsByName.get(name);
-    if (hit) return hit;
-    if (this.pending.size > 0) {
-      this.flushPending();
-      return this.contractsByName.get(name);
-    }
-    return undefined;
+    return this.contractsByName.get(name);
   }
 
   /**

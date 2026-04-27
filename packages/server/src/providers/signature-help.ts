@@ -236,7 +236,7 @@ export class SignatureHelpProvider {
 
     const parts: string[] = [];
     if (natspec.notice) parts.push(natspec.notice);
-    if (natspec.dev) parts.push(`\n> *Dev:* ${natspec.dev}`);
+    if (natspec.dev) parts.push(`\n**Dev:** ${natspec.dev}`);
     parts.push(`\n*Defined in* \`${containerName}\``);
     return parts.join("\n");
   }
