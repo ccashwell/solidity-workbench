@@ -604,7 +604,69 @@ contract C {
 
       const func = result.sourceUnit.contracts[0].functions[0];
       assert.ok(func.natspec);
-      assert.equal(func.natspec.notice, "This function does many important things");
+      // Continuation joins with `\n`, not a literal space — Markdown
+      // renders a single newline as a soft wrap (visually a space)
+      // while preserving the structure for lists / headings the
+      // author intended on adjacent lines. See the multi-paragraph
+      // and structured-markdown tests below for the cases where the
+      // distinction is observable.
+      assert.equal(func.natspec.notice, "This function does\nmany important things");
+    });
+
+    it("preserves paragraph breaks across blank `///` separator lines", () => {
+      const result = parser.parse(
+        "natspec-paragraphs.sol",
+        `
+pragma solidity ^0.8.24;
+
+/// @notice First paragraph of long-form documentation.
+///
+/// Second paragraph after a blank separator line.
+///
+/// Third paragraph still flowing prose.
+contract C {}
+`,
+      );
+
+      const contract = result.sourceUnit.contracts[0];
+      assert.ok(contract.natspec);
+      assert.equal(
+        contract.natspec.notice,
+        "First paragraph of long-form documentation.\n" +
+          "\n" +
+          "Second paragraph after a blank separator line.\n" +
+          "\n" +
+          "Third paragraph still flowing prose.",
+      );
+    });
+
+    it("preserves markdown structure (headings, lists) inside notice", () => {
+      const result = parser.parse(
+        "natspec-markdown.sol",
+        `
+pragma solidity ^0.8.24;
+
+/// @notice Top-level summary.
+///
+/// ## Lifecycle
+/// 1. Acquire lock
+/// 2. Settle deltas
+/// 3. Release lock
+contract C {}
+`,
+      );
+
+      const contract = result.sourceUnit.contracts[0];
+      assert.ok(contract.natspec);
+      assert.equal(
+        contract.natspec.notice,
+        "Top-level summary.\n" +
+          "\n" +
+          "## Lifecycle\n" +
+          "1. Acquire lock\n" +
+          "2. Settle deltas\n" +
+          "3. Release lock",
+      );
     });
 
     it("returns undefined natspec when no docblock precedes the declaration", () => {

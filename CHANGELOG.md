@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-04-27
+
+### Added
+
+- **Test Explorer streams rich forge output into the run pane.**
+  The provider was piping pass/fail signals through the
+  `TestRun` API but never calling `appendOutput`, so VSCode's
+  per-run output channel stayed empty and surfaced its default
+  "The test run did not record any output." message — even
+  though `forge test --json` produces a wealth of detail
+  (per-test gas, durations, decoded `console.log` output, fuzz
+  run counts and median gas, counterexample calldata, build
+  errors). Now formats each test result into the run pane
+  scoped to its own child item via `appendOutput(text,
+  undefined, childItem)`, so selecting a test in the explorer
+  narrows the output to just its slice. The forge command line
+  and `cwd` are echoed at the start of each invocation; each
+  suite gets a footer summary (`[suite] N passed, M failed`);
+  fuzz `kind: { runs, mean_gas, median_gas }`, unit `kind: {
+  gas }`, and invariant `kind: { runs, calls, reverts }` are
+  pulled out into the per-test header. Build errors / forge
+  stderr now also flow into the pane instead of disappearing
+  into the error toast.
+
+### Fixed
+
+- **Storage Layout types rendered as raw forge type ids and the
+  legend colors never appeared.** The panel was reading
+  `entry.type` straight from forge, which is a type *id* like
+  `t_mapping(t_userDefinedValueType(PoolId)16015,t_uint256)` —
+  unreadable, and `typeColor`'s `startsWith("uint" | "address" |
+  "mapping" | …)` checks never matched the `t_` prefix, so every
+  slot drew with the default grey. The two pieces of data
+  needed to render are in `data.types[entry.type]`: the
+  human-readable `label` (e.g. `mapping(PoolId => uint256)`)
+  and `numberOfBytes`. Resolved each entry through that map,
+  which both restores the legend colors and gives packed slots
+  proportional bar widths instead of the previous
+  every-bar-is-32-bytes default.
+- **Multi-line natspec rendered as one run-on paragraph in
+  hover.** The natspec parser was filtering out blank `///`
+  separator lines and joining every continuation line with a
+  single space — so authored structure like paragraph breaks,
+  `## headings`, and numbered lists collapsed into a single
+  unreadable block in the hover popover. Continuation lines
+  now join with `\n` (Markdown renders a single newline as a
+  soft wrap; visually identical for short prose) and blank
+  separator lines are preserved as `\n\n` paragraph breaks. The
+  edge-trimming pass that previously did `s.replace(/\\s+/g, " ")`
+  no longer flattens those newlines back out — it tidies
+  intra-line whitespace only and keeps the Markdown structure
+  end-to-end through the hover renderer. Applies to `@notice`,
+  `@dev`, `@param`, `@return`, and `@custom:*` content; `@title`
+  and `@author` stay single-line as before.
+- **Duplicate `solidity-workbench.inspectStoragePanel` manifest
+  entry.** The 0.3.0 `solforge.*` cleanup renamed
+  `solforge.inspectStoragePanel` to
+  `solidity-workbench.inspectStoragePanel` without noticing
+  that the canonical entry already lived earlier in the
+  contributes block. Net effect was the command palette listing
+  "Solidity Workbench: Storage Layout Visualization" twice;
+  both invoked the same registered command, so it was a UI
+  papercut rather than a functional bug. Down to 46 unique
+  command IDs.
+
 ## [0.3.0] - 2026-04-27
 
 ### Fixed
@@ -31,35 +96,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the user's `solidity-workbench.foundryPath` setting was
   ignored — only the `forge` on PATH was ever invoked. Switched
   to `getConfiguration("solidity-workbench")`.
-- **Test Explorer reported "The test run did not record any
-  output."** The provider piped pass/fail signals through the
-  `TestRun` API but never called `appendOutput`, so VSCode's
-  output pane stayed empty even though `forge test --json`
-  produces a wealth of detail (per-test gas, durations, decoded
-  console.log output, fuzz run counts and median gas,
-  counterexamples, build errors). Added per-test output lines
-  scoped to each child via `appendOutput(text, undefined,
-  childItem)` so selecting a test in the explorer narrows the
-  output pane to just its slice. Echo the forge command line
-  and `cwd` at the start of each invocation; render a per-suite
-  summary footer (`[suite] N passed, M failed`); surface
-  decoded logs, fuzz `kind: { runs, mean_gas, median_gas }`,
-  unit `kind: { gas }`, and invariant `kind: { runs, calls,
-  reverts }`. Build errors / forge stderr now also flow into the
-  output pane instead of just the error toast.
-- **Storage Layout types rendered as raw forge type ids and the
-  legend colors never appeared.** The panel was reading
-  `entry.type` straight from forge, which is a type *id* like
-  `t_mapping(t_userDefinedValueType(PoolId)16015,t_uint256)` —
-  unreadable, and `typeColor`'s `startsWith("uint" | "address" |
-  "mapping" | …)` checks never matched the `t_` prefix, so
-  every slot drew with the default grey. The two pieces of data
-  needed to render are in `data.types[entry.type]`: the
-  human-readable `label` (e.g. `mapping(PoolId => uint256)`)
-  and `numberOfBytes`. Resolved each entry through that map,
-  which both restores the legend colors and gives packed slots
-  proportional bar widths instead of the previous
-  every-bar-is-32-bytes default.
 
 ### Changed (breaking — pre-1.0 rename)
 

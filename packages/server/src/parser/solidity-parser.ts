@@ -638,31 +638,38 @@ function parseNatspecLines(rawLines: string[]): NatspecComment | undefined {
   // Before any tag, untagged lines fold into @notice per solc convention.
   let section: NatspecSection = { kind: "notice" };
 
+  // Continuation lines join with a literal newline, not a space. Markdown
+  // renders a single `\n` as a soft wrap and `\n\n` as a paragraph break,
+  // so this preserves authored structure (headings, lists, multi-paragraph
+  // long-form docs) end-to-end into the hover popover. The previous
+  // single-space join collapsed every `///` line into one run-on
+  // paragraph, which is what users were seeing on contracts with
+  // structured natspec.
   const append = (text: string) => {
     if (!section) return;
     switch (section.kind) {
       case "notice":
-        natspec.notice = natspec.notice ? natspec.notice + " " + text : text;
+        natspec.notice = natspec.notice !== undefined ? natspec.notice + "\n" + text : text;
         return;
       case "dev":
-        natspec.dev = natspec.dev ? natspec.dev + " " + text : text;
+        natspec.dev = natspec.dev !== undefined ? natspec.dev + "\n" + text : text;
         return;
       case "param": {
         if (!natspec.params) natspec.params = {};
         const prev = natspec.params[section.name];
-        natspec.params[section.name] = prev ? prev + " " + text : text;
+        natspec.params[section.name] = prev !== undefined ? prev + "\n" + text : text;
         return;
       }
       case "return": {
         if (!natspec.returns) natspec.returns = {};
         const prev = natspec.returns[section.name];
-        natspec.returns[section.name] = prev ? prev + " " + text : text;
+        natspec.returns[section.name] = prev !== undefined ? prev + "\n" + text : text;
         return;
       }
       case "custom": {
         if (!natspec.custom) natspec.custom = {};
         const prev = natspec.custom[section.tag];
-        natspec.custom[section.tag] = prev ? prev + " " + text : text;
+        natspec.custom[section.tag] = prev !== undefined ? prev + "\n" + text : text;
         return;
       }
     }
@@ -670,7 +677,15 @@ function parseNatspecLines(rawLines: string[]): NatspecComment | undefined {
 
   for (const raw of rawLines) {
     const line = raw.trim();
-    if (!line) continue;
+
+    // Blank lines aren't skipped — they're appended as empty strings so the
+    // running section content gets a `\n\n` paragraph break at exactly the
+    // place the author put one. Without this, every blank `///` line
+    // between paragraphs vanished and content fused into one block.
+    if (!line) {
+      append("");
+      continue;
+    }
 
     const match = line.match(TAG_REGEX);
     if (!match) {
@@ -742,26 +757,36 @@ function parseNatspecLines(rawLines: string[]): NatspecComment | undefined {
     }
   }
 
-  // Collapse internal whitespace runs (including newlines we joined with
-  // spaces above) down to single spaces, and trim the edges.
-  const collapse = (s: string): string => s.replace(/\s+/g, " ").trim();
-  if (natspec.title !== undefined) natspec.title = collapse(natspec.title);
-  if (natspec.author !== undefined) natspec.author = collapse(natspec.author);
-  if (natspec.notice !== undefined) natspec.notice = collapse(natspec.notice);
-  if (natspec.dev !== undefined) natspec.dev = collapse(natspec.dev);
+  // `title` and `author` are inherently single-line fields — collapse
+  // any incidental whitespace so they render cleanly. Everything else
+  // may carry markdown structure (paragraphs, lists, headings) so we
+  // tidy *intra-line* whitespace but preserve `\n` separators, and
+  // trim leading/trailing blank lines from the edges.
+  const collapseSingleLine = (s: string): string => s.replace(/\s+/g, " ").trim();
+  const tidyMultiLine = (s: string): string =>
+    s
+      .split(/\r?\n/)
+      .map((line) => line.replace(/[ \t]+/g, " ").replace(/^ | $/g, ""))
+      .join("\n")
+      .replace(/^\n+|\n+$/g, "");
+
+  if (natspec.title !== undefined) natspec.title = collapseSingleLine(natspec.title);
+  if (natspec.author !== undefined) natspec.author = collapseSingleLine(natspec.author);
+  if (natspec.notice !== undefined) natspec.notice = tidyMultiLine(natspec.notice);
+  if (natspec.dev !== undefined) natspec.dev = tidyMultiLine(natspec.dev);
   if (natspec.params) {
     for (const k of Object.keys(natspec.params)) {
-      natspec.params[k] = collapse(natspec.params[k]);
+      natspec.params[k] = tidyMultiLine(natspec.params[k]);
     }
   }
   if (natspec.returns) {
     for (const k of Object.keys(natspec.returns)) {
-      natspec.returns[k] = collapse(natspec.returns[k]);
+      natspec.returns[k] = tidyMultiLine(natspec.returns[k]);
     }
   }
   if (natspec.custom) {
     for (const k of Object.keys(natspec.custom)) {
-      natspec.custom[k] = collapse(natspec.custom[k]);
+      natspec.custom[k] = tidyMultiLine(natspec.custom[k]);
     }
   }
 
