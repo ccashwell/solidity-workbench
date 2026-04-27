@@ -140,7 +140,37 @@ export class StorageLayoutPanel {
         },
       );
       const data = JSON.parse(result.stdout);
-      return { layout: data.storage ?? data ?? [] };
+      // Forge emits two parallel structures:
+      //   - `data.storage[]` — one entry per state variable, with the
+      //     declared name, slot, offset, and a *type id* (e.g.
+      //     `t_uint256`).
+      //   - `data.types{}` — a map from type id to its display label
+      //     (`uint256`) and `numberOfBytes`.
+      // Renderers want the resolved label and byte width, not the
+      // type id, so we merge the two here. The previous
+      // implementation passed raw entries straight through, which
+      // is why every variable rendered as the fallback grey
+      // (`startsWith("address")` etc. never matched the `t_…` ids)
+      // and every slot bar drew at the default 32-byte width
+      // regardless of actual packing.
+      const types = (data.types ?? {}) as Record<
+        string,
+        { label?: string; numberOfBytes?: string }
+      >;
+      const layout: StorageEntry[] = (data.storage ?? []).map((e: any) => {
+        const typeId = String(e.type ?? "");
+        const meta = types[typeId] ?? {};
+        const typeLabel = meta.label ?? typeId.replace(/^t_/, "");
+        const bytes = parseInt(meta.numberOfBytes ?? "32", 10);
+        return {
+          label: String(e.label ?? ""),
+          type: typeLabel,
+          slot: String(e.slot ?? "0"),
+          offset: parseInt(String(e.offset ?? 0), 10) || 0,
+          numberOfBytes: String(Number.isFinite(bytes) ? bytes : 32),
+        };
+      });
+      return { layout };
     } catch (err: any) {
       const stderr = (err.stderr ?? "").toString().trim();
       const stdout = (err.stdout ?? "").toString().trim();

@@ -31,6 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the user's `solidity-workbench.foundryPath` setting was
   ignored — only the `forge` on PATH was ever invoked. Switched
   to `getConfiguration("solidity-workbench")`.
+- **Storage Layout types rendered as raw forge type ids and the
+  legend colors never appeared.** The panel was reading
+  `entry.type` straight from forge, which is a type *id* like
+  `t_mapping(t_userDefinedValueType(PoolId)16015,t_uint256)` —
+  unreadable, and `typeColor`'s `startsWith("uint" | "address" |
+  "mapping" | …)` checks never matched the `t_` prefix, so
+  every slot drew with the default grey. The two pieces of data
+  needed to render are in `data.types[entry.type]`: the
+  human-readable `label` (e.g. `mapping(PoolId => uint256)`)
+  and `numberOfBytes`. Resolved each entry through that map,
+  which both restores the legend colors and gives packed slots
+  proportional bar widths instead of the previous
+  every-bar-is-32-bytes default.
 
 ### Changed (breaking — pre-1.0 rename)
 
