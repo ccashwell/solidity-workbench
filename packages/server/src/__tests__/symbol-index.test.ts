@@ -342,6 +342,120 @@ contract DiskOnly {
     });
   });
 
+  describe("lazy on-miss indexing", () => {
+    /**
+     * Drive `indexWorkspace` partially: yield after the project tier
+     * lands but before deps are processed. Used to simulate the window
+     * where a name lookup races against bulk indexing — the user types
+     * a query for a forge-std symbol while only `src/` has been seen.
+     */
+    function makeWorkspaceWithTwoFiles(): {
+      tmp: string;
+      projUri: string;
+      depUri: string;
+      ws: WorkspaceManager;
+    } {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "solidx-lazy-"));
+      const projPath = path.join(tmp, "Proj.sol");
+      const depPath = path.join(tmp, "Dep.sol");
+      fs.writeFileSync(projPath, `contract Project {}`);
+      fs.writeFileSync(depPath, `contract LibraryDep { function helper() external {} }`);
+      const projUri = URI.file(projPath).toString();
+      const depUri = URI.file(depPath).toString();
+      const ws = {
+        getAllFileUris: () => [projUri, depUri],
+        getFileUrisByTier: () => ({
+          project: [projUri],
+          tests: [],
+          deps: [depUri],
+        }),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+      } as unknown as WorkspaceManager;
+      return { tmp, projUri, depUri, ws };
+    }
+
+    it("findSymbols drains pending files when a query misses mid-index", async () => {
+      const { tmp, ws } = makeWorkspaceWithTwoFiles();
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, ws);
+
+      // Mid-flight: a query for the dep symbol should still resolve by
+      // draining the pending queue. We simulate the race by calling
+      // findSymbols *before* indexWorkspace runs at all — pending will
+      // be empty at construction time, so we trigger indexWorkspace
+      // first, then capture state at the first progress callback.
+      let depHitMidIndex = 0;
+      await idx.indexWorkspace(() => {
+        // Snapshot the very first time we get a callback (after the
+        // project tier batch, deps still pending).
+        if (depHitMidIndex === 0) {
+          depHitMidIndex = idx.findSymbols("LibraryDep").length;
+        }
+      });
+
+      assert.equal(depHitMidIndex, 1, "miss on a pending symbol should drain and resolve");
+      assert.equal(idx.findSymbols("Project").length, 1);
+      assert.equal(idx.findSymbols("LibraryDep").length, 1);
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
+    it("getContract drains pending files for inheritance lookups", async () => {
+      const { tmp, ws } = makeWorkspaceWithTwoFiles();
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, ws);
+
+      let contractHitMidIndex: { uri: string } | undefined;
+      await idx.indexWorkspace(() => {
+        if (!contractHitMidIndex) {
+          contractHitMidIndex = idx.getContract("LibraryDep");
+        }
+      });
+      assert.ok(contractHitMidIndex, "getContract miss must drain pending and find the contract");
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
+    it("findReferences drains pending files when no occurrences are indexed yet", async () => {
+      const { tmp, ws } = makeWorkspaceWithTwoFiles();
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, ws);
+
+      let helperRefsMid = 0;
+      await idx.indexWorkspace(() => {
+        if (helperRefsMid === 0) {
+          helperRefsMid = idx.findReferences("helper").length;
+        }
+      });
+      assert.ok(helperRefsMid >= 1, "findReferences should find dep occurrences after drain");
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
+    it("editor-driven updateFile clears the pending entry and skips redundant re-index", async () => {
+      const { tmp, projUri, depUri, ws } = makeWorkspaceWithTwoFiles();
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, ws);
+
+      // Pre-load the dep file via the editor path (`updateFile`) before
+      // bulk indexing reaches it. The bulk loop should observe pending
+      // already cleared and skip the second indexing pass.
+      parser.parse(depUri, fs.readFileSync(URI.parse(depUri).fsPath, "utf-8"));
+      // Calling indexWorkspace populates pending = {projUri, depUri},
+      // but we then simulate a document open that races ahead.
+      const indexing = idx.indexWorkspace();
+      // Yield once so indexWorkspace has populated `pending`.
+      await new Promise((resolve) => setImmediate(resolve));
+      idx.updateFile(depUri);
+      await indexing;
+
+      assert.equal(idx.findSymbols("Project").length, 1);
+      assert.equal(idx.findSymbols("LibraryDep").length, 1);
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+  });
+
   describe("findWorkspaceSymbols ranking", () => {
     const seed = (parser: SolidityParser, idx: SymbolIndex) => {
       indexText(

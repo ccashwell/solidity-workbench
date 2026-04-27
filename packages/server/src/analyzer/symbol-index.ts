@@ -59,6 +59,16 @@ export class SymbolIndex {
    */
   private trigrams = new TrigramIndex();
 
+  /**
+   * Files queued for the initial workspace index that haven't been
+   * processed yet. Drains as `indexWorkspace` walks tiers and as
+   * documents are opened by the editor (which short-circuits to
+   * `updateFile`). When a name-based lookup misses while this set is
+   * non-empty we drain the rest synchronously and retry — see
+   * {@link flushPending}.
+   */
+  private pending: Set<string> = new Set();
+
   constructor(parser: SolidityParser, workspace: WorkspaceManager) {
     this.parser = parser;
     this.workspace = workspace;
@@ -89,16 +99,26 @@ export class SymbolIndex {
       : this.workspace.getAllFileUris();
 
     const total = ordered.length;
+    this.pending = new Set(ordered);
     if (total === 0) {
       reportProgress?.(0, 0);
       return;
     }
 
-    for (let i = 0; i < ordered.length; i++) {
-      await this.indexFile(ordered[i]);
-      const done = i + 1;
-      const isLast = done === total;
-      if (done % INDEX_BATCH_SIZE === 0 || isLast) {
+    let lastReported = 0;
+    for (const uri of ordered) {
+      // A concurrent `flushPending` (driven by a name-miss in another
+      // request) or a document open via `updateFile` may have already
+      // indexed this file — skip the redundant pass.
+      if (this.pending.has(uri)) {
+        this.pending.delete(uri);
+        await this.indexFile(uri);
+      }
+
+      const done = total - this.pending.size;
+      const isLast = this.pending.size === 0;
+      if ((done >= lastReported + INDEX_BATCH_SIZE || isLast) && done !== lastReported) {
+        lastReported = done;
         reportProgress?.(done, total);
         if (!isLast) {
           // Yield to the event loop so pending LSP requests can run
@@ -107,6 +127,36 @@ export class SymbolIndex {
           // timers fire.
           await new Promise<void>((resolve) => setImmediate(resolve));
         }
+      }
+
+      if (isLast) break;
+    }
+  }
+
+  /**
+   * Drain every still-pending file synchronously. Invoked as a
+   * correctness fallback by name-based lookups that miss while the
+   * initial workspace index is in flight: the priority sweep favors
+   * project source over deps, so a query for a forge-std symbol may
+   * legitimately have nothing in the index yet. Rather than silently
+   * returning empty, we finish indexing and retry once.
+   *
+   * Bounded by the number of remaining files. After the first miss
+   * during startup the index is fully warm and subsequent queries hit
+   * the fast path.
+   */
+  private flushPending(): void {
+    if (this.pending.size === 0) return;
+    const drain = [...this.pending];
+    this.pending.clear();
+    for (const uri of drain) {
+      try {
+        const filePath = this.workspace.uriToPath(uri);
+        const text = readFileSync(filePath, "utf-8");
+        this.parser.parse(uri, text);
+        this.updateFile(uri);
+      } catch {
+        /* file unreadable, skip — same policy as `indexFile` */
       }
     }
   }
@@ -135,6 +185,11 @@ export class SymbolIndex {
   updateFile(uri: string): void {
     const result = this.parser.get(uri);
     if (!result) return;
+
+    // The file is being indexed via the editor / file-watcher path —
+    // make sure the bulk `indexWorkspace` loop and any later
+    // `flushPending` skip it.
+    this.pending.delete(uri);
 
     // Refresh the inverted reference index using the cached source text.
     // If for some reason the parser didn't retain text (older call sites),
@@ -333,9 +388,21 @@ export class SymbolIndex {
 
   /**
    * Find symbols by name (exact match or prefix).
+   *
+   * Hits the in-memory map first. On a miss while the initial
+   * workspace index is still in flight we drain the rest of the
+   * pending queue and retry once — see {@link flushPending} for the
+   * rationale. After the drain, all subsequent calls take the fast
+   * path.
    */
   findSymbols(name: string): SolSymbol[] {
-    return this.symbolsByName.get(name) ?? [];
+    const hit = this.symbolsByName.get(name);
+    if (hit && hit.length > 0) return hit;
+    if (this.pending.size > 0) {
+      this.flushPending();
+      return this.symbolsByName.get(name) ?? [];
+    }
+    return hit ?? [];
   }
 
   /**
@@ -345,16 +412,31 @@ export class SymbolIndex {
    * matches and already strips block comments, line comments, and string
    * literals.  Includes both declaration sites and usage sites; callers that
    * want to distinguish them can intersect with {@link findSymbols}.
+   *
+   * On an empty result with files still pending we drain the queue and
+   * retry, mirroring {@link findSymbols}.
    */
   findReferences(name: string): { uri: string; range: Range }[] {
-    return this.refIndex.findReferences(name);
+    const hit = this.refIndex.findReferences(name);
+    if (hit.length > 0) return hit;
+    if (this.pending.size > 0) {
+      this.flushPending();
+      return this.refIndex.findReferences(name);
+    }
+    return hit;
   }
 
   /**
    * Total count of indexed occurrences of `name` (declarations + usages).
    */
   referenceCount(name: string): number {
-    return this.refIndex.referenceCount(name);
+    const n = this.refIndex.referenceCount(name);
+    if (n > 0) return n;
+    if (this.pending.size > 0) {
+      this.flushPending();
+      return this.refIndex.referenceCount(name);
+    }
+    return 0;
   }
 
   /**
@@ -364,7 +446,12 @@ export class SymbolIndex {
    * yet (e.g. newly opened files not yet indexed).
    */
   hasReferences(name: string): boolean {
-    return this.refIndex.has(name);
+    if (this.refIndex.has(name)) return true;
+    if (this.pending.size > 0) {
+      this.flushPending();
+      return this.refIndex.has(name);
+    }
+    return false;
   }
 
   /**
@@ -434,9 +521,20 @@ export class SymbolIndex {
 
   /**
    * Get a contract definition by name.
+   *
+   * Falls back to a pending-queue drain on miss — same rationale as
+   * {@link findSymbols}. Inheritance walks repeatedly hit this method
+   * (`getInheritanceChain`) and a single drain at the first miss
+   * warms the cache for the rest of the chain.
    */
   getContract(name: string): { uri: string; contract: ContractDefinition } | undefined {
-    return this.contractsByName.get(name);
+    const hit = this.contractsByName.get(name);
+    if (hit) return hit;
+    if (this.pending.size > 0) {
+      this.flushPending();
+      return this.contractsByName.get(name);
+    }
+    return undefined;
   }
 
   /**
