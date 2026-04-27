@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-04-27
+
+### Fixed
+
+- **Hover, inlay hints, and definition were unresponsive until the
+  full workspace index finished.** 0.2.0's "flush pending on miss"
+  fallback was correctness-correct but blocked the LSP: a single
+  lookup miss on a `forge-std` symbol drained every remaining
+  `lib/` file synchronously before the request returned. While the
+  drain ran, the event loop couldn't dispatch any other LSP
+  requests or progress notifications, which read to users as "the
+  editor is frozen until indexing finishes" — the same symptom
+  chunked indexing was meant to fix. Replaced with
+  `SymbolIndex.ensureImportsIndexed`, which walks the transitive
+  import graph of an opened/changed document and indexes only the
+  files that document actually pulls in (typically a few dozen,
+  vs. the whole `lib/` tree). Wired into
+  `documents.onDidChangeContent` as fire-and-forget; a `visited`
+  set prevents re-work on subsequent edits and infinite recursion
+  on import cycles. By-name lookups (`findSymbols`, `getContract`,
+  `findReferences`, etc.) are back to fast cache reads.
+- **Hover and signature-help natspec rendering.** Two `>`
+  blockquote markers in front of the `Dev:` label rendered as
+  quoted blocks in the hover popover instead of inline emphasis.
+  Switched to plain `**Dev:**` formatting.
+
 ## [0.2.0] - 2026-04-27
 
 ### Performance
