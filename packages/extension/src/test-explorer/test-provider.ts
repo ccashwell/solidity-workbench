@@ -237,6 +237,14 @@ export class FoundryTestProvider {
         const verbosityFlag = forgeVerbosityFlag(verbosity);
         if (verbosityFlag) args.push(verbosityFlag);
 
+        // Echo the command into the run's output pane so the user sees
+        // exactly what's being executed — no `--json` noise (it's an
+        // implementation detail), but every other arg verbatim.
+        const displayArgs = args.filter((a) => a !== "--json");
+        appendOutputLine(run, `$ ${forgePath} ${displayArgs.join(" ")}`);
+        appendOutputLine(run, `  (cwd: ${forgeRoot})`);
+        appendOutputLine(run, "");
+
         const result = await execFileAsync(forgePath, args, {
           cwd: forgeRoot,
           maxBuffer: 10 * 1024 * 1024,
@@ -253,6 +261,7 @@ export class FoundryTestProvider {
           // stdout (build error, binary missing, etc.) so the user
           // sees why rather than an opaque "no output".
           const detail = (e.stderr || e.message || "forge test failed").trim();
+          appendOutputBlock(run, item, detail);
           run.failed(item, new vscode.TestMessage(detail));
         }
       }
@@ -305,6 +314,7 @@ export class FoundryTestProvider {
   private processTestOutput(run: vscode.TestRun, item: vscode.TestItem, stdout: string): void {
     const trimmed = stdout.trim();
     if (!trimmed) {
+      appendOutputBlock(run, item, "forge test produced no output");
       run.failed(item, new vscode.TestMessage("forge test produced no output"));
       return;
     }
@@ -316,6 +326,7 @@ export class FoundryTestProvider {
       // Forge failed to produce a JSON blob — typically because the
       // build crashed before any test ran. Surface the raw text so the
       // user has something to work with.
+      appendOutputBlock(run, item, trimmed);
       run.failed(
         item,
         new vscode.TestMessage(
@@ -330,11 +341,11 @@ export class FoundryTestProvider {
     }
 
     let reportedAny = false;
-    for (const [, suite] of Object.entries(data as Record<string, unknown>)) {
+    for (const [suiteId, suite] of Object.entries(data as Record<string, unknown>)) {
       if (!suite || typeof suite !== "object") continue;
       const s = suite as { test_results?: Record<string, unknown> };
       if (!s.test_results || typeof s.test_results !== "object") continue;
-      reportedAny ||= this.reportSuiteResults(run, item, s.test_results);
+      reportedAny ||= this.reportSuiteResults(run, item, suiteId, s.test_results);
     }
 
     if (!reportedAny) {
@@ -349,9 +360,14 @@ export class FoundryTestProvider {
   private reportSuiteResults(
     run: vscode.TestRun,
     parentItem: vscode.TestItem,
+    suiteId: string,
     testResults: Record<string, unknown>,
   ): boolean {
     let reportedAny = false;
+    let passed = 0;
+    let failed = 0;
+    let skipped = 0;
+
     for (const [rawName, raw] of Object.entries(testResults)) {
       if (!raw || typeof raw !== "object") continue;
       const result = raw as {
@@ -359,25 +375,54 @@ export class FoundryTestProvider {
         reason?: string | null;
         counterexample?: unknown;
         duration?: unknown;
+        decoded_logs?: unknown;
+        kind?: unknown;
       };
 
       const childItem = this.findChildByName(parentItem, rawName) ?? parentItem;
       const durationMs = parseForgeDurationMs(result.duration);
       reportedAny = true;
 
+      // Build a compact human-readable block per test for the run's
+      // output pane. Associating it with `childItem` makes the test
+      // result clickable — VSCode jumps to just this slice when the
+      // user selects the test in the explorer.
+      const headerLine = formatTestHeader(suiteId, rawName, result.status, durationMs, result.kind);
+      appendOutputLine(run, headerLine, childItem);
+
+      const decodedLogs = Array.isArray(result.decoded_logs) ? result.decoded_logs : [];
+      for (const log of decodedLogs) {
+        appendOutputLine(run, `    ${String(log)}`, childItem);
+      }
+
       if (result.status === "Success") {
         run.passed(childItem, durationMs);
+        passed += 1;
       } else if (result.status === "Failure") {
-        const lines = [result.reason ?? "Test failed"];
+        const reasonLine = result.reason ?? "Test failed";
+        appendOutputLine(run, `    reason: ${reasonLine}`, childItem);
+        const lines = [reasonLine];
         if (result.counterexample) {
-          lines.push("", `Counterexample: ${JSON.stringify(result.counterexample)}`);
+          const ce = JSON.stringify(result.counterexample);
+          appendOutputLine(run, `    counterexample: ${ce}`, childItem);
+          lines.push("", `Counterexample: ${ce}`);
         }
         run.failed(childItem, new vscode.TestMessage(lines.join("\n")), durationMs);
+        failed += 1;
       } else {
         // "Skipped", "Warning", or any future status we don't recognize.
         run.skipped(childItem);
+        skipped += 1;
       }
+      appendOutputLine(run, "", childItem);
     }
+
+    appendOutputLine(
+      run,
+      `[${suiteId}] ${passed} passed, ${failed} failed${skipped ? `, ${skipped} skipped` : ""}`,
+      parentItem,
+    );
+    appendOutputLine(run, "", parentItem);
     return reportedAny;
   }
 
@@ -407,4 +452,90 @@ export class FoundryTestProvider {
     this.controller.items.forEach((item) => items.push(item));
     return items;
   }
+}
+
+// ── Output formatting helpers ────────────────────────────────────────
+
+/**
+ * Append a single line to the test run's output pane. VSCode's
+ * test-run output is a terminal-style channel — line terminators
+ * must be CRLF (`\r\n`), not bare `\n`, or the next line writes
+ * over the previous one. Wrapping `run.appendOutput` in a helper
+ * keeps that detail in one place.
+ *
+ * When `item` is supplied the line is associated with that test
+ * item, and selecting the item in the explorer scopes the output
+ * pane to just its slice.
+ */
+function appendOutputLine(run: vscode.TestRun, line: string, item?: vscode.TestItem): void {
+  run.appendOutput(`${line}\r\n`, undefined, item);
+}
+
+/** Append a multi-line block, normalizing newlines to CRLF. */
+function appendOutputBlock(run: vscode.TestRun, item: vscode.TestItem, text: string): void {
+  for (const line of text.split(/\r?\n/)) {
+    appendOutputLine(run, line, item);
+  }
+}
+
+/**
+ * Render the per-test header line for the output pane:
+ *
+ *   ✓ CounterTest::test_Increment  (2.86ms, gas: 31303)
+ *   ✗ CounterTest::testFuzz_Bound  (12.4ms, runs: 256)
+ *   ⊘ CounterTest::test_Skipped
+ *
+ * `kind` is forge's nested gas/fuzz info — `{ Standard: 31303 }`
+ * for plain tests, `{ Fuzz: { runs: 256, mean_gas: ... } }` for
+ * fuzz, etc. We pull the most useful number out per shape.
+ */
+function formatTestHeader(
+  suiteId: string,
+  rawName: string,
+  status: string | undefined,
+  durationMs: number | undefined,
+  kind: unknown,
+): string {
+  const glyph = status === "Success" ? "✓" : status === "Failure" ? "✗" : "⊘";
+  const detail: string[] = [];
+  if (typeof durationMs === "number" && Number.isFinite(durationMs)) {
+    detail.push(`${durationMs.toFixed(2)}ms`);
+  }
+  const gasOrRuns = formatKind(kind);
+  if (gasOrRuns) detail.push(gasOrRuns);
+  const tail = detail.length > 0 ? `  (${detail.join(", ")})` : "";
+  return `${glyph} ${suiteId}::${rawName}${tail}`;
+}
+
+function formatKind(kind: unknown): string | null {
+  if (!kind || typeof kind !== "object") return null;
+  const k = kind as Record<string, unknown>;
+  // Forge wraps the gas/runs payload in a tagged-union shape:
+  //   { Unit: { gas: 34426 } }                    — plain tests
+  //   { Fuzz: { runs, mean_gas, median_gas, … } } — `testFuzz_*`
+  //   { Invariant: { runs, calls, reverts, … } }  — `invariant_*`
+  // (Older forges used `Standard` for the unit case; we accept it
+  // too rather than dropping that ergonomics on users who haven't
+  // updated foundryup.)
+  const unit = (k.Unit ?? k.Standard) as { gas?: number } | undefined;
+  if (unit && typeof unit.gas === "number") {
+    return `gas: ${unit.gas.toLocaleString()}`;
+  }
+  if (k.Fuzz && typeof k.Fuzz === "object") {
+    const f = k.Fuzz as { runs?: number; mean_gas?: number; median_gas?: number };
+    const parts: string[] = [];
+    if (typeof f.runs === "number") parts.push(`runs: ${f.runs}`);
+    if (typeof f.mean_gas === "number") parts.push(`μgas: ${f.mean_gas.toLocaleString()}`);
+    if (typeof f.median_gas === "number") parts.push(`med: ${f.median_gas.toLocaleString()}`);
+    return parts.length > 0 ? parts.join(", ") : null;
+  }
+  if (k.Invariant && typeof k.Invariant === "object") {
+    const i = k.Invariant as { runs?: number; calls?: number; reverts?: number };
+    const parts: string[] = [];
+    if (typeof i.runs === "number") parts.push(`runs: ${i.runs}`);
+    if (typeof i.calls === "number") parts.push(`calls: ${i.calls}`);
+    if (typeof i.reverts === "number") parts.push(`reverts: ${i.reverts}`);
+    return parts.length > 0 ? parts.join(", ") : null;
+  }
+  return null;
 }

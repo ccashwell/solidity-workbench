@@ -31,6 +31,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the user's `solidity-workbench.foundryPath` setting was
   ignored — only the `forge` on PATH was ever invoked. Switched
   to `getConfiguration("solidity-workbench")`.
+- **Test Explorer reported "The test run did not record any
+  output."** The provider piped pass/fail signals through the
+  `TestRun` API but never called `appendOutput`, so VSCode's
+  output pane stayed empty even though `forge test --json`
+  produces a wealth of detail (per-test gas, durations, decoded
+  console.log output, fuzz run counts and median gas,
+  counterexamples, build errors). Added per-test output lines
+  scoped to each child via `appendOutput(text, undefined,
+  childItem)` so selecting a test in the explorer narrows the
+  output pane to just its slice. Echo the forge command line
+  and `cwd` at the start of each invocation; render a per-suite
+  summary footer (`[suite] N passed, M failed`); surface
+  decoded logs, fuzz `kind: { runs, mean_gas, median_gas }`,
+  unit `kind: { gas }`, and invariant `kind: { runs, calls,
+  reverts }`. Build errors / forge stderr now also flow into the
+  output pane instead of just the error toast.
 - **Storage Layout types rendered as raw forge type ids and the
   legend colors never appeared.** The panel was reading
   `entry.type` straight from forge, which is a type *id* like
