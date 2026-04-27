@@ -410,7 +410,7 @@
     "@types/vscode": "^1.85.0",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^2.22.0",
-    "esbuild": "^0.20.0",
+    "esbuild": "^0.25.0",
     "glob": "^13.0.6",
     "mocha": "^11.7.5",
     "ovsx": "^0.10.11",
