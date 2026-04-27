@@ -13,6 +13,7 @@
     "format:check": "prettier --check 'packages/*/src/**/*.ts'",
     "test": "pnpm -r test",
     "package": "pnpm build:icon && cd packages/extension && pnpm package",
+    "publish:ovsx": "pnpm build && pnpm package && cd packages/extension && pnpm publish:ovsx",
     "clean": "pnpm -r clean"
   },
   "devDependencies": {
