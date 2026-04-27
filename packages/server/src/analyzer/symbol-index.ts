@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import type { CancellationToken, Range, WorkspaceSymbol } from "vscode-languageserver/node.js";
 import {
   Location,
@@ -15,6 +16,17 @@ import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import { ReferenceIndex } from "./reference-index.js";
 import { TrigramIndex, scoreName } from "./trigram-index.js";
+
+/** Files indexed per `setImmediate` yield. Tuned for snappy editor response
+ *  on a typical foundry workspace — small enough that any single batch
+ *  (parse + symbol extraction + reference scan) finishes in a few ms,
+ *  large enough that the per-yield overhead doesn't dominate. */
+const INDEX_BATCH_SIZE = 24;
+
+/** Callback fired between batches during the initial workspace index.
+ *  `filesIndexed` is monotonically non-decreasing and capped at
+ *  `filesTotal`. */
+export type IndexProgressReporter = (filesIndexed: number, filesTotal: number) => void;
 
 /**
  * Maintains a cross-file symbol index for the workspace.
@@ -53,12 +65,49 @@ export class SymbolIndex {
   }
 
   /**
-   * Index all Solidity files in the workspace.
+   * Index every Solidity file in the workspace, walking files in
+   * priority order: project source first, then tests/scripts, then
+   * library dependencies.
+   *
+   * The work is broken into {@link INDEX_BATCH_SIZE}-sized chunks with
+   * a `setImmediate` yield between batches so the LSP can serve hover,
+   * completion, and other requests while bulk indexing is still in
+   * flight. The `reportProgress` callback fires at every yield point
+   * (and one final time when indexing completes) so the client status
+   * bar can stream progress instead of jumping 0 → done.
+   *
+   * If the workspace stub doesn't expose `getFileUrisByTier` (older
+   * test fakes) we fall back to the flat URI list with no priority.
    */
-  async indexWorkspace(): Promise<void> {
-    const uris = this.workspace.getAllFileUris();
-    for (const uri of uris) {
-      await this.indexFile(uri);
+  async indexWorkspace(reportProgress?: IndexProgressReporter): Promise<void> {
+    const tieredFn = (this.workspace as Partial<WorkspaceManager>).getFileUrisByTier;
+    const ordered = tieredFn
+      ? (() => {
+          const t = tieredFn.call(this.workspace);
+          return [...t.project, ...t.tests, ...t.deps];
+        })()
+      : this.workspace.getAllFileUris();
+
+    const total = ordered.length;
+    if (total === 0) {
+      reportProgress?.(0, 0);
+      return;
+    }
+
+    for (let i = 0; i < ordered.length; i++) {
+      await this.indexFile(ordered[i]);
+      const done = i + 1;
+      const isLast = done === total;
+      if (done % INDEX_BATCH_SIZE === 0 || isLast) {
+        reportProgress?.(done, total);
+        if (!isLast) {
+          // Yield to the event loop so pending LSP requests can run
+          // between batches. A microtask (`await Promise.resolve()`)
+          // isn't enough — only a macrotask boundary lets I/O and
+          // timers fire.
+          await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+      }
     }
   }
 
@@ -72,7 +121,6 @@ export class SymbolIndex {
   async indexFile(uri: string): Promise<void> {
     try {
       const filePath = this.workspace.uriToPath(uri);
-      const { readFileSync } = await import("node:fs");
       const text = readFileSync(filePath, "utf-8");
       this.parser.parse(uri, text);
       this.updateFile(uri);

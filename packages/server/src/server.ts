@@ -227,7 +227,9 @@ connection.onInitialized(async () => {
     filesTotal: workspaceManager.getAllFileUris().length,
   });
 
-  await symbolIndex.indexWorkspace();
+  await symbolIndex.indexWorkspace((filesIndexed, filesTotal) => {
+    pushServerState({ phase: "indexing", filesIndexed, filesTotal });
+  });
 
   pushServerState({
     phase: "idle",

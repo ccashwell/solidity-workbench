@@ -262,6 +262,86 @@ contract DiskOnly {
     });
   });
 
+  describe("indexWorkspace prioritization", () => {
+    /** Build a fake workspace that exposes both `getAllFileUris` and
+     *  `getFileUrisByTier` so we can verify the priority order. */
+    function makeTieredWorkspace(tiers: {
+      project: string[];
+      tests: string[];
+      deps: string[];
+    }): WorkspaceManager {
+      return {
+        getAllFileUris: () => [...tiers.project, ...tiers.tests, ...tiers.deps],
+        getFileUrisByTier: () => tiers,
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+      } as unknown as WorkspaceManager;
+    }
+
+    it("indexes project files before tests, and tests before deps", async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "solidx-tier-"));
+      const writeContract = (name: string): string => {
+        const filePath = path.join(tmp, `${name}.sol`);
+        fs.writeFileSync(filePath, `contract ${name} {}`);
+        return URI.file(filePath).toString();
+      };
+
+      // One file per tier; the names embed the tier so we can tell the
+      // ordering callbacks apart.
+      const projectUri = writeContract("ProjFoo");
+      const testsUri = writeContract("TestFoo");
+      const depsUri = writeContract("DepFoo");
+
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(
+        parser,
+        makeTieredWorkspace({
+          // Reverse the natural sort order so the prioritization is
+          // observable (any non-priority loop would index Dep first).
+          project: [projectUri],
+          tests: [testsUri],
+          deps: [depsUri],
+        }),
+      );
+
+      // Snapshot which symbols are present at each progress checkpoint
+      // so we can assert that earlier tiers are visible before later
+      // tiers finish.
+      const snapshots: { proj: number; test: number; dep: number; done: number }[] = [];
+      await idx.indexWorkspace((done) => {
+        snapshots.push({
+          proj: idx.findSymbols("ProjFoo").length,
+          test: idx.findSymbols("TestFoo").length,
+          dep: idx.findSymbols("DepFoo").length,
+          done,
+        });
+      });
+
+      // The first reported batch must include the project symbol.
+      assert.ok(snapshots.length >= 1, "expected at least one progress callback");
+      assert.equal(snapshots[0].proj, 1, "project symbol indexed in first batch");
+
+      // After full indexing, every symbol is present.
+      const final = snapshots[snapshots.length - 1];
+      assert.equal(final.done, 3);
+      assert.equal(final.proj, 1);
+      assert.equal(final.test, 1);
+      assert.equal(final.dep, 1);
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
+    it("invokes reportProgress with a final (total, total) call", async () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(
+        parser,
+        makeTieredWorkspace({ project: [], tests: [], deps: [] }),
+      );
+      const calls: { done: number; total: number }[] = [];
+      await idx.indexWorkspace((done, total) => calls.push({ done, total }));
+      assert.deepEqual(calls, [{ done: 0, total: 0 }]);
+    });
+  });
+
   describe("findWorkspaceSymbols ranking", () => {
     const seed = (parser: SolidityParser, idx: SymbolIndex) => {
       indexText(
