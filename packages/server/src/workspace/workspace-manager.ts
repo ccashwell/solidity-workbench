@@ -6,11 +6,18 @@ import { parse as parseToml } from "toml";
 import type { FoundryProfile, Remapping } from "@solidity-workbench/common";
 import { parseRemapping, resolveImportPath } from "@solidity-workbench/common";
 
+/** Indexing-priority tiers used by `SymbolIndex` to decide what to scan first. */
+export type FileTier = "project" | "tests" | "deps";
+
 /**
  * Per-root state. Each workspace root (i.e. each folder the user has
  * opened in the editor) gets its own `foundry.toml` profile, remappings,
  * and discovered source files. Aggregation across roots happens inside
  * `WorkspaceManager`.
+ *
+ * `filesByTier` mirrors `sourceFiles` partitioned by indexing priority
+ * — `src/` lands in `project`, `test/` and `script/` in `tests`, and
+ * everything under the configured library directories in `deps`.
  */
 interface WorkspaceRoot {
   rootUri: string;
@@ -18,6 +25,7 @@ interface WorkspaceRoot {
   config: FoundryProfile | null;
   remappings: Remapping[];
   sourceFiles: Set<string>;
+  filesByTier: Record<FileTier, Set<string>>;
 }
 
 /**
@@ -181,6 +189,11 @@ export class WorkspaceManager {
       config: null,
       remappings: [],
       sourceFiles: new Set(),
+      filesByTier: {
+        project: new Set(),
+        tests: new Set(),
+        deps: new Set(),
+      },
     });
     if (!this.primaryUri) this.primaryUri = uri;
   }
@@ -196,6 +209,9 @@ export class WorkspaceManager {
     root.config = this.loadFoundryConfig(root.rootPath);
     root.remappings = this.loadRemappings(root);
     root.sourceFiles.clear();
+    root.filesByTier.project.clear();
+    root.filesByTier.tests.clear();
+    root.filesByTier.deps.clear();
     this.discoverSourceFiles(root);
   }
 
@@ -274,19 +290,20 @@ export class WorkspaceManager {
 
   private discoverSourceFiles(root: WorkspaceRoot): void {
     const cfg = root.config;
-    const dirs = [
-      path.join(root.rootPath, cfg?.src ?? "src"),
-      path.join(root.rootPath, cfg?.test ?? "test"),
-      path.join(root.rootPath, cfg?.script ?? "script"),
-      ...(cfg?.libs ?? ["lib"]).map((l) => path.join(root.rootPath, l)),
-    ];
+    const projectDir = path.join(root.rootPath, cfg?.src ?? "src");
+    const testDir = path.join(root.rootPath, cfg?.test ?? "test");
+    const scriptDir = path.join(root.rootPath, cfg?.script ?? "script");
+    const libDirs = (cfg?.libs ?? ["lib"]).map((l) => path.join(root.rootPath, l));
 
-    for (const dir of dirs) {
-      this.walkDirectory(dir, root);
+    this.walkDirectory(projectDir, root, "project");
+    this.walkDirectory(testDir, root, "tests");
+    this.walkDirectory(scriptDir, root, "tests");
+    for (const libDir of libDirs) {
+      this.walkDirectory(libDir, root, "deps");
     }
   }
 
-  private walkDirectory(dir: string, root: WorkspaceRoot): void {
+  private walkDirectory(dir: string, root: WorkspaceRoot, tier: FileTier): void {
     try {
       if (!fs.existsSync(dir)) return;
       const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -294,9 +311,11 @@ export class WorkspaceManager {
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
           if (entry.name === "node_modules" || entry.name === "out") continue;
-          this.walkDirectory(fullPath, root);
+          this.walkDirectory(fullPath, root, tier);
         } else if (entry.name.endsWith(".sol")) {
-          root.sourceFiles.add(URI.file(fullPath).toString());
+          const uri = URI.file(fullPath).toString();
+          root.sourceFiles.add(uri);
+          root.filesByTier[tier].add(uri);
         }
       }
     } catch (err) {
@@ -365,6 +384,25 @@ export class WorkspaceManager {
       for (const uri of root.sourceFiles) uris.push(uri);
     }
     return uris;
+  }
+
+  /**
+   * File URIs grouped by indexing priority. `project` covers `src/`,
+   * `tests` covers `test/` and `script/`, `deps` covers everything under
+   * the configured `libs` directories. `SymbolIndex` walks these tiers
+   * in order so the editor becomes responsive on project files before
+   * dependencies finish indexing.
+   */
+  getFileUrisByTier(): Record<FileTier, string[]> {
+    const project: string[] = [];
+    const tests: string[] = [];
+    const deps: string[] = [];
+    for (const root of this.roots.values()) {
+      for (const uri of root.filesByTier.project) project.push(uri);
+      for (const uri of root.filesByTier.tests) tests.push(uri);
+      for (const uri of root.filesByTier.deps) deps.push(uri);
+    }
+    return { project, tests, deps };
   }
 
   uriToPath(uri: string): string {
