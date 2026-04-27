@@ -8,6 +8,13 @@ node_modules/**
 .prettierrc*
 tsconfig*.json
 **/*.ts
+# TypeScript incremental build cache — 60+ KB of file-path / hash
+# strings that have nothing to do with runtime. The previous
+# `tsconfig*.json` glob only matched `.json` extensions, not
+# `.tsbuildinfo`, so this file was leaking into every VSIX and
+# almost certainly contributing to the Marketplace's "suspicious
+# content" rejections.
+*.tsbuildinfo
 # E2E test output from `pnpm build:test`; not relevant to end users.
 dist/test/**
 # Drop all source maps from the packaged VSIX:
@@ -19,4 +26,16 @@ dist/test/**
 #   3. Local development still has maps next to the bundles in `dist/`;
 #      only the packaged artifact ships without them.
 dist/**/*.map
+# Drop redundant tsc compilation output. `main` is `./dist/extension.js`
+# (the esbuild bundle), which spawns the LSP from `./dist/server.js`
+# (also a bundle). Every other `.js` under `dist/` is a separate `tsc`
+# pass left over from earlier builds — code that's already inlined into
+# the bundles. Keeping them around just gives the Marketplace scanner
+# more bytes to walk for zero runtime benefit.
+dist/analysis/**
+dist/commands/**
+dist/debugger/**
+dist/test-explorer/**
+dist/views/**
+dist/config.js
 *.vsix
