@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-27
+
+### Fixed
+
+- **Storage Layout Visualization failed across every contract.**
+  The panel ran `forge inspect` with `cwd: workspaceFolders[0]`,
+  so any workspace whose root sat above the actual Foundry
+  project (a monorepo subdirectory, this repo's own
+  `test/fixtures/sample-project` layout, or a workspace opened
+  one level too high) would have forge pick up no `foundry.toml`
+  and fail uniformly with "No contract found" — surfaced to the
+  user as the unhelpful "Make sure the project compiles." Now
+  resolves the nearest `foundry.toml` ancestor of the active
+  file via `findForgeRoot` (matching the test-explorer fix from
+  0.2.0). The error path also surfaces forge's stderr verbatim
+  so the actual cause is visible — compile error, ambiguous
+  name, forge not on PATH, etc. Same fix applied to the ABI
+  Explorer panel.
+- **ABI Explorer was reading the wrong configuration namespace.**
+  `getConfiguration("solforge")` (a leftover from a previous
+  brand name) silently returned the default for every key, so
+  the user's `solidity-workbench.foundryPath` setting was
+  ignored — only the `forge` on PATH was ever invoked. Switched
+  to `getConfiguration("solidity-workbench")`.
+
+### Changed (breaking — pre-1.0 rename)
+
+- **Normalized command IDs.** Four commands shipped under a
+  legacy `solforge.*` namespace from an earlier branding pass
+  and never got renamed when the extension became Solidity
+  Workbench. Renamed:
+  - `solforge.gasDiff` → `solidity-workbench.gasDiff`
+  - `solforge.gasDiffRefresh` →
+    `solidity-workbench.gasDiffRefresh`
+  - `solforge.inheritanceGraph` →
+    `solidity-workbench.inheritanceGraph`
+  - `solforge.showAbi` → `solidity-workbench.showAbi`
+
+  Any existing keybindings or `tasks.json` references will need
+  updating. The matching tree-view ID (`solforge-gas-diff`) and
+  webview type IDs (`solforge-inheritance-graph`,
+  `solforge-abi-panel`) are also normalized; menu group names
+  follow.
+- **Removed dead manifest entries** that contributed `solforge.*`
+  commands with no matching `registerCommand` implementation.
+  Clicking these palette entries did nothing. The functionality
+  was always reachable through the existing
+  `solidity-workbench.*` commands they shadowed:
+  - `solforge.inspectStoragePanel` (impl is
+    `solidity-workbench.inspectStoragePanel`)
+  - `solforge.chisel.start` / `.startFork` / `.sendSelection`
+    (already declared as `solidity-workbench.chisel.*` earlier
+    in the manifest)
+  - `solforge.copySelector` (an internal command — the manifest
+    entry exposed it in the palette by mistake; the real
+    implementation is `solidity-workbench.copySelector`,
+    invoked programmatically by code-lens click handlers)
+
 ## [0.2.1] - 2026-04-27
 
 ### Fixed

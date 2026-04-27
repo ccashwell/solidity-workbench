@@ -2,7 +2,7 @@
   "name": "solidity-workbench",
   "displayName": "Solidity Workbench",
   "description": "Modern Solidity IDE Integration with Foundry-native LSP, test explorer, and static analysis",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "ccashwell",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -291,41 +291,25 @@
         "title": "Solidity Workbench: Show Output Channel"
       },
       {
-        "command": "solforge.inspectStoragePanel",
-        "title": "Solforge: Storage Layout Visualization"
+        "command": "solidity-workbench.inspectStoragePanel",
+        "title": "Solidity Workbench: Storage Layout Visualization"
       },
       {
-        "command": "solforge.inheritanceGraph",
-        "title": "Solforge: Show Inheritance Graph"
+        "command": "solidity-workbench.inheritanceGraph",
+        "title": "Solidity Workbench: Show Inheritance Graph"
       },
       {
-        "command": "solforge.showAbi",
-        "title": "Solforge: Show ABI Explorer"
+        "command": "solidity-workbench.showAbi",
+        "title": "Solidity Workbench: Show ABI Explorer"
       },
       {
-        "command": "solforge.gasDiff",
-        "title": "Solforge: Gas Diff (Compare Snapshots)"
+        "command": "solidity-workbench.gasDiff",
+        "title": "Solidity Workbench: Gas Diff (Compare Snapshots)"
       },
       {
-        "command": "solforge.gasDiffRefresh",
-        "title": "Solforge: Refresh Gas Diff",
+        "command": "solidity-workbench.gasDiffRefresh",
+        "title": "Solidity Workbench: Refresh Gas Diff",
         "icon": "$(refresh)"
-      },
-      {
-        "command": "solforge.chisel.start",
-        "title": "Solforge: Start Chisel REPL"
-      },
-      {
-        "command": "solforge.chisel.startFork",
-        "title": "Solforge: Start Chisel REPL (Fork)"
-      },
-      {
-        "command": "solforge.chisel.sendSelection",
-        "title": "Solforge: Send Selection to Chisel"
-      },
-      {
-        "command": "solforge.copySelector",
-        "title": "Solforge: Copy Selector"
       }
     ],
     "views": {
@@ -336,7 +320,7 @@
           "when": "workspaceFolderCount > 0"
         },
         {
-          "id": "solforge-gas-diff",
+          "id": "solidity-workbench-gas-diff",
           "name": "Gas Diff",
           "when": "workspaceFolderCount > 0"
         }
@@ -360,19 +344,19 @@
           "group": "solidity-workbench@3"
         },
         {
-          "command": "solforge.showAbi",
+          "command": "solidity-workbench.showAbi",
           "when": "resourceLangId == solidity",
-          "group": "solforge@4"
+          "group": "solidity-workbench@4"
         },
         {
-          "command": "solforge.inheritanceGraph",
+          "command": "solidity-workbench.inheritanceGraph",
           "when": "resourceLangId == solidity",
-          "group": "solforge@5"
+          "group": "solidity-workbench@5"
         },
         {
-          "command": "solforge.chisel.sendSelection",
+          "command": "solidity-workbench.chisel.sendSelection",
           "when": "resourceLangId == solidity && editorHasSelection",
-          "group": "solforge@6"
+          "group": "solidity-workbench@6"
         }
       ]
     },

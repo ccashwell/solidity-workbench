@@ -24,18 +24,18 @@ export class GasDiffProvider implements vscode.TreeDataProvider<GasDiffEntry> {
   private summaryItem: GasDiffEntry | undefined;
 
   activate(context: vscode.ExtensionContext): void {
-    const treeView = vscode.window.createTreeView("solforge-gas-diff", {
+    const treeView = vscode.window.createTreeView("solidity-workbench-gas-diff", {
       treeDataProvider: this,
       showCollapseAll: true,
     });
     context.subscriptions.push(treeView);
 
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.gasDiff", () => this.runDiff()),
+      vscode.commands.registerCommand("solidity-workbench.gasDiff", () => this.runDiff()),
     );
 
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.gasDiffRefresh", () => this.runDiff()),
+      vscode.commands.registerCommand("solidity-workbench.gasDiffRefresh", () => this.runDiff()),
     );
   }
 

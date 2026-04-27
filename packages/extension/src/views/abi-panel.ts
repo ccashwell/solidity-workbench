@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { findForgeRoot } from "@solidity-workbench/common";
 
 const execFileAsync = promisify(execFile);
 
@@ -20,7 +21,7 @@ export class AbiPanel {
 
   activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.showAbi", () => this.showPanel()),
+      vscode.commands.registerCommand("solidity-workbench.showAbi", () => this.showPanel()),
     );
   }
 
@@ -50,19 +51,21 @@ export class AbiPanel {
       contractName = picked;
     }
 
-    const abi = await this.getAbi(contractName);
-    if (!abi) {
+    const filePath = editor.document.uri.fsPath;
+    const result = await this.getAbi(filePath, contractName);
+    if (!result.abi) {
       vscode.window.showErrorMessage(
-        `Failed to get ABI for ${contractName}. Make sure the project compiles.`,
+        `Failed to get ABI for ${contractName}: ${result.error ?? "unknown error"}`,
       );
       return;
     }
+    const abi = result.abi;
 
     if (this.panel) {
       this.panel.reveal();
     } else {
       this.panel = vscode.window.createWebviewPanel(
-        "solforge-abi-panel",
+        "solidity-workbench-abi-panel",
         `ABI: ${contractName}`,
         vscode.ViewColumn.Beside,
         { enableScripts: true },
@@ -97,22 +100,45 @@ export class AbiPanel {
     });
   }
 
-  private async getAbi(contractName: string): Promise<AbiEntry[] | null> {
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-    if (!workspaceFolder) return null;
+  /**
+   * Resolve the ABI for `contractName` defined in `filePath`.
+   *
+   * Same two fixes as the storage-layout panel: resolve `cwd` to
+   * the nearest `foundry.toml` ancestor (so multi-project / nested
+   * workspaces work), and surface forge's stderr verbatim instead
+   * of swallowing the error and showing a generic "make sure the
+   * project compiles" message. Also fixes the
+   * `getConfiguration("solforge")` typo — that namespace doesn't
+   * exist, so `solidity-workbench.foundryPath` was being silently
+   * ignored here and only the default `forge` on PATH was used.
+   */
+  private async getAbi(
+    filePath: string,
+    contractName: string,
+  ): Promise<{ abi: AbiEntry[] | null; error?: string }> {
+    const forgeRoot = findForgeRoot(filePath);
+    if (!forgeRoot) {
+      return {
+        abi: null,
+        error: `No foundry.toml found walking up from ${filePath}. Is this file inside a Foundry project?`,
+      };
+    }
 
-    const config = vscode.workspace.getConfiguration("solforge");
+    const config = vscode.workspace.getConfiguration("solidity-workbench");
     const forgePath = config.get<string>("foundryPath") || "forge";
 
     try {
       const result = await execFileAsync(forgePath, ["inspect", contractName, "abi"], {
-        cwd: workspaceFolder.uri.fsPath,
+        cwd: forgeRoot,
         maxBuffer: 10 * 1024 * 1024,
         timeout: 60_000,
       });
-      return JSON.parse(result.stdout);
-    } catch {
-      return null;
+      return { abi: JSON.parse(result.stdout) };
+    } catch (err: any) {
+      const stderr = (err.stderr ?? "").toString().trim();
+      const stdout = (err.stdout ?? "").toString().trim();
+      const message = stderr || stdout || err.message || String(err);
+      return { abi: null, error: message };
     }
   }
 

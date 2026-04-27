@@ -17,7 +17,7 @@ export class InheritanceGraphPanel {
 
   activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
-      vscode.commands.registerCommand("solforge.inheritanceGraph", () =>
+      vscode.commands.registerCommand("solidity-workbench.inheritanceGraph", () =>
         this.showGraph(context),
       ),
     );
@@ -40,7 +40,7 @@ export class InheritanceGraphPanel {
       this.panel.reveal();
     } else {
       this.panel = vscode.window.createWebviewPanel(
-        "solforge-inheritance-graph",
+        "solidity-workbench-inheritance-graph",
         "Inheritance Graph",
         vscode.ViewColumn.Beside,
         { enableScripts: true },
