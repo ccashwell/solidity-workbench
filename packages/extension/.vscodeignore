@@ -38,4 +38,13 @@ dist/debugger/**
 dist/test-explorer/**
 dist/views/**
 dist/config.js
+# `package.json#icon` points at `resources/icon.png`, which is what
+# the Marketplace and VSCode actually load. The companion
+# `resources/icon.svg` is the source artwork the `build:icon`
+# script rasterizes — keep it in the repo, but don't ship it in
+# the VSIX. Beyond being unused, the SVG includes an external DTD
+# reference (`http://www.w3.org/TR/.../svg10.dtd`) which XML
+# content scanners (incl. the Marketplace's "suspicious content"
+# heuristic) treat as XXE attack surface.
+resources/*.svg
 *.vsix
