@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-27
+
+### Performance
+
+- **LSP startup no longer blocks until every dependency file is
+  indexed.** The previous `for..of await indexFile()` walk only
+  crossed microtask boundaries between files, which doesn't let
+  the event loop dispatch hover / completion / diagnostics
+  requests; users with a populated `lib/` tree saw the editor
+  stall on activation. `WorkspaceManager` now partitions
+  discovered `.sol` files into `project` (`src/`), `tests`
+  (`test/` + `script/`), and `deps` (`lib/`) tiers, and
+  `SymbolIndex.indexWorkspace` walks them in priority order with
+  a `setImmediate` yield every 24 files. Project symbols become
+  queryable while deps continue indexing in the background.
+- **Streamed indexing progress.** `serverState` notifications
+  now fire at every batch boundary, so the status bar shows
+  `Indexing 24/N`, `48/N`, … instead of jumping from 0 to done.
+- **Symbol-lookup misses drain the pending queue.**
+  `findSymbols`, `getContract`, `findReferences`,
+  `referenceCount`, and `hasReferences` fall back to a
+  synchronous drain of remaining tier files when the in-memory
+  cache returns empty during the indexing window. The first miss
+  on a `forge-std` symbol pays the catch-up cost; every later
+  query takes the fast path. Editor-driven `updateFile` calls
+  also clear the file from the pending set so the bulk loop
+  doesn't re-index something the user just opened.
+
 ### Fixed
 
 - **Marketplace upload rejected with "suspicious content".** Two
