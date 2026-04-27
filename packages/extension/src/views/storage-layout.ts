@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { findForgeRoot } from "@solidity-workbench/common";
 
 const execFileAsync = promisify(execFile);
 
@@ -57,14 +58,15 @@ export class StorageLayoutPanel {
       contractName = picked;
     }
 
-    // Get storage layout
-    const layout = await this.getStorageLayout(contractName);
-    if (!layout) {
+    const filePath = editor.document.uri.fsPath;
+    const result = await this.getStorageLayout(filePath, contractName);
+    if (!result.layout) {
       vscode.window.showErrorMessage(
-        `Failed to get storage layout for ${contractName}. Make sure the project compiles.`,
+        `Failed to get storage layout for ${contractName}: ${result.error ?? "unknown error"}`,
       );
       return;
     }
+    const layout = result.layout;
 
     // Create or reveal the webview panel
     if (this.panel) {
@@ -85,9 +87,44 @@ export class StorageLayoutPanel {
     this.panel.webview.html = this.buildHtml(contractName, layout);
   }
 
-  private async getStorageLayout(contractName: string): Promise<StorageEntry[] | null> {
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-    if (!workspaceFolder) return null;
+  /**
+   * Resolve and parse the storage layout for `contractName` defined
+   * in `filePath`. Returns either the parsed entries or a structured
+   * error so the caller can surface the actual cause to the user
+   * instead of the generic "make sure the project compiles" message.
+   *
+   * The previous implementation set `cwd` to `workspaceFolders[0]`,
+   * which silently broke in any workspace whose root sits above the
+   * actual Foundry project (a monorepo subdirectory, the
+   * test-fixture layout used by this repo's own `sample-project`,
+   * etc.). Forge would either pick up no config or the wrong config
+   * and fail uniformly across every contract — exactly the symptom
+   * being reported. We now resolve the nearest `foundry.toml`
+   * ancestor of the active file via `findForgeRoot`, the same
+   * helper the test-explorer uses for the same reason.
+   *
+   * Forge is invoked with the bare contract name (not a `path:Name`
+   * pair). The qualified form looks tempting for disambiguation but
+   * forge restricts it to the configured `src/` tree and rejects
+   * paths under `lib/` with "Could not find source file …", so it
+   * would actively break inspection of forge-std / OZ / v4 base
+   * contracts that the user often wants to inspect.
+   *
+   * Forge's stderr is preserved verbatim so the user sees what's
+   * actually wrong (compile error, ambiguous name, forge not on
+   * PATH, etc.) instead of the previous opaque fallback.
+   */
+  private async getStorageLayout(
+    filePath: string,
+    contractName: string,
+  ): Promise<{ layout: StorageEntry[] | null; error?: string }> {
+    const forgeRoot = findForgeRoot(filePath);
+    if (!forgeRoot) {
+      return {
+        layout: null,
+        error: `No foundry.toml found walking up from ${filePath}. Is this file inside a Foundry project?`,
+      };
+    }
 
     const config = vscode.workspace.getConfiguration("solidity-workbench");
     const forgePath = config.get<string>("foundryPath") || "forge";
@@ -97,49 +134,19 @@ export class StorageLayoutPanel {
         forgePath,
         ["inspect", contractName, "storage-layout", "--json"],
         {
-          cwd: workspaceFolder.uri.fsPath,
+          cwd: forgeRoot,
           maxBuffer: 10 * 1024 * 1024,
           timeout: 60_000,
         },
       );
-
       const data = JSON.parse(result.stdout);
-      return data.storage ?? data ?? [];
+      return { layout: data.storage ?? data ?? [] };
     } catch (err: any) {
-      // Try alternative format
-      try {
-        const result = await execFileAsync(forgePath, ["inspect", contractName, "storage"], {
-          cwd: workspaceFolder.uri.fsPath,
-          maxBuffer: 10 * 1024 * 1024,
-        });
-        return this.parseTextLayout(result.stdout);
-      } catch {
-        return null;
-      }
+      const stderr = (err.stderr ?? "").toString().trim();
+      const stdout = (err.stdout ?? "").toString().trim();
+      const message = stderr || stdout || err.message || String(err);
+      return { layout: null, error: message };
     }
-  }
-
-  private parseTextLayout(text: string): StorageEntry[] {
-    const entries: StorageEntry[] = [];
-    const lines = text.split("\n").filter((l) => l.includes("|"));
-
-    for (const line of lines) {
-      const parts = line
-        .split("|")
-        .map((p) => p.trim())
-        .filter(Boolean);
-      if (parts.length < 4 || parts[0] === "Name") continue;
-
-      entries.push({
-        label: parts[0],
-        type: parts[1],
-        slot: parts[2],
-        offset: parseInt(parts[3]) || 0,
-        numberOfBytes: parts[4] || "32",
-      });
-    }
-
-    return entries;
   }
 
   private buildHtml(contractName: string, layout: StorageEntry[]): string {
