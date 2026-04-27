@@ -291,10 +291,6 @@
         "title": "Solidity Workbench: Show Output Channel"
       },
       {
-        "command": "solidity-workbench.inspectStoragePanel",
-        "title": "Solidity Workbench: Storage Layout Visualization"
-      },
-      {
         "command": "solidity-workbench.inheritanceGraph",
         "title": "Solidity Workbench: Show Inheritance Graph"
       },
