@@ -7,9 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-04-28
+## [0.3.2] - 2026-04-28
 
 ### Added
+
+- **Chisel REPL is now a structured webview panel.** The 0.1.0
+  integration shelled chisel into a `vscode.Terminal`; the terminal
+  works but loses every advantage a structured panel gives — output
+  is interleaved with whatever else the user types, there's no
+  per-evaluation card, no history, no programmatic re-run, and no
+  way to script `sendSelection` against a live session. Replaced
+  with `ChiselPanel`: a `vscode.WebviewPanel` that owns a long-lived
+  `chisel` (or `chisel --fork-url <url>`) subprocess spawned via
+  `child_process.spawn`, with per-evaluation cards (expression,
+  response body, ok/error status badge, timestamp) and click-to-rerun
+  on every history entry. The `solidity-workbench.chisel.start` /
+  `.startFork` / `.sendSelection` command IDs are unchanged — only
+  the implementation moved — so existing keybindings continue to
+  work. `sendSelection` opens / focuses the panel and forwards the
+  selection to the live session, waiting up to 5 seconds for chisel
+  to become ready when the panel is being spawned fresh. History
+  persists across sessions in `context.globalState` under
+  `solidity-workbench.chisel.history`, capped at 200 entries; the
+  panel exposes a Clear History button. The subprocess is terminated
+  on panel disposal AND on extension `deactivate()` (SIGTERM with a
+  one-second SIGKILL fallback) so a VSCode reload doesn't leak a
+  chisel process. Pure helpers `splitChiselOutputByPrompt`,
+  `ChiselOutputBuffer`, `stripAnsi`, `stripChiselBanner`, and
+  `classifyBody` live in `@solidity-workbench/common/chisel-output.ts`
+  with 28 new server-side unit tests covering ANSI stripping,
+  banner consumption, multi-chunk buffering, error classification,
+  and subprocess-exit drain. *Implementation note*: chisel disables
+  its `➜` prompt under `reedline` when stdout is not a TTY (which
+  `child_process.spawn` doesn't provide), so the panel pairs inputs
+  to outputs via a 250 ms quiet-window heuristic instead of a prompt
+  sentinel; this is documented at length in the module's prelude.
 
 - **Parallel parsing via a `worker_threads` pool.** Bulk
   workspace indexing was single-threaded — every `.sol` file

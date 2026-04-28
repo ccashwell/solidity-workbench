@@ -1,9 +1,6 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
-import {
-  LanguageClient,
-  TransportKind,
-} from "vscode-languageclient/node";
+import { LanguageClient, TransportKind } from "vscode-languageclient/node";
 import type { LanguageClientOptions, ServerOptions } from "vscode-languageclient/node";
 import { registerFoundryCommands } from "./commands/foundry.js";
 import { registerAnvilCommands } from "./commands/anvil.js";
@@ -18,7 +15,7 @@ import { StorageLayoutPanel } from "./views/storage-layout.js";
 import { SlitherIntegration } from "./analysis/slither.js";
 import { AderynIntegration } from "./analysis/aderyn.js";
 import { SolidityDebugProvider } from "./debugger/debug-adapter.js";
-import { ChiselIntegration } from "./views/chisel.js";
+import { ChiselPanel } from "./views/chisel-panel.js";
 import { FoundryTomlProvider } from "./views/foundry-toml-schema.js";
 import { StatusBar } from "./views/status-bar.js";
 import { InheritanceGraphPanel } from "./views/inheritance-graph.js";
@@ -135,7 +132,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // ── Chisel REPL ───────────────────────────────────────────────────
 
-  const chisel = new ChiselIntegration();
+  const chisel = new ChiselPanel();
   chisel.activate(context);
 
   // ── Foundry.toml IntelliSense ─────────────────────────────────────
@@ -196,6 +193,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export async function deactivate(): Promise<void> {
+  // The ChiselPanel disposes itself via context.subscriptions, which
+  // VSCode runs as part of extension teardown — that path also fires
+  // its SIGTERM/SIGKILL chain on the chisel subprocess. Nothing
+  // additional to do here; just stop the LSP client.
   if (client) {
     await client.stop();
   }

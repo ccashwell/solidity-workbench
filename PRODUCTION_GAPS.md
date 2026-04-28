@@ -187,6 +187,28 @@ None.
 
 ---
 
+## Recently fixed (fourth April 2026 sweep — P3 landings)
+
+### Chisel webview with evaluation history (was P3 #3)
+
+- The legacy `ChiselIntegration` shelled chisel into a
+  `vscode.Terminal`. Replaced with `ChiselPanel` — a webview that
+  owns a long-lived `chisel` subprocess spawned via
+  `child_process.spawn`, renders each evaluation as a card, and
+  persists history (capped at 200 entries) in
+  `context.globalState`. The three command IDs
+  (`solidity-workbench.chisel.start`, `.startFork`, `.sendSelection`)
+  keep working unchanged. Subprocess teardown fires on both panel
+  disposal and extension deactivate (SIGTERM with a 1 s SIGKILL
+  fallback). Pure helpers in `@solidity-workbench/common/chisel-output`
+  with 28 new unit tests cover ANSI stripping, banner consumption,
+  multi-chunk buffering, error classification, and exit-time drain.
+  Pairing strategy is a quiet-window heuristic, not a prompt
+  sentinel — chisel's reedline frontend disables its `➜` prompt
+  under non-TTY stdio, so prompt-based parsing was infeasible.
+
+---
+
 ## P3 — Enhancement (remaining)
 
 ### 1. Real DAP debugger
@@ -211,14 +233,6 @@ crate. When Solar ships a stable LSP, evaluate swapping the parser +
 resolver hot path via WASM for ~40× speed and true type resolution.
 
 **Effort**: 2–3 weeks once Solar is ready.
-
-### 3. Chisel webview with evaluation history
-
-Current chisel integration is a terminal wrapper. A webview that
-persists the session, shows structured output, and supports re-running
-prior expressions would be much more useful.
-
-**Effort**: 1 week.
 
 ### 5. Wake / Mythril integrations alongside Slither and Aderyn
 
@@ -255,7 +269,7 @@ report.
 |----------|-------|-------------------|
 | P1 | 0 | — |
 | P2 | 0 | — |
-| P3 | 5 | ~5–6 weeks |
+| P3 | 4 | ~4–5 weeks |
 | **Total to public beta** | **0** | **ship the VSIX** |
 | **Total to v1.0** | **0** | **ship the VSIX** |
 

@@ -8,3 +8,4 @@ export * from "./indexer-shared.js";
 export * from "./subgraph-scaffold.js";
 export * from "./ponder-scaffold.js";
 export * from "./envio-scaffold.js";
+export * from "./chisel-output.js";
