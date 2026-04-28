@@ -11,6 +11,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Remote Chain Interaction UI.** There was previously no in-IDE
+  way to invoke a deployed contract's read-only methods — users had
+  to drop to a terminal and remember `cast call <addr> "<sig>"
+  --rpc-url <url>` syntax by hand. New
+  `solidity-workbench.remoteChain.open` command (palette-only)
+  opens a webview panel with a chain picker, a contract address
+  input, an ABI loader (paste JSON or pick from `out/**/*.json`),
+  a function picker grouped by mutability, and a typed args form
+  per Solidity parameter type. Arrays accept JSON-array literals,
+  tuples accept JSON objects (flattened to cast's `(a,b,c)` form
+  in declaration order), bigint values are forwarded as decimal
+  strings end-to-end so `uint256` values past 2^53 round-trip
+  intact. Read calls are dispatched through `execFileAsync` (not
+  the terminal sendText pattern in `commands/cast.ts`) so the
+  panel can capture stdout; results render in cards showing the
+  raw hex output AND the decoded value with copy buttons. The
+  seven seeded public RPCs are: Ethereum Mainnet (LlamaRPC),
+  Sepolia (Tenderly public gateway), Base / Base Sepolia
+  (Coinbase official), Optimism (OP Labs official), Arbitrum One
+  (Offchain Labs official), and Polygon PoS (Polygon official) —
+  every entry carries an inline source comment per the
+  onchain-conventions rule. A "Custom RPC URL…" option is the
+  escape hatch for Alchemy / Infura / private endpoints. Last
+  selection (chain, address, abi-source) persists in
+  `context.workspaceState`. New pure helpers
+  `formatFunctionSignature`, `formatFunctionDisplaySignature`,
+  `formatFunctionSignatureWithReturns`, and `isReadOnly` ship in
+  `@solidity-workbench/common/abi-signature.ts` with 27
+  server-side unit tests covering scalars, dynamic / fixed
+  arrays, tuples, nested tuples, tuple arrays, return-types
+  appending, and error cases. Write functions render in a
+  separate `<optgroup>` titled "Writes — disabled in 0.3.2" with
+  each option carrying a `title="writes require a private key —
+  coming in a later release"` tooltip. *Implementation note*:
+  `cast decode-output` does not exist on Foundry 1.5 — the plan
+  called for that subcommand but the available one is
+  `cast decode-abi` (no `--json` flag). Instead the panel
+  invokes cast twice in parallel — once with the bare signature
+  for raw hex, once with the `name(in)(out)` form for cast's
+  built-in inline decoding — and renders both. Etherscan ABI
+  fetch, `cast send`, multi-chain calls, and gas estimation
+  overlays are explicitly deferred.
+
 - **Chisel REPL is now a structured webview panel.** The 0.1.0
   integration shelled chisel into a `vscode.Terminal`; the terminal
   works but loses every advantage a structured panel gives — output

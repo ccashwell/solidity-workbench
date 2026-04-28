@@ -306,6 +306,10 @@
         "command": "solidity-workbench.gasDiffRefresh",
         "title": "Solidity Workbench: Refresh Gas Diff",
         "icon": "$(refresh)"
+      },
+      {
+        "command": "solidity-workbench.remoteChain.open",
+        "title": "Solidity Workbench: Open Remote Chain UI"
       }
     ],
     "views": {

@@ -189,6 +189,24 @@ None.
 
 ## Recently fixed (fourth April 2026 sweep — P3 landings)
 
+### Remote chain interaction UI (was P3 #7)
+
+- New `solidity-workbench.remoteChain.open` command opens a webview
+  that wraps `cast call` against a chain picker, with ABI
+  awareness so args are typed. Seven seeded public RPCs (Mainnet,
+  Sepolia, Base, Base Sepolia, Optimism, Arbitrum One, Polygon PoS)
+  plus a "Custom RPC URL…" escape hatch. ABI loaded by pasting
+  JSON or picking a forge artifact under `out/**/*.json`.
+  Function picker groups read-only and write methods; writes are
+  rendered disabled with a deferral tooltip. Result cards show
+  raw hex AND decoded text with copy buttons. Pure helpers
+  `formatFunctionSignature`, `formatFunctionDisplaySignature`,
+  `formatFunctionSignatureWithReturns`, and `isReadOnly` ship in
+  `@solidity-workbench/common/abi-signature` with 27 unit tests.
+  `cast decode-output` does not exist on Foundry 1.5; the panel
+  uses cast's built-in inline decoding via `name(in)(out)`
+  signatures instead.
+
 ### Chisel webview with evaluation history (was P3 #3)
 
 - The legacy `ChiselIntegration` shelled chisel into a
@@ -242,14 +260,6 @@ Aderyn/Slither (run external tool → parse JSON → map to diagnostics).
 
 **Effort**: 1 week per integration.
 
-### 7. Remote chain interaction UI
-
-Webview that wraps `cast call` / `cast send` against a chain picker,
-with ABI awareness so args are typed. Unique differentiator nobody
-else has.
-
-**Effort**: 1 week.
-
 ### 8. More E2E coverage (ongoing)
 
 Third-sweep work added LSP round-trip tests for hover, workspace
@@ -269,7 +279,7 @@ report.
 |----------|-------|-------------------|
 | P1 | 0 | — |
 | P2 | 0 | — |
-| P3 | 4 | ~4–5 weeks |
+| P3 | 3 | ~3–4 weeks |
 | **Total to public beta** | **0** | **ship the VSIX** |
 | **Total to v1.0** | **0** | **ship the VSIX** |
 

@@ -21,6 +21,7 @@ import { StatusBar } from "./views/status-bar.js";
 import { InheritanceGraphPanel } from "./views/inheritance-graph.js";
 import { AbiPanel } from "./views/abi-panel.js";
 import { GasDiffProvider } from "./views/gas-diff.js";
+import { RemoteChainPanel } from "./views/remote-chain.js";
 
 let client: LanguageClient;
 
@@ -154,6 +155,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const gasDiff = new GasDiffProvider();
   gasDiff.activate(context);
+
+  // ── Remote Chain UI ───────────────────────────────────────────────
+
+  const remoteChain = new RemoteChainPanel();
+  remoteChain.activate(context);
 
   // ── Static Analysis ───────────────────────────────────────────────
 
