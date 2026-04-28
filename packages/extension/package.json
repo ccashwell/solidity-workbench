@@ -393,7 +393,7 @@
     ]
   },
   "scripts": {
-    "build": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap && esbuild ../server/src/server.ts --bundle --outfile=dist/server.js --external:vscode --format=cjs --platform=node --sourcemap",
+    "build": "esbuild ./src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node --sourcemap && esbuild ../server/src/server.ts --bundle --outfile=dist/server.js --external:vscode --format=cjs --platform=node --sourcemap && esbuild ../server/src/parser/parser-worker.ts --bundle --outfile=dist/parser-worker.js --external:vscode --format=cjs --platform=node",
     "watch": "pnpm build --watch",
     "package": "node ../../scripts/prepare-vsix-files.mjs && vsce package --no-dependencies",
     "publish:ovsx": "ovsx publish solidity-workbench-$npm_package_version.vsix",

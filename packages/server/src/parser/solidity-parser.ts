@@ -1,6 +1,7 @@
 import * as parser from "@solidity-parser/parser";
 import type { ASTNode } from "@solidity-parser/parser/src/ast-types";
 import { getWordTextAtPosition } from "../utils/text.js";
+import type { ParserPool } from "./parser-pool.js";
 import type {
   SoliditySourceUnit,
   ContractDefinition,
@@ -43,6 +44,24 @@ export class SolidityParser {
    * one `parse` call at a time, so holding this state on the instance is safe.
    */
   private currentLines: string[] | null = null;
+
+  /**
+   * Optional `worker_threads` pool for off-main-thread bulk parsing.
+   * Wired in by `server.ts` once it has a worker bundle path; the pool
+   * is used only by `parseAsync` (which falls back to the synchronous
+   * `parse` if no pool is set, so unit tests that drive the parser
+   * directly keep working).
+   */
+  private pool: ParserPool | null = null;
+
+  /**
+   * Wire a parser pool. `parseAsync` will route through the pool while
+   * one is set; setting `null` (e.g. on shutdown) reverts to
+   * main-thread parsing.
+   */
+  setPool(pool: ParserPool | null): void {
+    this.pool = pool;
+  }
 
   /**
    * Parse a Solidity source file and cache the result.
@@ -103,11 +122,62 @@ export class SolidityParser {
   }
 
   /**
+   * Async parse that off-loads to the worker pool when one is wired in.
+   *
+   * Bulk-indexing callers (`SymbolIndex.indexFile`) should prefer this
+   * over `parse(uri, text)` so the LSP server can fan parses out
+   * across worker threads rather than running them all on the main
+   * thread between `setImmediate` yields.
+   *
+   * Workers return `sourceUnit + errors + text` and skip shipping the
+   * raw AST across the thread boundary; the resulting cache entry has
+   * `rawAst: null`. `getRawAst(uri)` re-parses lazily on the main
+   * thread the first time anyone asks for it. If no pool is wired in,
+   * or a pool dispatch throws, we fall back to the synchronous `parse`
+   * so indexing always makes progress.
+   */
+  async parseAsync(uri: string, text: string): Promise<ParseResult> {
+    if (this.pool) {
+      try {
+        const out = await this.pool.parse(uri, text);
+        const result: ParseResult = {
+          sourceUnit: out.sourceUnit,
+          errors: out.errors as ParseError[],
+          text: out.text,
+          rawAst: null,
+        };
+        this.cache.set(uri, result);
+        return result;
+      } catch {
+        // Worker error — fall through to a main-thread parse. Better
+        // to lose the parallelism for one file than to lose its
+        // symbols entirely.
+      }
+    }
+    return this.parse(uri, text);
+  }
+
+  /**
    * Return the raw `@solidity-parser/parser` AST for a previously-parsed
-   * file, or `null` if parsing failed. Exposed for the AST-based linter
-   * rules; most providers should read the mapped `sourceUnit` instead.
+   * file, or `null` if parsing failed.
+   *
+   * Files indexed via the worker pool live in the cache with
+   * `rawAst: null` because the AST isn't shipped across the worker
+   * boundary (see `parser-worker.ts` for the rationale). The first
+   * caller to ask for the raw AST of a bulk-indexed file pays a
+   * synchronous main-thread re-parse; subsequent calls hit the cache.
+   *
+   * In practice the only consumers are the linter and the semantic-
+   * tokens provider, both of which run on user-opened files —
+   * `documents.onDidChangeContent` already calls the synchronous
+   * `parse(uri, text)` for those, so the lazy path is rarely hit.
    */
   getRawAst(uri: string): unknown | null {
+    const cached = this.cache.get(uri);
+    if (!cached) return null;
+    if (cached.rawAst != null) return cached.rawAst;
+    if (cached.text == null) return null;
+    this.parse(uri, cached.text);
     return this.cache.get(uri)?.rawAst ?? null;
   }
 

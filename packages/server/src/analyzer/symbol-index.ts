@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import type { CancellationToken, Range, WorkspaceSymbol } from "vscode-languageserver/node.js";
 import {
   Location,
@@ -104,31 +104,39 @@ export class SymbolIndex {
       return;
     }
 
+    // Process files INDEX_BATCH_SIZE at a time with `Promise.all`, so
+    // the parser pool can fan out to multiple workers concurrently.
+    // Without `Promise.all` the `await indexFile` chain would
+    // serialize on the main thread (one parse at a time, regardless of
+    // worker count) — exactly what we're spawning workers to avoid.
     let lastReported = 0;
-    for (const uri of ordered) {
-      // A concurrent `flushPending` (driven by a name-miss in another
-      // request) or a document open via `updateFile` may have already
-      // indexed this file — skip the redundant pass.
-      if (this.pending.has(uri)) {
-        this.pending.delete(uri);
-        await this.indexFile(uri);
+    for (let i = 0; i < ordered.length; i += INDEX_BATCH_SIZE) {
+      const slice = ordered.slice(i, i + INDEX_BATCH_SIZE);
+
+      // Filter to URIs still in `pending`. A concurrent
+      // `ensureImportsIndexed` (driven by a document open) or a
+      // direct `updateFile` may have already pulled some entries out
+      // of the queue while we were awaiting the previous batch.
+      const todo = slice.filter((uri) => this.pending.has(uri));
+      for (const uri of todo) this.pending.delete(uri);
+
+      if (todo.length > 0) {
+        await Promise.all(todo.map((uri) => this.indexFile(uri)));
       }
 
       const done = total - this.pending.size;
       const isLast = this.pending.size === 0;
-      if ((done >= lastReported + INDEX_BATCH_SIZE || isLast) && done !== lastReported) {
+      if (done !== lastReported) {
         lastReported = done;
         reportProgress?.(done, total);
-        if (!isLast) {
-          // Yield to the event loop so pending LSP requests can run
-          // between batches. A microtask (`await Promise.resolve()`)
-          // isn't enough — only a macrotask boundary lets I/O and
-          // timers fire.
-          await new Promise<void>((resolve) => setImmediate(resolve));
-        }
       }
-
       if (isLast) break;
+
+      // Yield to the event loop so pending LSP requests can run
+      // between batches. A microtask (`await Promise.resolve()`)
+      // isn't enough — only a macrotask boundary lets I/O and
+      // timers fire.
+      await new Promise<void>((resolve) => setImmediate(resolve));
     }
   }
 
@@ -175,15 +183,18 @@ export class SymbolIndex {
   /**
    * Index or re-index a single file.
    *
-   * Reads the file from disk, updates the parser cache, and then delegates
-   * to `updateFile(uri)` to (re)build both the symbol table and the
-   * inverted reference index from the parser's cached source text.
+   * Reads the file from disk asynchronously and routes the parse
+   * through `parser.parseAsync`, which fans out to a `worker_threads`
+   * pool when one is wired in. Async I/O lets concurrent batch
+   * indexing overlap reads, and the worker pool lets multiple files
+   * parse in parallel — bulk indexing of a populated `lib/` tree no
+   * longer pegs a single thread.
    */
   async indexFile(uri: string): Promise<void> {
     try {
       const filePath = this.workspace.uriToPath(uri);
-      const text = readFileSync(filePath, "utf-8");
-      this.parser.parse(uri, text);
+      const text = await readFile(filePath, "utf-8");
+      await this.parser.parseAsync(uri, text);
       this.updateFile(uri);
     } catch {
       /* file unreadable, skip */

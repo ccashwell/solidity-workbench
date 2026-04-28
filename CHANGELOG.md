@@ -7,9 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-04-27
+## [0.3.1] - 2026-04-28
 
 ### Added
+
+- **Parallel parsing via a `worker_threads` pool.** Bulk
+  workspace indexing was single-threaded — every `.sol` file
+  parsed one after another on the LSP main thread, with the
+  chunked yields from 0.2.0 keeping requests alive but no actual
+  concurrency. A new `ParserPool` spawns
+  `min(6, max(1, cpus()/2))` workers (each loading
+  `@solidity-parser/parser` once at startup) and
+  `SymbolIndex.indexFile` routes through `parser.parseAsync`,
+  which fans parses out across the pool. `Promise.all` over the
+  per-batch slice is what actually drives concurrency — without
+  it the awaited chain would still serialize. Empirically a 2.3×
+  warm-pool speedup on a forge-std-only fixture; bigger wins on
+  larger `lib/` trees where worker boot amortizes better. The
+  raw ANTLR AST is intentionally not shipped across the worker
+  boundary (too large; only the linter and semantic-tokens
+  provider need it, and those run on user-opened files which the
+  main thread parses synchronously). `parser.getRawAst` lazily
+  re-parses on the main thread for the rare bulk-indexed file
+  whose raw AST a downstream consumer reaches for. If the worker
+  bundle is missing or `Worker` construction throws, parser
+  silently falls back to single-threaded synchronous parsing —
+  the pre-pool behaviour.
 
 - **Test Explorer streams rich forge output into the run pane.**
   The provider was piping pass/fail signals through the

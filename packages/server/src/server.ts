@@ -15,8 +15,11 @@ import {
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import * as path from "node:path";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import { WorkspaceManager } from "./workspace/workspace-manager.js";
 import { SolidityParser } from "./parser/solidity-parser.js";
+import { ParserPool } from "./parser/parser-pool.js";
 import { SymbolIndex } from "./analyzer/symbol-index.js";
 import { CompletionProvider } from "./providers/completion.js";
 import { DefinitionProvider } from "./providers/definition.js";
@@ -54,6 +57,7 @@ const documents = new TextDocuments(TextDocument);
 let workspaceManager: WorkspaceManager;
 let parser: SolidityParser;
 let symbolIndex: SymbolIndex;
+let parserPool: ParserPool | null = null;
 
 // Providers
 let completionProvider: CompletionProvider;
@@ -118,6 +122,16 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 
   parser = new SolidityParser();
   symbolIndex = new SymbolIndex(parser, workspaceManager);
+
+  // Wire the worker pool into the parser. Bulk indexing
+  // (`SymbolIndex.indexFile`) routes through `parser.parseAsync`,
+  // which fans parses out across the pool's worker threads. If the
+  // worker bundle is missing or `Worker` construction throws (e.g.
+  // older Node, restricted env), parseAsync falls back to a
+  // synchronous main-thread parse — startup still works, just
+  // serialized.
+  parserPool = createParserPool();
+  if (parserPool) parser.setPool(parserPool);
 
   completionProvider = new CompletionProvider(symbolIndex, workspaceManager);
   definitionProvider = new DefinitionProvider(symbolIndex, workspaceManager);
@@ -563,6 +577,49 @@ connection.onDocumentHighlight(async (params, token) => {
 connection.onRequest(ListTests, async (params: ListTestsParams): Promise<ListTestsResult> => {
   return listTests(workspaceManager, parser, params);
 });
+
+// ── Shutdown ────────────────────────────────────────────────────────
+
+connection.onShutdown(async () => {
+  if (parserPool) {
+    await parserPool.terminate();
+    parserPool = null;
+  }
+});
+
+// ── Parser pool factory ─────────────────────────────────────────────
+
+/**
+ * Locate the bundled `parser-worker.js` and start a pool sized to half
+ * the available CPUs (min 1, max 6 — beyond that the structured-clone
+ * cost on the message channel starts to dominate the parse cost).
+ *
+ * Returns `null` if the worker bundle isn't where we expect or `Worker`
+ * construction throws. The parser falls back to synchronous main-thread
+ * parsing, which is the pre-pool behaviour — slower for cold-start
+ * indexing but functionally identical otherwise.
+ */
+function createParserPool(): ParserPool | null {
+  const workerPath = path.resolve(__dirname, "parser-worker.js");
+  if (!fs.existsSync(workerPath)) {
+    connection.console.warn(
+      `Parser worker bundle not found at ${workerPath}; falling back to single-threaded parsing`,
+    );
+    return null;
+  }
+  const cpuCount = Math.max(1, os.cpus()?.length ?? 1);
+  const size = Math.max(1, Math.min(6, Math.floor(cpuCount / 2)));
+  try {
+    const pool = new ParserPool(workerPath, size);
+    connection.console.log(`Parser worker pool started with ${size} worker(s)`);
+    return pool;
+  } catch (err) {
+    connection.console.warn(
+      `Failed to start parser worker pool, falling back to single-threaded parsing: ${err}`,
+    );
+    return null;
+  }
+}
 
 // ── Start ───────────────────────────────────────────────────────────
 
