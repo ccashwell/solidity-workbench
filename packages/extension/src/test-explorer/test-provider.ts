@@ -34,11 +34,17 @@ const execFileAsync = promisify(execFile);
  *   - Run individual tests, whole contracts, or everything
  *   - Inline pass/fail indicators via code lens
  *   - Fuzz test counterexamples surfaced as TestMessage content
+ *
+ * Filesystem-driven discovery is debounced so bursts of .sol watcher
+ * events (fmt, multi-file saves, codegen) do not spam listTests.
  */
+const DISCOVER_DEBOUNCE_MS = 400;
+
 export class FoundryTestProvider {
   private controller!: vscode.TestController;
   private testItems: Map<string, vscode.TestItem> = new Map();
   private client: LanguageClient | null = null;
+  private discoverDebounce: NodeJS.Timeout | undefined;
 
   /** Provided by `extension.ts` once the LanguageClient has started. */
   setLanguageClient(client: LanguageClient): void {
@@ -74,14 +80,30 @@ export class FoundryTestProvider {
     // Watch for .sol changes — not just .t.sol, because tests can live
     // in any file and the LSP AST handles classification.
     const watcher = vscode.workspace.createFileSystemWatcher("**/*.sol");
-    watcher.onDidCreate(() => this.discoverAllTests());
-    watcher.onDidChange(() => this.discoverAllTests());
-    watcher.onDidDelete(() => this.discoverAllTests());
+    watcher.onDidCreate(() => this.scheduleDiscoverFromWatcher());
+    watcher.onDidChange(() => this.scheduleDiscoverFromWatcher());
+    watcher.onDidDelete(() => this.scheduleDiscoverFromWatcher());
     context.subscriptions.push(watcher);
+    context.subscriptions.push({
+      dispose: () => {
+        if (this.discoverDebounce !== undefined) {
+          clearTimeout(this.discoverDebounce);
+          this.discoverDebounce = undefined;
+        }
+      },
+    });
 
     // Attempt initial discovery; it will no-op without a client and be
     // retried when `setLanguageClient` is called.
     void this.discoverAllTests();
+  }
+
+  private scheduleDiscoverFromWatcher(): void {
+    if (this.discoverDebounce !== undefined) clearTimeout(this.discoverDebounce);
+    this.discoverDebounce = setTimeout(() => {
+      this.discoverDebounce = undefined;
+      void this.discoverAllTests();
+    }, DISCOVER_DEBOUNCE_MS);
   }
 
   /**
