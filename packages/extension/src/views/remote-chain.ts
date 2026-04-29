@@ -562,6 +562,10 @@ export class RemoteChainPanel {
     });
     addressInput.addEventListener('input', updateAddressValidity);
 
+    // Single listener — renderFunctionPicker runs on every ABI load and
+    // must not stack duplicate handlers on the same select element.
+    functionSelect.addEventListener('change', onFunctionChange);
+
     btnPasteAbi.addEventListener('click', () => {
       pasteAbiArea.style.display = '';
       artifactPickArea.style.display = 'none';
@@ -670,7 +674,6 @@ export class RemoteChainPanel {
         functionSelect.appendChild(og);
       }
 
-      functionSelect.addEventListener('change', onFunctionChange);
       onFunctionChange();
     }
 
