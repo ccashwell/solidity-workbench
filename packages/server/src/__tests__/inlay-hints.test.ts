@@ -93,6 +93,44 @@ contract C {
     assert.deepEqual(hints, []);
   });
 
+  describe("comment handling", () => {
+    it("does not emit hints for call-like patterns inside ///, //, or block comments", () => {
+      // Real-world trigger: NatSpec for `bootstrap` documents the
+      // share-mint formula as `sqrt(a: amount0 * amount1)`. The
+      // identifier `sqrt` exists in the symbol index (the contract
+      // calls it on line 6), so without comment-awareness the inlay
+      // provider would inject `a:` as a hint inside the `///` line.
+      const text = `pragma solidity ^0.8.0;
+contract M {
+    function sqrt(uint256 a) internal pure returns (uint256) { return a; }
+    /// One-line: sqrt(a: amount0 * amount1)
+    /** Block: sqrt(a: 1) and address(0) */
+    /*
+     * Multi-line block
+     * sqrt(a: 1)
+     */
+    // Plain: sqrt(a: 1)
+    function caller() external pure returns (uint256) {
+        return sqrt(1);
+    }
+}`;
+      const { doc, provider } = setup("file:///w/Cm.sol", text);
+      const lineCount = text.split("\n").length;
+      const hints = provider.provideInlayHints(doc, {
+        start: { line: 0, character: 0 },
+        end: { line: lineCount, character: 0 },
+      });
+
+      // Only the real call `sqrt(1)` should produce a hint.
+      const aHints = hints.filter((h) => h.label === "a:");
+      assert.equal(
+        aHints.length,
+        1,
+        `expected exactly one "a:" hint (from the real call site), got ${aHints.length}`,
+      );
+    });
+  });
+
   describe("receiver-aware resolution", () => {
     it("does not emit hints for UDVT `wrap` / `unwrap` builtins", () => {
       // Regression for: hovering / inlay-hinting `Currency.unwrap(x)`

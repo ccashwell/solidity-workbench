@@ -173,6 +173,102 @@ export function isInsideString(line: string, position: number): boolean {
 }
 
 /**
+ * Compute, for each line of `text`, the half-open `[startCol, endCol)`
+ * column ranges that fall inside a comment. Handles `//` line, `///`
+ * doc, and `/* ... *\/` block comments — including block comments that
+ * span multiple lines. String literals are skipped so a `"//"` in a
+ * string is not misclassified as a comment.
+ *
+ * Lines with no comment content are absent from the returned map.
+ */
+export function findCommentRanges(text: string): Map<number, Array<[number, number]>> {
+  const out = new Map<number, Array<[number, number]>>();
+  const lines = text.split("\n");
+  let inBlock = false;
+
+  for (let l = 0; l < lines.length; l++) {
+    const line = lines[l];
+    const lineRanges: Array<[number, number]> = [];
+    let col = 0;
+
+    while (col < line.length) {
+      if (inBlock) {
+        const closeIdx = line.indexOf("*/", col);
+        if (closeIdx === -1) {
+          lineRanges.push([col, line.length]);
+          col = line.length;
+        } else {
+          lineRanges.push([col, closeIdx + 2]);
+          col = closeIdx + 2;
+          inBlock = false;
+        }
+        continue;
+      }
+
+      const ch = line[col];
+      if (ch === '"' || ch === "'") {
+        const quote = ch;
+        col++;
+        while (col < line.length) {
+          if (line[col] === "\\") {
+            col += 2;
+            continue;
+          }
+          if (line[col] === quote) {
+            col++;
+            break;
+          }
+          col++;
+        }
+        continue;
+      }
+
+      const next = col + 1 < line.length ? line[col + 1] : "";
+      if (ch === "/" && next === "/") {
+        lineRanges.push([col, line.length]);
+        col = line.length;
+        continue;
+      }
+      if (ch === "/" && next === "*") {
+        const closeIdx = line.indexOf("*/", col + 2);
+        if (closeIdx === -1) {
+          lineRanges.push([col, line.length]);
+          inBlock = true;
+          col = line.length;
+        } else {
+          lineRanges.push([col, closeIdx + 2]);
+          col = closeIdx + 2;
+        }
+        continue;
+      }
+
+      col++;
+    }
+
+    if (lineRanges.length > 0) out.set(l, lineRanges);
+  }
+
+  return out;
+}
+
+/**
+ * True if `col` falls inside any comment range previously computed by
+ * `findCommentRanges` for this line.
+ */
+export function isPositionInCommentRanges(
+  ranges: Map<number, Array<[number, number]>>,
+  line: number,
+  col: number,
+): boolean {
+  const list = ranges.get(line);
+  if (!list) return false;
+  for (const [s, e] of list) {
+    if (col >= s && col < e) return true;
+  }
+  return false;
+}
+
+/**
  * Find the start of a line comment (//) outside of strings.
  * Returns -1 if no line comment found.
  */

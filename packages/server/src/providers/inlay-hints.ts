@@ -3,7 +3,11 @@ import { InlayHintKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
-import { CALL_LIKE_KEYWORDS } from "../utils/text.js";
+import {
+  CALL_LIKE_KEYWORDS,
+  findCommentRanges,
+  isPositionInCommentRanges,
+} from "../utils/text.js";
 
 /**
  * Provides inlay hints — inline annotations that show parameter names
@@ -27,6 +31,10 @@ export class InlayHintsProvider {
     const hints: InlayHint[] = [];
     const text = document.getText();
     const lines = text.split("\n");
+    // Pre-compute comment regions for the whole document so multi-line
+    // block comments are tracked correctly even when `range` only covers
+    // the visible viewport.
+    const commentRanges = findCommentRanges(text);
 
     for (
       let lineNum = range.start.line;
@@ -34,13 +42,19 @@ export class InlayHintsProvider {
       lineNum++
     ) {
       const line = lines[lineNum];
-      this.findCallSiteHints(line, lineNum, document.uri, hints);
+      this.findCallSiteHints(line, lineNum, document.uri, commentRanges, hints);
     }
 
     return hints;
   }
 
-  private findCallSiteHints(line: string, lineNum: number, _uri: string, hints: InlayHint[]): void {
+  private findCallSiteHints(
+    line: string,
+    lineNum: number,
+    _uri: string,
+    commentRanges: Map<number, Array<[number, number]>>,
+    hints: InlayHint[],
+  ): void {
     if (this.isDeclarationLine(line)) return;
 
     // Walk the line looking for `<ident>(`, then for each open paren
@@ -49,6 +63,9 @@ export class InlayHintsProvider {
     let match: RegExpExecArray | null;
 
     while ((match = identRe.exec(line)) !== null) {
+      // NatSpec and other comments are prose, not call sites — even
+      // when they happen to contain `name(args)` inside backticks.
+      if (isPositionInCommentRanges(commentRanges, lineNum, match.index)) continue;
       const funcName = match[1];
       if (CALL_LIKE_KEYWORDS.has(funcName)) continue;
 
