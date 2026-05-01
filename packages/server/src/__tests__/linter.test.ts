@@ -581,6 +581,60 @@ contract A {
     });
   });
 
+  describe("weak-prng detection", () => {
+    it("flags `block.timestamp % N`", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract Lottery {
+    function pick(uint256 max) external view returns (uint256) {
+        return block.timestamp % max;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "weak-prng");
+      assert.equal(flags.length, 1);
+    });
+
+    it("flags `uint256(blockhash(block.number - 1)) % N`", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract Lottery {
+    function pick(uint256 max) external view returns (uint256) {
+        return uint256(blockhash(block.number - 1)) % max;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "weak-prng");
+      assert.equal(flags.length, 1);
+    });
+
+    it("does NOT flag block.timestamp used as a deadline", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(uint256 deadline) external view {
+        require(block.timestamp <= deadline, "expired");
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "weak-prng");
+      assert.equal(flags.length, 0);
+    });
+
+    it("does NOT flag modulo on plain inputs", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(uint256 a, uint256 b) external pure returns (uint256) {
+        return a % b;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "weak-prng");
+      assert.equal(flags.length, 0);
+    });
+  });
+
   describe("multiple-pragma detection", () => {
     it("flags a file with two pragma solidity directives", () => {
       const diags = lint(`

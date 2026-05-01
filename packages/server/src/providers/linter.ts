@@ -75,6 +75,7 @@ export class SolidityLinter {
           ...this.checkBooleanEqualityAst(rawContract, lines),
           ...this.checkDivideBeforeMultiplyAst(rawContract),
           ...this.checkIncorrectStrictEqualityAst(rawContract),
+          ...this.checkWeakPrngAst(rawContract),
         );
       }
 
@@ -269,6 +270,82 @@ export class SolidityLinter {
       });
     }
     return diagnostics;
+  }
+
+  // ── Weak PRNG ──────────────────────────────────────────────────────
+
+  /**
+   * Block fields are predictable: validators see them before any
+   * transaction in their block runs, and historical block fields are
+   * public. Using `block.timestamp` / `block.number` /
+   * `block.difficulty` / `block.prevrandao` / `blockhash(...)` as a
+   * randomness source — recognised by a `% N` modulo against an
+   * expression that touches one of those fields — is exploitable.
+   *
+   * We don't flag the same fields used as deadlines / timestamps; the
+   * modulo is the load-bearing signal.
+   */
+  private checkWeakPrngAst(rawContract: RawContract): Diagnostic[] {
+    const diagnostics: Diagnostic[] = [];
+    for (const sub of rawContract.subNodes ?? []) {
+      if (sub?.type !== "FunctionDefinition") continue;
+      const func = sub as RawFunction;
+      if (!func.body) continue;
+      visit(func.body as any, {
+        BinaryOperation: (n: any) => {
+          if (n.operator !== "%") return undefined;
+          if (
+            !this.containsBlockEntropySource(n.left) &&
+            !this.containsBlockEntropySource(n.right)
+          ) {
+            return undefined;
+          }
+          diagnostics.push({
+            severity: DiagnosticSeverity.Warning,
+            range: this.nodeRange(n),
+            message:
+              "Block fields (`block.timestamp`, `block.number`, `block.prevrandao`, `blockhash`) are predictable; a `% N` against them is not a secure source of randomness. Use a VRF (Chainlink VRF, Pyth Entropy) instead.",
+            source: "solidity-workbench",
+            code: "weak-prng",
+          });
+          return undefined;
+        },
+      });
+    }
+    return diagnostics;
+  }
+
+  private static readonly BLOCK_ENTROPY_MEMBERS = new Set([
+    "timestamp",
+    "number",
+    "difficulty",
+    "prevrandao",
+  ]);
+
+  /** True if any node in `expr`'s subtree is a block-entropy source. */
+  private containsBlockEntropySource(expr: unknown): boolean {
+    let found = false;
+    visit(expr as any, {
+      MemberAccess: (n: any) => {
+        if (
+          SolidityLinter.BLOCK_ENTROPY_MEMBERS.has(n.memberName) &&
+          n.expression?.type === "Identifier" &&
+          n.expression?.name === "block"
+        ) {
+          found = true;
+          return false;
+        }
+        return undefined;
+      },
+      FunctionCall: (n: any) => {
+        if (n.expression?.type === "Identifier" && n.expression?.name === "blockhash") {
+          found = true;
+          return false;
+        }
+        return undefined;
+      },
+    });
+    return found;
   }
 
   // ── Strict equality on volatile values ─────────────────────────────
