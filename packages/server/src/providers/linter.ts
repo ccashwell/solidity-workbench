@@ -76,6 +76,7 @@ export class SolidityLinter {
           ...this.checkDivideBeforeMultiplyAst(rawContract),
           ...this.checkIncorrectStrictEqualityAst(rawContract),
           ...this.checkWeakPrngAst(rawContract),
+          ...this.checkEcrecoverZeroCheckAst(rawContract),
         );
       }
 
@@ -270,6 +271,100 @@ export class SolidityLinter {
       });
     }
     return diagnostics;
+  }
+
+  // ── ecrecover zero-check ───────────────────────────────────────────
+
+  /**
+   * `ecrecover(...)` returns `address(0)` for an invalid signature. If
+   * the result is captured into a local variable and then used (e.g.
+   * `balances[signer] += amount`) without a `signer != address(0)`
+   * check, malformed signatures pass authentication.
+   *
+   * Strategy:
+   *   1. Find every `address X = ecrecover(...)` site, recording the
+   *      capture name and the call node.
+   *   2. Walk the same function body for any `==` / `!=` comparison
+   *      against `address(0)` and record which Identifier names get
+   *      a zero-check.
+   *   3. Flag any captured ecrecover whose name is NOT in the
+   *      zero-checked set.
+   *
+   * Inline uses (e.g. `require(ecrecover(...) == owner, "...")`) are
+   * not flagged: the comparison naturally rejects `address(0)` so
+   * long as the RHS isn't itself zero, and we can't statically prove
+   * that here.
+   */
+  private checkEcrecoverZeroCheckAst(rawContract: RawContract): Diagnostic[] {
+    const diagnostics: Diagnostic[] = [];
+    for (const sub of rawContract.subNodes ?? []) {
+      if (sub?.type !== "FunctionDefinition") continue;
+      const func = sub as RawFunction;
+      if (!func.body) continue;
+
+      const captured = new Map<string, RawNode>();
+      visit(func.body as any, {
+        VariableDeclarationStatement: (stmt: any) => {
+          const init = stmt.initialValue;
+          if (init?.type !== "FunctionCall") return undefined;
+          if (init.expression?.type !== "Identifier" || init.expression.name !== "ecrecover") {
+            return undefined;
+          }
+          const varName = stmt.variables?.[0]?.name;
+          if (varName) captured.set(varName, init);
+          return undefined;
+        },
+      });
+
+      if (captured.size === 0) continue;
+
+      const zeroChecked = new Set<string>();
+      visit(func.body as any, {
+        BinaryOperation: (n: any) => {
+          if (n.operator !== "==" && n.operator !== "!=") return undefined;
+          const other = this.isAddressZero(n.left)
+            ? n.right
+            : this.isAddressZero(n.right)
+              ? n.left
+              : null;
+          if (other?.type === "Identifier" && other.name) {
+            zeroChecked.add(other.name);
+          }
+          return undefined;
+        },
+      });
+
+      for (const [name, node] of captured) {
+        if (zeroChecked.has(name)) continue;
+        diagnostics.push({
+          severity: DiagnosticSeverity.Warning,
+          range: this.nodeRange(node),
+          message: `ecrecover result captured into '${name}' is not checked against address(0). An invalid signature returns address(0); without the check, malformed inputs pass authentication.`,
+          source: "solidity-workbench",
+          code: "ecrecover-zero-check",
+        });
+      }
+    }
+    return diagnostics;
+  }
+
+  /**
+   * True if `expr` is an `address(0)` / `address(0x0)` literal call.
+   */
+  private isAddressZero(expr: unknown): boolean {
+    const e = expr as
+      | {
+          type?: string;
+          expression?: { type?: string; name?: string };
+          arguments?: { type?: string; number?: string }[];
+        }
+      | undefined;
+    if (e?.type !== "FunctionCall") return false;
+    if (e.expression?.type !== "Identifier" || e.expression?.name !== "address") return false;
+    const arg = e.arguments?.[0];
+    if (arg?.type !== "NumberLiteral") return false;
+    const num = arg.number ?? "";
+    return num === "0" || /^0x0+$/i.test(num);
   }
 
   // ── Weak PRNG ──────────────────────────────────────────────────────

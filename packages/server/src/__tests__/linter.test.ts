@@ -635,6 +635,54 @@ contract A {
     });
   });
 
+  describe("ecrecover-zero-check detection", () => {
+    it("flags ecrecover captured into a variable used without zero check", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    mapping(address => uint256) public balances;
+    function claim(bytes32 h, uint8 v, bytes32 r, bytes32 s, uint256 amount) external {
+        address signer = ecrecover(h, v, r, s);
+        balances[signer] += amount;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "ecrecover-zero-check");
+      assert.equal(flags.length, 1);
+    });
+
+    it("does NOT flag when the captured signer is checked against address(0)", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    mapping(address => uint256) public balances;
+    function claim(bytes32 h, uint8 v, bytes32 r, bytes32 s, uint256 amount) external {
+        address signer = ecrecover(h, v, r, s);
+        require(signer != address(0), "invalid sig");
+        balances[signer] += amount;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "ecrecover-zero-check");
+      assert.equal(flags.length, 0);
+    });
+
+    it("does NOT flag inline `require(ecrecover(...) == owner)` usage", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    address public owner;
+    function f(bytes32 h, uint8 v, bytes32 r, bytes32 s) external view returns (bool) {
+        require(ecrecover(h, v, r, s) == owner, "bad sig");
+        return true;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "ecrecover-zero-check");
+      assert.equal(flags.length, 0);
+    });
+  });
+
   describe("multiple-pragma detection", () => {
     it("flags a file with two pragma solidity directives", () => {
       const diags = lint(`
