@@ -527,6 +527,60 @@ contract A {
     });
   });
 
+  describe("incorrect-strict-equality detection", () => {
+    it("flags `block.timestamp == X`", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function ok() external view returns (bool) {
+        return block.timestamp == 1700000000;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "incorrect-strict-equality");
+      assert.equal(flags.length, 1);
+    });
+
+    it("flags `addr.balance != X`", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(address a) external view returns (bool) {
+        return a.balance != 0;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "incorrect-strict-equality");
+      assert.equal(flags.length, 1);
+    });
+
+    it("does NOT flag range comparisons (>=, <=)", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function ok() external view returns (bool) {
+        return block.timestamp >= 1700000000;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "incorrect-strict-equality");
+      assert.equal(flags.length, 0);
+    });
+
+    it("does NOT flag equality on non-volatile values", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(uint256 a, uint256 b) external pure returns (bool) {
+        return a == b;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "incorrect-strict-equality");
+      assert.equal(flags.length, 0);
+    });
+  });
+
   describe("multiple-pragma detection", () => {
     it("flags a file with two pragma solidity directives", () => {
       const diags = lint(`

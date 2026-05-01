@@ -74,6 +74,7 @@ export class SolidityLinter {
           ...this.checkFuncVisibilityExplicitAst(rawContract, lines),
           ...this.checkBooleanEqualityAst(rawContract, lines),
           ...this.checkDivideBeforeMultiplyAst(rawContract),
+          ...this.checkIncorrectStrictEqualityAst(rawContract),
         );
       }
 
@@ -268,6 +269,72 @@ export class SolidityLinter {
       });
     }
     return diagnostics;
+  }
+
+  // ── Strict equality on volatile values ─────────────────────────────
+
+  /**
+   * Flag `==` / `!=` against `block.timestamp` / `block.number` /
+   * `block.difficulty` / `block.prevrandao` / `addr.balance`. These
+   * values change between blocks and across calls; strict equality
+   * almost never does what the author intended (off-by-one errors,
+   * trivially front-runnable). Use `>=` / `<=` ranges instead.
+   */
+  private checkIncorrectStrictEqualityAst(rawContract: RawContract): Diagnostic[] {
+    const diagnostics: Diagnostic[] = [];
+    for (const sub of rawContract.subNodes ?? []) {
+      if (sub?.type !== "FunctionDefinition") continue;
+      const func = sub as RawFunction;
+      if (!func.body) continue;
+      visit(func.body as any, {
+        BinaryOperation: (n: any) => {
+          if (n.operator !== "==" && n.operator !== "!=") return undefined;
+          const volatileSide = this.volatileExpressionLabel(n.left) ?? this.volatileExpressionLabel(n.right);
+          if (!volatileSide) return undefined;
+          diagnostics.push({
+            severity: DiagnosticSeverity.Warning,
+            range: this.nodeRange(n),
+            message: `Strict equality (\`${n.operator}\`) on \`${volatileSide}\` is fragile — the value changes between blocks. Use a range comparison (\`>=\` / \`<=\`) instead.`,
+            source: "solidity-workbench",
+            code: "incorrect-strict-equality",
+          });
+          return undefined;
+        },
+      });
+    }
+    return diagnostics;
+  }
+
+  private static readonly VOLATILE_BLOCK_MEMBERS = new Set([
+    "timestamp",
+    "number",
+    "difficulty",
+    "prevrandao",
+  ]);
+
+  /**
+   * If `expr` is a known volatile chain access, return a human-readable
+   * label for it (`block.timestamp`, `addr.balance`, etc.); otherwise
+   * `null`. Used by the strict-equality rule to format the diagnostic.
+   */
+  private volatileExpressionLabel(expr: unknown): string | null {
+    const e = expr as
+      | {
+          type?: string;
+          memberName?: string;
+          expression?: { type?: string; name?: string };
+        }
+      | undefined;
+    if (e?.type !== "MemberAccess" || !e.memberName) return null;
+    if (e.memberName === "balance") return `${e.expression?.name ?? "<expr>"}.balance`;
+    if (
+      SolidityLinter.VOLATILE_BLOCK_MEMBERS.has(e.memberName) &&
+      e.expression?.type === "Identifier" &&
+      e.expression?.name === "block"
+    ) {
+      return `block.${e.memberName}`;
+    }
+    return null;
   }
 
   /**
