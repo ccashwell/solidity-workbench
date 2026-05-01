@@ -10,6 +10,18 @@ import {
   type YulFunctionCategory,
 } from "@solidity-workbench/common";
 
+/**
+ * Per-function delta vs a pinned baseline. `lineDelta` is positive
+ * when the function grew in the current output, negative when it
+ * shrunk. `state` distinguishes an entirely-new function (`added`),
+ * a removed-but-still-flagged-in-summary function (`removed`), or a
+ * surviving function whose body changed (`changed`).
+ */
+type FunctionDelta =
+  | { state: "added"; lineDelta: number }
+  | { state: "removed"; lineDelta: number }
+  | { state: "changed"; lineDelta: number };
+
 const execFileAsync = promisify(execFile);
 
 /**
@@ -104,6 +116,7 @@ export class IrViewerPanel {
       contractName,
       variant: "irOptimized",
       cursorFunctionName,
+      baseline: null,
     });
   }
 
@@ -153,28 +166,63 @@ export class IrViewerPanel {
       this.panel.webview.html = this.buildErrorHtml(this.state, result.error);
       return;
     }
-    const outline =
-      this.state.variant === "assembly" ? null : parseYulOutline(result.output ?? "");
+    const output = result.output ?? "";
+    const outline = this.state.variant === "assembly" ? null : parseYulOutline(output);
     const initialAnchor =
       outline && this.state.cursorFunctionName
         ? findYulFunctionByName(outline, this.state.cursorFunctionName)?.startLine
         : undefined;
-    this.panel.webview.html = this.buildHtml(
-      this.state,
-      result.output ?? "",
-      outline,
-      initialAnchor,
-    );
+    // Deltas only make sense when both sides are the same variant —
+    // a baseline pinned in `irOptimized` shouldn't compare against
+    // `ir` line counts.
+    const deltas =
+      this.state.baseline && outline && this.state.baseline.variant === this.state.variant
+        ? computeFunctionDeltas(this.state.baseline.outline, outline)
+        : null;
+    this.panel.webview.html = this.buildHtml(this.state, output, outline, initialAnchor, deltas);
   }
 
   private handleMessage(msg: PanelMessage): void {
     if (!this.state) return;
     if (msg.type === "selectVariant") {
-      this.state = { ...this.state, variant: msg.variant, cursorFunctionName: undefined };
+      this.state = {
+        ...this.state,
+        variant: msg.variant,
+        cursorFunctionName: null,
+        // Drop the baseline on variant switch — line counts across
+        // variants aren't comparable.
+        baseline:
+          this.state.baseline && this.state.baseline.variant === msg.variant
+            ? this.state.baseline
+            : null,
+      };
       void this.refresh();
     } else if (msg.type === "refresh") {
       void this.refresh();
+    } else if (msg.type === "pinBaseline") {
+      void this.pinBaseline();
+    } else if (msg.type === "clearBaseline") {
+      this.state = { ...this.state, baseline: null };
+      void this.refresh();
     }
+  }
+
+  private async pinBaseline(): Promise<void> {
+    if (!this.state) return;
+    const result = await this.runForgeInspect(this.state);
+    if (result.error || !this.state) return;
+    const output = result.output ?? "";
+    const outline = this.state.variant === "assembly" ? null : parseYulOutline(output);
+    this.state = {
+      ...this.state,
+      baseline: {
+        variant: this.state.variant,
+        output,
+        outline,
+        capturedAt: new Date().toISOString(),
+      },
+    };
+    void this.refresh();
   }
 
   private async runForgeInspect(state: PanelState): Promise<InspectResult> {
@@ -230,8 +278,9 @@ ${this.toolbarHtml(state)}
     output: string,
     outline: YulOutline | null,
     initialAnchor: number | undefined,
+    deltas: Map<string, FunctionDelta> | null,
   ): string {
-    const tocHtml = outline ? this.buildTocHtml(outline) : "";
+    const tocHtml = outline ? this.buildTocHtml(outline, deltas) : "";
     const codeHtml = renderNumberedCode(output);
     const initialAnchorAttr =
       initialAnchor !== undefined ? ` data-initial-anchor="${initialAnchor}"` : "";
@@ -263,10 +312,21 @@ ${this.toolbarHtml(state)}
   pre.listing .line-no { width: 4em; text-align: right; padding-right: 12px; color: var(--vscode-editorLineNumber-foreground); flex: 0 0 auto; user-select: none; }
   pre.listing .line-text { flex: 1 1 auto; white-space: pre; }
   .stats { padding: 6px 12px; border-top: 1px solid var(--vscode-panel-border); font-size: 0.85em; opacity: 0.7; display: flex; gap: 16px; }
+  .toc .delta { font-size: 0.78em; font-family: var(--vscode-editor-font-family); padding: 0 4px; margin-left: 4px; border-radius: 3px; }
+  .toc .delta.added { background: rgba(80, 180, 80, 0.2); color: #6fce6f; }
+  .toc .delta.removed { background: rgba(220, 80, 80, 0.2); color: #ec7676; }
+  .toc .delta.grew { background: rgba(220, 130, 60, 0.2); color: #e9a55a; }
+  .toc .delta.shrunk { background: rgba(80, 180, 80, 0.2); color: #6fce6f; }
+  .baseline-banner { padding: 4px 12px; background: var(--vscode-textCodeBlock-background); border-bottom: 1px solid var(--vscode-panel-border); font-size: 0.85em; opacity: 0.85; display: flex; gap: 16px; align-items: center; }
+  .baseline-banner .summary { display: flex; gap: 12px; }
+  .baseline-banner .net { font-weight: 600; }
+  .baseline-banner .net.positive { color: #ec7676; }
+  .baseline-banner .net.negative { color: #6fce6f; }
 </style>
 </head>
 <body${variantAttr}${initialAnchorAttr}>
 ${this.toolbarHtml(state)}
+${this.baselineBannerHtml(state, deltas)}
 <div class="layout">
   ${outline ? `<aside class="toc">${tocHtml}</aside>` : ""}
   <div class="code">
@@ -289,6 +349,12 @@ ${this.toolbarHtml(state)}
   });
   document.getElementById('refresh')?.addEventListener('click', () => {
     vscode.postMessage({ type: 'refresh' });
+  });
+  document.getElementById('pin-baseline')?.addEventListener('click', () => {
+    vscode.postMessage({ type: 'pinBaseline' });
+  });
+  document.getElementById('clear-baseline')?.addEventListener('click', () => {
+    vscode.postMessage({ type: 'clearBaseline' });
   });
 
   // Restore per-variant scroll position across panel rebuilds (variant
@@ -332,24 +398,64 @@ ${this.toolbarHtml(state)}
           `<option value="${v.value}"${v.value === state.variant ? " selected" : ""}>${v.label}</option>`,
       )
       .join("");
+    const baselineButton =
+      state.baseline && state.baseline.variant === state.variant
+        ? `<button id="clear-baseline">Clear baseline</button>`
+        : `<button id="pin-baseline" title="Capture this output as a baseline; subsequent refreshes show per-function deltas in the TOC.">Pin baseline</button>`;
     return `<div class="toolbar">
   <h2>IR: ${escapeHtml(state.contractName)}</h2>
   <select id="variant">${options}</select>
+  ${baselineButton}
   <button id="refresh">Refresh</button>
 </div>`;
   }
 
-  private buildTocHtml(outline: YulOutline): string {
+  private baselineBannerHtml(
+    state: PanelState,
+    deltas: Map<string, FunctionDelta> | null,
+  ): string {
+    if (!state.baseline || state.baseline.variant !== state.variant) return "";
+    const captured = new Date(state.baseline.capturedAt);
+    const time = captured.toLocaleTimeString();
+    let added = 0;
+    let removed = 0;
+    let grew = 0;
+    let shrunk = 0;
+    let net = 0;
+    if (deltas) {
+      for (const d of deltas.values()) {
+        net += d.lineDelta;
+        if (d.state === "added") added += 1;
+        else if (d.state === "removed") removed += 1;
+        else if (d.lineDelta > 0) grew += 1;
+        else if (d.lineDelta < 0) shrunk += 1;
+      }
+    }
+    const netClass = net > 0 ? "positive" : net < 0 ? "negative" : "";
+    const netLabel = net === 0 ? "no net change" : net > 0 ? `+${net} lines` : `${net} lines`;
+    return `<div class="baseline-banner">
+  <span>Baseline pinned ${escapeHtml(time)}</span>
+  <span class="summary">
+    <span class="net ${netClass}">${escapeHtml(netLabel)}</span>
+    <span>+${added} added</span>
+    <span>-${removed} removed</span>
+    <span>▲ ${grew} grew</span>
+    <span>▼ ${shrunk} shrunk</span>
+  </span>
+</div>`;
+  }
+
+  private buildTocHtml(
+    outline: YulOutline,
+    deltas: Map<string, FunctionDelta> | null,
+  ): string {
     return outline.objects
       .map((obj) => {
         const groups = groupFunctions(obj.functions);
         const groupHtml = groups
           .map((g) => {
             if (g.functions.length === 0) return "";
-            const items = g.functions
-              .map((fn) => this.tocEntry(fn))
-              .join("");
-            // Keep user-facing groups expanded by default; collapse runtime helpers.
+            const items = g.functions.map((fn) => this.tocEntry(fn, deltas)).join("");
             const open = g.startsExpanded ? " open" : "";
             return `<details${open}>
               <summary>${escapeHtml(g.label)}<span class="group-count">${g.functions.length}</span></summary>
@@ -357,17 +463,45 @@ ${this.toolbarHtml(state)}
             </details>`;
           })
           .join("");
-        return `<details open><summary>${escapeHtml(obj.name)}</summary>${groupHtml}</details>`;
+        // Surface "removed" entries (in baseline but not current) as a
+        // ghost section per object so the user can see what disappeared.
+        const removedHtml = deltas ? this.removedEntriesHtml(obj.name, deltas) : "";
+        return `<details open><summary>${escapeHtml(obj.name)}</summary>${groupHtml}${removedHtml}</details>`;
       })
       .join("");
   }
 
-  private tocEntry(fn: YulFunction): string {
+  private tocEntry(fn: YulFunction, deltas: Map<string, FunctionDelta> | null): string {
     const display = fn.displayName ?? fn.name;
     const idTag = fn.astId ? `<span class="ast-id">#${escapeHtml(fn.astId)}</span>` : "";
     const showMangled = fn.displayName !== null && fn.displayName !== fn.name;
     const mangledTag = showMangled ? `<div class="mangled">${escapeHtml(fn.name)}</div>` : "";
-    return `<a href="#L${fn.startLine}" title="${escapeHtml(fn.name)} — line ${fn.startLine}">${escapeHtml(display)}${idTag}${mangledTag}</a>`;
+    const deltaTag = deltas ? this.deltaTag(deltas.get(fn.name)) : "";
+    return `<a href="#L${fn.startLine}" title="${escapeHtml(fn.name)} — line ${fn.startLine}">${escapeHtml(display)}${idTag}${deltaTag}${mangledTag}</a>`;
+  }
+
+  private deltaTag(delta: FunctionDelta | undefined): string {
+    if (!delta) return "";
+    if (delta.state === "added") return `<span class="delta added">new</span>`;
+    if (delta.state === "removed") return `<span class="delta removed">gone</span>`;
+    if (delta.lineDelta > 0) return `<span class="delta grew">+${delta.lineDelta}</span>`;
+    if (delta.lineDelta < 0) return `<span class="delta shrunk">${delta.lineDelta}</span>`;
+    return "";
+  }
+
+  private removedEntriesHtml(objectName: string, deltas: Map<string, FunctionDelta>): string {
+    const removed = [...deltas]
+      .filter(([, d]) => d.state === "removed")
+      .map(([name]) => name);
+    if (removed.length === 0) return "";
+    void objectName; // baseline outline is per-object too; for MVP we list all removed under their object.
+    const items = removed
+      .map(
+        (name) =>
+          `<a class="removed-entry" title="Present in the pinned baseline but missing from the current output."><span style="opacity:0.6;text-decoration:line-through">${escapeHtml(name)}</span><span class="delta removed">gone</span></a>`,
+      )
+      .join("");
+    return `<details><summary>Removed since baseline<span class="group-count">${removed.length}</span></summary>${items}</details>`;
   }
 }
 
@@ -377,6 +511,21 @@ interface PanelState {
   variant: IrVariant;
   /** Solidity function name the cursor was on when the panel was opened. */
   cursorFunctionName: string | null;
+  /**
+   * Pinned snapshot of a previous forge-inspect output. Used to
+   * compute per-function deltas after subsequent refreshes — the core
+   * "did my refactor save anything?" workflow. Cleared on variant
+   * switch since deltas across variants don't make sense.
+   */
+  baseline: PinnedBaseline | null;
+}
+
+interface PinnedBaseline {
+  variant: IrVariant;
+  output: string;
+  outline: YulOutline | null;
+  /** ISO timestamp when the baseline was captured, for the toolbar caption. */
+  capturedAt: string;
 }
 
 type IrVariant = "ir" | "irOptimized" | "assembly";
@@ -388,7 +537,9 @@ interface InspectResult {
 
 type PanelMessage =
   | { type: "selectVariant"; variant: IrVariant }
-  | { type: "refresh" };
+  | { type: "refresh" }
+  | { type: "pinBaseline" }
+  | { type: "clearBaseline" };
 
 interface FunctionGroup {
   label: string;
@@ -448,6 +599,61 @@ function findEnclosingFunctionName(text: string, cursorLine: number): string | n
     if (m) return m[1];
   }
   return null;
+}
+
+/**
+ * Compute per-function deltas between a pinned baseline outline and
+ * the current outline. Functions are matched by mangled name (which
+ * includes the source AST id, so it's stable across recompiles
+ * unless the source AST itself changed).
+ *
+ *   - In current only        -> { state: "added",   lineDelta: +N }
+ *   - In baseline only       -> { state: "removed", lineDelta: -N }
+ *   - In both, body-line delta != 0 -> { state: "changed", lineDelta }
+ *   - In both, identical line count  -> NOT included (no surprise to surface)
+ *
+ * The line count is the function's body line span; counts are
+ * approximate (header + closing brace included) but stable across
+ * runs, which is what matters for the "did this change?" comparison.
+ */
+function computeFunctionDeltas(
+  baseline: YulOutline | null,
+  current: YulOutline,
+): Map<string, FunctionDelta> {
+  const deltas = new Map<string, FunctionDelta>();
+  if (!baseline) {
+    for (const obj of current.objects) {
+      for (const fn of obj.functions) {
+        deltas.set(fn.name, { state: "added", lineDelta: fn.endLine - fn.startLine + 1 });
+      }
+    }
+    return deltas;
+  }
+  const baselineLineCounts = new Map<string, number>();
+  for (const obj of baseline.objects) {
+    for (const fn of obj.functions) {
+      baselineLineCounts.set(fn.name, fn.endLine - fn.startLine + 1);
+    }
+  }
+  const currentSeen = new Set<string>();
+  for (const obj of current.objects) {
+    for (const fn of obj.functions) {
+      currentSeen.add(fn.name);
+      const curLines = fn.endLine - fn.startLine + 1;
+      const baseLines = baselineLineCounts.get(fn.name);
+      if (baseLines === undefined) {
+        deltas.set(fn.name, { state: "added", lineDelta: curLines });
+      } else if (baseLines !== curLines) {
+        deltas.set(fn.name, { state: "changed", lineDelta: curLines - baseLines });
+      }
+    }
+  }
+  for (const [name, baseLines] of baselineLineCounts) {
+    if (!currentSeen.has(name)) {
+      deltas.set(name, { state: "removed", lineDelta: -baseLines });
+    }
+  }
+  return deltas;
 }
 
 function renderNumberedCode(source: string): string {
