@@ -81,9 +81,12 @@ Suppressible with `// solidity-workbench-disable-next-line [rule]`:
 | Test Explorer | Tree view, pass/fail, fuzz counterexamples, inline gas |
 | Format | `forge fmt` (on-save supported) |
 | Gas Snapshot | `forge snapshot` with inline decorations and regression deltas |
+| Gas Diff | Side-by-side compare of two `.gas-snapshot` files |
 | Coverage | `forge coverage --report lcov` with line-level gutter decorations |
 | Flatten | `forge flatten` |
 | Storage Layout | Interactive webview via `forge inspect` |
+| Inheritance Graph | Webview rendering of the contract `is`-graph |
+| ABI Explorer | Webview for an artifact's functions, events, and errors |
 | Script: Simulate / Broadcast / Resume | `forge script` with Ledger / Keystore / Interactive signing |
 | Deploy Contract | Guided `forge create` with typed constructor args and verification |
 | Verify / Check Verification | `forge verify-contract` / `forge verify-check` |
@@ -93,7 +96,13 @@ Suppressible with `// solidity-workbench-disable-next-line [rule]`:
 
 - **Anvil**: Start / stop / fork from any RPC with optional block pin; status in the status bar
 - **Cast**: `sig`, `4byte`, `calldata-decode`, `abi-encode`, `keccak`, `to-wei`, `from-wei`, `balance`, `storage`
-- **Chisel**: Start a REPL (fresh or forked), send editor selection directly to it
+- **Chisel**: Long-lived REPL hosted in a webview with evaluation history (capped at 200 entries, persisted across sessions). Start fresh or forked; send editor selection directly to it.
+- **Remote Chain UI**: ABI-aware webview for `cast call` against seeded public RPCs (Mainnet, Sepolia, Base, Base Sepolia, Optimism, Arbitrum One, Polygon PoS) or any custom RPC. ABI loaded by paste or by picking a forge artifact under `out/`.
+
+### Indexer scaffolding
+
+- **Indexer Scaffold** — generate a Graph / Ponder / Envio project skeleton from a compiled contract artifact
+- **Subgraph Scaffold** — emit `subgraph.yaml`, `schema.graphql`, and AssemblyScript mappings for an event-only subgraph
 
 ### `foundry.toml` IntelliSense
 
@@ -104,6 +113,13 @@ Completions, hover docs, and value validation for `[profile.default]`, `[fmt]`, 
 
 - **Built-in linter** — 8 AST-based rules in the LSP (see above)
 - **Slither** (optional) — findings surfaced as VS Code diagnostics with severity mapping; auto-runs on save when enabled
+- **Aderyn** (optional) — Cyfrin's Rust analyzer; JSON report parsed and mapped to diagnostics with related-information links between instances; on-demand or on-save
+
+Static analysis (built-in linter + the syntax-rule warnings: `missing-spdx`,
+`floating-pragma`, `tx-origin`, `deprecated-selfdestruct`) is suppressed on
+`test/`, `script/`, and `lib/` files — those findings are noise on code
+that's never deployed or that the user can't modify. solc/forge build
+diagnostics still flow through on every tier.
 
 ### Gas profiling and coverage
 
@@ -258,7 +274,8 @@ All commands available via `Cmd/Ctrl+Shift+P → "Solidity Workbench: ..."`.
 ### Local chain and REPL
 
 - **Anvil**: start / stop / fork from any RPC with optional block pin
-- **Chisel**: start REPL (fresh or forked), send editor selection to it
+- **Chisel**: long-lived REPL hosted in a webview with persistent evaluation history (capped at 200 entries, stored in `globalState`); start fresh or forked; send editor selection to it
+- **Remote Chain UI**: ABI-aware webview that wraps `cast call` against seven seeded public RPCs plus a custom-RPC escape hatch; ABI loaded by paste or by picking a forge artifact
 
 ### Cast palette
 
@@ -302,6 +319,8 @@ All settings under `solidity-workbench.*`:
 | `diagnostics.debounceMs` | number | `500` | Debounce for real-time diagnostics (ms) |
 | `slither.enabled` | boolean | `false` | Enable Slither on-save analysis |
 | `slither.path` | string | `""` | Absolute path to `slither` binary |
+| `aderyn.enabled` | boolean | `false` | Enable Aderyn on-save analysis |
+| `aderyn.path` | string | `""` | Absolute path to `aderyn` binary |
 | `inlayHints.parameterNames` | boolean | `true` | Parameter name hints at call sites |
 | `gasEstimates.enabled` | boolean | `true` | Gas estimate code lens from `.gas-snapshot` |
 | `test.verbosity` | number | `2` | `forge test` verbosity (0–5) |
@@ -318,7 +337,7 @@ Settings take effect dynamically without a restart.
 │                                                              │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐ │
 │  │   Foundry    │  │     Test     │  │  Static Analysis   │ │
-│  │   Commands   │  │   Explorer   │  │  (Slither bridge)  │ │
+│  │   Commands   │  │   Explorer   │  │ (Slither + Aderyn) │ │
 │  └──────────────┘  └──────────────┘  └────────────────────┘ │
 │  ┌──────────────┐  ┌──────────────┐  ┌────────────────────┐ │
 │  │     Gas      │  │   Storage    │  │  Anvil / Cast /    │ │
@@ -355,10 +374,10 @@ Settings take effect dynamically without a restart.
 │  └───────────────────┘  └──────────────────────────────────┘ │
 └──────────────────────────────────────────────────────────────┘
          │                │                   │
-    ┌────┴─────┐     ┌────┴─────┐      ┌─────┴──────┐
-    │   solc   │     │  forge   │      │  slither   │
-    │(compiler)│     │build/test│      │  (opt.)    │
-    └──────────┘     └──────────┘      └────────────┘
+    ┌────┴─────┐     ┌────┴─────┐      ┌─────────┴──────────┐
+    │   solc   │     │  forge   │      │ slither / aderyn   │
+    │(compiler)│     │build/test│      │      (opt.)        │
+    └──────────┘     └──────────┘      └────────────────────┘
 ```
 
 **Dual-AST strategy**: a fast parser AST (`@solidity-parser/parser`) powers keystroke-level
@@ -393,7 +412,7 @@ solidity-workbench/
 pnpm install              # install workspace dependencies
 pnpm build                # build common → server → extension (esbuild)
 pnpm watch                # rebuild on change
-pnpm test                 # 181 unit tests (node --test)
+pnpm test                 # ~390 unit tests (node --test)
 pnpm lint                 # ESLint
 pnpm format:check         # Prettier
 pnpm package              # produce .vsix
@@ -411,29 +430,34 @@ pnpm --filter solidity-workbench test:e2e
 
 ### Test suite
 
-181 unit tests via Node's built-in test runner, plus 6 E2E smoke tests via `@vscode/test-electron`. CI runs on Node 18, 20, and 22 with Foundry installed.
+~390 unit tests via Node's built-in test runner, plus 16 E2E tests via
+`@vscode/test-electron` (6 activation smoke tests + 10 LSP round-trip tests
+covering hover, workspace symbols including fuzzy subsequence, references,
+rename, code actions, and formatting). CI runs on Node 18, 20, and 22 with
+Foundry installed.
 
 Coverage spans: parser (35 tests), symbol/reference indexing, all major providers (completion,
 definition, hover, rename, references, code actions, auto-import, diagnostics, semantic tokens,
 call hierarchy, signature help, inlay hints), the 8 linter rules, LCOV parsing, line-index
-byte-offset conversion, and text utilities.
+byte-offset conversion, the trigram-indexed fuzzy workspace symbol path,
+the Aderyn JSON report parser, the subgraph scaffold generator, the
+chisel output adapter, ABI signature formatters, and text utilities.
 
 ---
 
 ## Roadmap
 
-All P1 and P2 items are resolved. Remaining P3 enhancements — see [PRODUCTION_GAPS.md](PRODUCTION_GAPS.md):
+All P1 and P2 items are resolved. Aderyn integration, the trigram-backed
+fuzzy workspace symbols, the subgraph scaffold, the chisel webview, and
+the remote chain UI all landed in the April 2026 sweeps. Remaining P3
+enhancements — see [PRODUCTION_GAPS.md](PRODUCTION_GAPS.md):
 
 | Item | Effort | Description |
 | --- | --- | --- |
 | DAP debugger | 3–4 weeks | Source-level step-through via forge trace + source maps |
-| Solar integration | 2–3 weeks | Swap parser hot path to Solar WASM for ~40x speed |
-| Chisel webview | 1 week | Persistent REPL with evaluation history |
-| Fuzzy workspace symbols | 2–3 days | Trigram index for O(1) fuzzy lookup |
-| Additional analyzers | 1 wk each | Aderyn, Wake, Mythril integrations |
-| Subgraph scaffold | 3–5 days | Generate Graph subgraph from contract ABI |
-| Remote chain UI | 1 week | ABI-aware webview for `cast call` / `cast send` |
-| More E2E coverage | Ongoing | Rename round-trip, code-action application, coverage rendering |
+| Solar integration | 2–3 weeks | Swap parser hot path to Solar WASM for ~40× speed once Solar publishes a stable LSP |
+| Wake / Mythril analyzers | ~1 week each | Same shape as the Aderyn / Slither bridges |
+| More E2E coverage | Ongoing | Test-explorer discovery after `forge build`, coverage decoration rendering, storage-layout webview shape, Slither / Aderyn diagnostic round-trip |
 
 ---
 

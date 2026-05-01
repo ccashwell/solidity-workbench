@@ -279,7 +279,7 @@ report.
 |----------|-------|-------------------|
 | P1 | 0 | — |
 | P2 | 0 | — |
-| P3 | 3 | ~3–4 weeks |
+| P3 | 4 | ~5–8 weeks (DAP dominates) |
 | **Total to public beta** | **0** | **ship the VSIX** |
 | **Total to v1.0** | **0** | **ship the VSIX** |
 
