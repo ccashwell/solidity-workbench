@@ -35,6 +35,20 @@ export function shouldSuppressForTier(
 }
 
 /**
+ * True when our own linter + syntax-rule warnings should run on the
+ * given file tier. These rules (missing-event, floating-pragma,
+ * tx-origin, deprecated-selfdestruct, reentrancy, storage-in-loop,
+ * unchecked-call, ...) are designed for deployable contracts. On
+ * `tests`-tier files they're noise — tests aren't deployed and
+ * aren't indexed. On `deps`-tier files (third-party libraries) the
+ * user can't act on findings. Returns true only for `project` and
+ * unknown-tier files (fail-open for files not yet classified).
+ */
+export function shouldRunStaticAnalysis(tier: "project" | "tests" | "deps" | null): boolean {
+  return tier === "project" || tier === null;
+}
+
+/**
  * Provides diagnostics (errors/warnings) from three sources:
  *
  * 1. **Fast path** (on every change): Parser-based syntax errors
@@ -82,6 +96,15 @@ export class DiagnosticsProvider {
     this.debounceTimers.set(
       uri,
       setTimeout(() => {
+        // Skip static analysis on test/script and dependency files —
+        // their findings are noise (see `shouldRunStaticAnalysis`).
+        // Still publish an empty list so any previously-shown
+        // diagnostics from before a file was reclassified are cleared.
+        if (!shouldRunStaticAnalysis(this.workspace.getFileTier(uri))) {
+          this.connection.sendDiagnostics({ uri, diagnostics: [] });
+          return;
+        }
+
         const diagnostics = DiagnosticsProvider.extractSyntaxDiagnostics(text);
 
         if (this.parser) {

@@ -4,6 +4,7 @@ import {
   DiagnosticsProvider,
   DEPLOY_ONLY_SOLC_CODES,
   shouldSuppressForTier,
+  shouldRunStaticAnalysis,
 } from "../providers/diagnostics.js";
 
 describe("DiagnosticsProvider.extractSyntaxDiagnostics", () => {
@@ -148,5 +149,23 @@ describe("shouldSuppressForTier", () => {
   it("does NOT suppress when the error has no code", () => {
     assert.equal(shouldSuppressForTier(undefined, "tests"), false);
     assert.equal(shouldSuppressForTier("", "tests"), false);
+  });
+});
+
+describe("shouldRunStaticAnalysis", () => {
+  it("runs on project-tier files", () => {
+    assert.equal(shouldRunStaticAnalysis("project"), true);
+  });
+
+  it("does NOT run on tests-tier files", () => {
+    assert.equal(shouldRunStaticAnalysis("tests"), false);
+  });
+
+  it("does NOT run on deps-tier files", () => {
+    assert.equal(shouldRunStaticAnalysis("deps"), false);
+  });
+
+  it("runs on unknown-tier files (fail-open for unindexed files)", () => {
+    assert.equal(shouldRunStaticAnalysis(null), true);
   });
 });
