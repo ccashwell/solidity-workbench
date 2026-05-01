@@ -300,6 +300,58 @@ contract Safe {
     });
   });
 
+  describe("empty-block detection", () => {
+    it("flags an empty function body", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function noop() external pure {}
+}
+`);
+      const empty = diags.filter((d) => d.code === "empty-block");
+      assert.equal(empty.length, 1);
+    });
+
+    it("does NOT flag an empty constructor", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract Base { constructor(uint256) {} }
+contract Derived is Base {
+    constructor() Base(1) {}
+}
+`);
+      const empty = diags.filter((d) => d.code === "empty-block");
+      assert.equal(empty.length, 0);
+    });
+
+    it("does NOT flag an empty receive() — that's the canonical accept-ETH idiom", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract Wallet { receive() external payable {} }
+`);
+      const empty = diags.filter((d) => d.code === "empty-block");
+      assert.equal(empty.length, 0);
+    });
+
+    it("does NOT flag a function with at least one statement", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A { function f() external pure returns (uint256) { return 1; } }
+`);
+      const empty = diags.filter((d) => d.code === "empty-block");
+      assert.equal(empty.length, 0);
+    });
+
+    it("does NOT flag interface methods (body absent, not empty)", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+interface I { function ping() external; }
+`);
+      const empty = diags.filter((d) => d.code === "empty-block");
+      assert.equal(empty.length, 0);
+    });
+  });
+
   describe("multiple-pragma detection", () => {
     it("flags a file with two pragma solidity directives", () => {
       const diags = lint(`

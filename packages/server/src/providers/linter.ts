@@ -69,6 +69,7 @@ export class SolidityLinter {
           ...this.checkStorageInLoopAst(contract, rawContract, lines),
           ...this.checkDangerousDelegatecallAst(rawContract, lines),
           ...this.checkUnprotectedSelfdestructAst(contract, rawContract, lines),
+          ...this.checkEmptyBlockAst(rawContract, lines),
         );
       }
 
@@ -84,6 +85,39 @@ export class SolidityLinter {
     diagnostics.push(...this.checkLargeLiterals(lines));
 
     return diagnostics.filter((d) => !this.isSuppressed(d, lines));
+  }
+
+  // ── Empty function body ────────────────────────────────────────────
+
+  /**
+   * Flag function definitions whose body has no statements. Skipped:
+   *   - Interfaces / abstract functions (`body` is absent — not empty)
+   *   - Constructors (occasionally empty by design when a base contract
+   *     requires explicit construction)
+   *   - `fallback` / `receive` (intentional empty bodies are the common
+   *     "accept ETH" idiom)
+   *   - Modifiers (a `_;` placeholder still parses as a statement; an
+   *     empty modifier body is rare and almost always intentional)
+   */
+  private checkEmptyBlockAst(rawContract: RawContract, lines: string[]): Diagnostic[] {
+    const diagnostics: Diagnostic[] = [];
+    for (const sub of rawContract.subNodes ?? []) {
+      if (sub?.type !== "FunctionDefinition") continue;
+      const func = sub as RawFunction;
+      if (!func.body) continue;
+      if (func.isConstructor || func.isFallback || func.isReceiveEther) continue;
+      const stmts = (func.body as { statements?: RawNode[] }).statements ?? [];
+      if (stmts.length > 0) continue;
+      const range = this.nodeRange(func.body);
+      diagnostics.push({
+        severity: DiagnosticSeverity.Information,
+        range: this.fullLineRange(range.start.line, lines),
+        message: `Function '${func.name ?? "<anonymous>"}' has an empty body.`,
+        source: "solidity-workbench",
+        code: "empty-block",
+      });
+    }
+    return diagnostics;
   }
 
   // ── Multiple pragma directives (file-level) ────────────────────────
@@ -853,8 +887,11 @@ interface RawContract extends RawNode {
 
 interface RawFunction extends RawNode {
   type: "FunctionDefinition";
-  name?: string;
+  name?: string | null;
   body?: RawNode & { statements?: RawNode[] };
+  isConstructor?: boolean;
+  isReceiveEther?: boolean;
+  isFallback?: boolean;
 }
 
 interface RawFunctionCall extends RawNode {
