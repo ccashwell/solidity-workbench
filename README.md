@@ -58,19 +58,39 @@ runtime.
 | Type hierarchy | Supertypes and subtypes across the `is` graph |
 | Diagnostics | Fast parser + linter on keystroke; full `forge build --json` on save |
 
-### Built-in linter (8 rules)
+### Built-in linter (21 rules)
 
 AST-based rules run on every keystroke with zero false positives on commented-out code.
 Suppressible with `// solidity-workbench-disable-next-line [rule]`:
 
+**Security**
 - `reentrancy` — state writes after external calls (CEI violation)
 - `unchecked-call` — `.call(...)` without success check
 - `dangerous-delegatecall` — any `.delegatecall(...)`
 - `unprotected-selfdestruct` — `selfdestruct` with no access control
+- `ecrecover-zero-check` — ecrecover result captured but not zero-checked
+- `unsafe-erc20-call` — `IERC20.transfer/transferFrom/approve` without `SafeERC20`
+- `weak-prng` — `block.*` / `blockhash` used as randomness (e.g. `block.timestamp % N`)
+- `incorrect-strict-equality` — `==` / `!=` on `block.*` / `addr.balance`
+
+**Correctness**
 - `missing-zero-check` — address params not checked against `address(0)`
 - `missing-event` — state-changing functions that emit no events
+- `boolean-equality` — `x == true` / `x != false`
+- `divide-before-multiply` — `(a / b) * c` precision loss
+- `shadowing-state` — parameter / local shadows a state variable
+
+**Best Practice / Style**
 - `large-literal` — magic numbers that should be named constants
-- `storage-in-loop` — storage reads inside `for`/`while`
+- `empty-block` — empty function body (constructor / fallback / receive exempt)
+- `payable-fallback` — non-payable `fallback()` with no `receive()`
+- `func-visibility-explicit` — function with no visibility specifier
+- `multiple-pragma` — two `pragma solidity` directives in one file
+
+**Gas**
+- `storage-in-loop` — state-var reads inside `for` / `while` loops
+- `state-could-be-constant` — write-once state var only initialized at declaration
+- `state-could-be-immutable` — state var only assigned in the constructor
 
 ### Foundry toolchain
 
@@ -111,7 +131,7 @@ Completions, hover docs, and value validation for `[profile.default]`, `[fmt]`, 
 
 ### Static analysis
 
-- **Built-in linter** — 8 AST-based rules in the LSP (see above)
+- **Built-in linter** — 21 AST-based rules in the LSP (see above)
 - **Slither** (optional) — findings surfaced as VS Code diagnostics with severity mapping; auto-runs on save when enabled
 - **Aderyn** (optional) — Cyfrin's Rust analyzer; JSON report parsed and mapped to diagnostics with related-information links between instances; on-demand or on-save
 
@@ -195,7 +215,7 @@ Press `F5` in VS Code to launch an Extension Development Host with the extension
 | Tier | Trigger | Source | Latency |
 | --- | --- | --- | --- |
 | Fast | Every keystroke (debounced) | `@solidity-parser/parser` + SPDX / pragma / `tx.origin` checks | ~5–15 ms |
-| Lint | Same debounce | AST linter (8 rules) | ~10–30 ms |
+| Lint | Same debounce | AST linter (21 rules) | ~10–30 ms |
 | Full | On save | `forge build --json` mapped via `LineIndex` (CRLF + UTF-8 safe) | Hundreds of ms |
 
 ### Navigation
@@ -292,7 +312,7 @@ A Debug Adapter Protocol (DAP) implementation is planned.
 
 ### Built-in linter
 
-Eight AST-based rules in the LSP server, running on every keystroke. Suppress per-line:
+Twenty-one AST-based rules in the LSP server, running on every keystroke. Suppress per-line:
 
 ```solidity
 // solidity-workbench-disable-next-line reentrancy
@@ -438,7 +458,7 @@ Foundry installed.
 
 Coverage spans: parser (35 tests), symbol/reference indexing, all major providers (completion,
 definition, hover, rename, references, code actions, auto-import, diagnostics, semantic tokens,
-call hierarchy, signature help, inlay hints), the 8 linter rules, LCOV parsing, line-index
+call hierarchy, signature help, inlay hints), the 21 linter rules, LCOV parsing, line-index
 byte-offset conversion, the trigram-indexed fuzzy workspace symbol path,
 the Aderyn JSON report parser, the subgraph scaffold generator, the
 chisel output adapter, ABI signature formatters, and text utilities.

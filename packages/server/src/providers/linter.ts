@@ -29,16 +29,30 @@ import type {
  *
  * Rules:
  *   Security:
- *     - reentrancy:            state writes after external calls (CEI)
- *     - unchecked-call:        low-level calls without return check
- *     - dangerous-delegatecall: any delegatecall
+ *     - reentrancy:               state writes after external calls (CEI)
+ *     - unchecked-call:           low-level calls without return check
+ *     - dangerous-delegatecall:   any delegatecall
  *     - unprotected-selfdestruct: selfdestruct with no access control
- *   Best Practice:
- *     - missing-zero-check:    address params without zero check
- *     - missing-event:         state-changing funcs without emit
- *     - large-literal:         magic numbers
+ *     - ecrecover-zero-check:     ecrecover result captured but not zero-checked
+ *     - unsafe-erc20-call:        IERC20.transfer / transferFrom / approve without SafeERC20
+ *     - weak-prng:                block fields used as randomness (e.g. `block.timestamp % N`)
+ *     - incorrect-strict-equality: `==` / `!=` on `block.*` / `addr.balance`
+ *   Correctness:
+ *     - missing-zero-check:       address params without zero check
+ *     - missing-event:            state-changing funcs without emit
+ *     - boolean-equality:         `x == true` / `x != false`
+ *     - divide-before-multiply:   `(a / b) * c` precision loss
+ *     - shadowing-state:          parameter / local shadows a state variable
+ *   Best Practice / Style:
+ *     - large-literal:            magic numbers
+ *     - empty-block:              empty function body (skipping ctor / fallback / receive)
+ *     - payable-fallback:         non-payable fallback() with no receive()
+ *     - func-visibility-explicit: missing visibility specifier
+ *     - multiple-pragma:          two `pragma solidity` directives in one file
  *   Gas:
- *     - storage-in-loop:       state var reads inside loops
+ *     - storage-in-loop:          state var reads inside loops
+ *     - state-could-be-constant:  write-once state var only init at declaration
+ *     - state-could-be-immutable: state var only assigned in constructor
  */
 export class SolidityLinter {
   /**
