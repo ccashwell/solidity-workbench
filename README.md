@@ -107,6 +107,7 @@ Suppressible with `// solidity-workbench-disable-next-line [rule]`:
 | Storage Layout | Interactive webview via `forge inspect` |
 | Inheritance Graph | Webview rendering of the contract `is`-graph |
 | ABI Explorer | Webview for an artifact's functions, events, and errors |
+| IR Viewer | Yul (raw / optimized) and EVM assembly via `forge inspect`, with a function-level TOC, cursor-aware open, auto-refresh on save, and pinned-baseline per-function deltas for iterative optimization |
 | Script: Simulate / Broadcast / Resume | `forge script` with Ledger / Keystore / Interactive signing |
 | Deploy Contract | Guided `forge create` with typed constructor args and verification |
 | Verify / Check Verification | `forge verify-contract` / `forge verify-check` |
