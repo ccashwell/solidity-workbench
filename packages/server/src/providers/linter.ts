@@ -77,6 +77,7 @@ export class SolidityLinter {
           ...this.checkIncorrectStrictEqualityAst(rawContract),
           ...this.checkWeakPrngAst(rawContract),
           ...this.checkEcrecoverZeroCheckAst(rawContract),
+          ...this.checkUnsafeErc20CallAst(rawContract),
         );
       }
 
@@ -271,6 +272,106 @@ export class SolidityLinter {
       });
     }
     return diagnostics;
+  }
+
+  // ── Unsafe ERC-20 call ─────────────────────────────────────────────
+
+  /**
+   * Flag direct calls to `transfer` / `transferFrom` / `approve` on a
+   * variable whose declared type matches an ERC-20-like interface
+   * (anything containing `ERC20` or `ERC4626` in the type name).
+   *
+   * Background: many real-world tokens don't return `bool` (USDT) or
+   * revert on partial success (BNB pre-fix), so naive `.transfer`
+   * silently fails or reverts the calling transaction. The standard
+   * fix is OpenZeppelin's `SafeERC20` or solmate's `SafeTransferLib`
+   * via a `using ... for IERC20` directive. We suppress the warning
+   * when that directive is present in the contract.
+   */
+  private checkUnsafeErc20CallAst(rawContract: RawContract): Diagnostic[] {
+    const subs = rawContract.subNodes ?? [];
+
+    const usesSafeWrapper = subs.some((sub) => {
+      if (sub?.type !== "UsingForDeclaration") return false;
+      const lib = (sub as RawNode & { libraryName?: string }).libraryName ?? "";
+      return /SafeERC20|SafeTransferLib/.test(lib);
+    });
+    if (usesSafeWrapper) return [];
+
+    const erc20Names = new Set<string>();
+    for (const sub of subs) {
+      if (sub?.type !== "StateVariableDeclaration") continue;
+      for (const v of (sub as RawNode & { variables?: RawNode[] }).variables ?? []) {
+        if (this.isErc20TypeName((v as { typeName?: RawNode }).typeName)) {
+          const name = (v as { name?: string }).name;
+          if (name) erc20Names.add(name);
+        }
+      }
+    }
+
+    const diagnostics: Diagnostic[] = [];
+
+    for (const sub of subs) {
+      if (sub?.type !== "FunctionDefinition") continue;
+      const func = sub as RawFunction & { parameters?: RawNode[] };
+      if (!func.body) continue;
+
+      const inScope = new Set(erc20Names);
+      for (const p of func.parameters ?? []) {
+        if (this.isErc20TypeName((p as { typeName?: RawNode }).typeName)) {
+          const name = (p as { name?: string }).name;
+          if (name) inScope.add(name);
+        }
+      }
+      visit(func.body as any, {
+        VariableDeclarationStatement: (stmt: any) => {
+          for (const v of stmt.variables ?? []) {
+            // Tuple destructuring slots can be null (e.g.
+            // `(bool ok, ) = ...`); guard before reading typeName.
+            if (!v) continue;
+            if (this.isErc20TypeName(v.typeName) && v.name) inScope.add(v.name);
+          }
+          return undefined;
+        },
+      });
+
+      visit(func.body as any, {
+        FunctionCall: (n: any) => {
+          const callee = n.expression;
+          if (callee?.type !== "MemberAccess") return undefined;
+          const member = callee.memberName;
+          if (member !== "transfer" && member !== "transferFrom" && member !== "approve") {
+            return undefined;
+          }
+          const receiver = callee.expression;
+          if (receiver?.type !== "Identifier" || !inScope.has(receiver.name)) {
+            return undefined;
+          }
+          diagnostics.push({
+            severity: DiagnosticSeverity.Warning,
+            range: this.nodeRange(n),
+            message: `Unsafe direct call to \`${receiver.name}.${member}\`. Many real-world ERC-20 tokens (USDT, BNB pre-fix) don't return bool — use \`SafeERC20\` (OpenZeppelin) or \`SafeTransferLib\` (solmate) via a \`using ... for ${receiver.name}\` directive.`,
+            source: "solidity-workbench",
+            code: "unsafe-erc20-call",
+          });
+          return undefined;
+        },
+      });
+    }
+
+    return diagnostics;
+  }
+
+  /**
+   * True if `typeName` is a `UserDefinedTypeName` whose name contains
+   * `ERC20` or `ERC4626` (the latter inherits the IERC20 interface so
+   * `transfer`/`approve` still apply with the same risk).
+   */
+  private isErc20TypeName(typeName: unknown): boolean {
+    const t = typeName as { type?: string; namePath?: string; name?: string } | undefined;
+    if (t?.type !== "UserDefinedTypeName") return false;
+    const name = t.namePath ?? t.name ?? "";
+    return /ERC20|ERC4626/.test(name);
   }
 
   // ── ecrecover zero-check ───────────────────────────────────────────

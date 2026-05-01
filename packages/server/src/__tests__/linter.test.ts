@@ -683,6 +683,67 @@ contract A {
     });
   });
 
+  describe("unsafe-erc20-call detection", () => {
+    it("flags `token.transfer` on an IERC20 state variable without SafeERC20", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+interface IERC20 { function transfer(address to, uint256 amount) external returns (bool); }
+contract A {
+    IERC20 token;
+    function send(address to, uint256 amount) external {
+        token.transfer(to, amount);
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "unsafe-erc20-call");
+      assert.equal(flags.length, 1);
+    });
+
+    it("does NOT flag when `using SafeERC20 for IERC20` is present", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+interface IERC20 { function transfer(address to, uint256 amount) external returns (bool); }
+library SafeERC20 {}
+contract A {
+    using SafeERC20 for IERC20;
+    IERC20 token;
+    function send(address to, uint256 amount) external {
+        token.transfer(to, amount);
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "unsafe-erc20-call");
+      assert.equal(flags.length, 0);
+    });
+
+    it("flags transfer/approve on an IERC20 parameter", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+interface IERC20 { function approve(address, uint256) external returns (bool); }
+contract A {
+    function f(IERC20 token, address spender, uint256 amount) external {
+        token.approve(spender, amount);
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "unsafe-erc20-call");
+      assert.equal(flags.length, 1);
+    });
+
+    it("does NOT flag .transfer on a non-ERC20-typed receiver", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(address payable to) external payable {
+        to.transfer(msg.value);
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "unsafe-erc20-call");
+      assert.equal(flags.length, 0);
+    });
+  });
+
   describe("multiple-pragma detection", () => {
     it("flags a file with two pragma solidity directives", () => {
       const diags = lint(`
