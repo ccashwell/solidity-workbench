@@ -71,6 +71,7 @@ export class SolidityLinter {
           ...this.checkUnprotectedSelfdestructAst(contract, rawContract, lines),
           ...this.checkEmptyBlockAst(rawContract, lines),
           ...this.checkPayableFallbackAst(rawContract, lines),
+          ...this.checkFuncVisibilityExplicitAst(rawContract, lines),
         );
       }
 
@@ -160,6 +161,39 @@ export class SolidityLinter {
         code: "payable-fallback",
       },
     ];
+  }
+
+  // ── Explicit function visibility ───────────────────────────────────
+
+  /**
+   * Solidity 0.5+ requires every function to declare its visibility.
+   * Older code (and code under permissive parsers) may omit it; the
+   * default is `internal`, which is rarely what was intended. Flag any
+   * regular function that the parser reports with `visibility: "default"`.
+   * Constructor / fallback / receive are skipped — their visibility
+   * rules differ across compiler versions and false-positives there
+   * would be noisy.
+   */
+  private checkFuncVisibilityExplicitAst(
+    rawContract: RawContract,
+    lines: string[],
+  ): Diagnostic[] {
+    const diagnostics: Diagnostic[] = [];
+    for (const sub of rawContract.subNodes ?? []) {
+      if (sub?.type !== "FunctionDefinition") continue;
+      const func = sub as RawFunction;
+      if (func.isConstructor || func.isFallback || func.isReceiveEther) continue;
+      if (func.visibility !== "default") continue;
+      const range = this.nodeRange(func);
+      diagnostics.push({
+        severity: DiagnosticSeverity.Information,
+        range: this.fullLineRange(range.start.line, lines),
+        message: `Function '${func.name ?? "<anonymous>"}' has no explicit visibility — declare it as public, external, internal, or private.`,
+        source: "solidity-workbench",
+        code: "func-visibility-explicit",
+      });
+    }
+    return diagnostics;
   }
 
   // ── Multiple pragma directives (file-level) ────────────────────────

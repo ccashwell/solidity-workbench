@@ -388,6 +388,31 @@ contract C {
     });
   });
 
+  describe("func-visibility-explicit detection", () => {
+    it("flags a function with no explicit visibility", () => {
+      const diags = lint(`
+contract A {
+    function f() returns (uint256) { return 1; }
+}
+`);
+      const flags = diags.filter((d) => d.code === "func-visibility-explicit");
+      assert.equal(flags.length, 1);
+    });
+
+    it("does NOT flag functions with explicit visibility", () => {
+      const diags = lint(`
+contract A {
+    function pub() public {}
+    function ext() external {}
+    function int_() internal {}
+    function priv() private {}
+}
+`);
+      const flags = diags.filter((d) => d.code === "func-visibility-explicit");
+      assert.equal(flags.length, 0);
+    });
+  });
+
   describe("multiple-pragma detection", () => {
     it("flags a file with two pragma solidity directives", () => {
       const diags = lint(`
