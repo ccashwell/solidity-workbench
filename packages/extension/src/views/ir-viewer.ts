@@ -30,14 +30,54 @@ const execFileAsync = promisify(execFile);
  * The assembly variant skips the TOC — `forge inspect ... assembly`
  * is an opcode listing, not Yul.
  */
+/** Window after the last save burst before we re-run forge inspect. */
+const AUTO_REFRESH_DEBOUNCE_MS = 600;
+
 export class IrViewerPanel {
   private panel: vscode.WebviewPanel | undefined;
   private state: PanelState | undefined;
+  private autoRefreshTimer: NodeJS.Timeout | undefined;
 
   activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
       vscode.commands.registerCommand("solidity-workbench.viewIR", () => this.openFromEditor()),
+      vscode.workspace.onDidSaveTextDocument((doc) => this.onDocumentSaved(doc)),
+      {
+        dispose: () => {
+          if (this.autoRefreshTimer !== undefined) {
+            clearTimeout(this.autoRefreshTimer);
+            this.autoRefreshTimer = undefined;
+          }
+        },
+      },
     );
+  }
+
+  /**
+   * Re-run forge inspect when any `.sol` file in the same forge root
+   * as the active panel is saved. Saves to unrelated workspaces (a
+   * different Foundry project in a multi-root setup, a stray
+   * non-project file) leave the panel alone.
+   *
+   * Debounced so a fmt-on-save plus user-save burst — or a
+   * codegen-watcher writing several files in quick succession — only
+   * triggers one refresh.
+   */
+  private onDocumentSaved(doc: vscode.TextDocument): void {
+    if (!this.panel || !this.state) return;
+    if (doc.languageId !== "solidity") return;
+    const docRoot = findForgeRoot(doc.uri.fsPath);
+    const stateRoot = findForgeRoot(this.state.filePath);
+    if (!docRoot || !stateRoot || docRoot !== stateRoot) return;
+    this.scheduleAutoRefresh();
+  }
+
+  private scheduleAutoRefresh(): void {
+    if (this.autoRefreshTimer !== undefined) clearTimeout(this.autoRefreshTimer);
+    this.autoRefreshTimer = setTimeout(() => {
+      this.autoRefreshTimer = undefined;
+      if (this.panel && this.state) void this.refresh();
+    }, AUTO_REFRESH_DEBOUNCE_MS);
   }
 
   /**
@@ -92,6 +132,10 @@ export class IrViewerPanel {
       this.panel.onDidDispose(() => {
         this.panel = undefined;
         this.state = undefined;
+        if (this.autoRefreshTimer !== undefined) {
+          clearTimeout(this.autoRefreshTimer);
+          this.autoRefreshTimer = undefined;
+        }
       });
       this.panel.webview.onDidReceiveMessage((msg) => this.handleMessage(msg));
     }
@@ -189,7 +233,9 @@ ${this.toolbarHtml(state)}
   ): string {
     const tocHtml = outline ? this.buildTocHtml(outline) : "";
     const codeHtml = renderNumberedCode(output);
-    const initialAnchorAttr = initialAnchor !== undefined ? ` data-initial-anchor="${initialAnchor}"` : "";
+    const initialAnchorAttr =
+      initialAnchor !== undefined ? ` data-initial-anchor="${initialAnchor}"` : "";
+    const variantAttr = ` data-variant="${escapeHtml(state.variant)}"`;
     return `<!DOCTYPE html>
 <html>
 <head>
@@ -219,7 +265,7 @@ ${this.toolbarHtml(state)}
   .stats { padding: 6px 12px; border-top: 1px solid var(--vscode-panel-border); font-size: 0.85em; opacity: 0.7; display: flex; gap: 16px; }
 </style>
 </head>
-<body${initialAnchorAttr}>
+<body${variantAttr}${initialAnchorAttr}>
 ${this.toolbarHtml(state)}
 <div class="layout">
   ${outline ? `<aside class="toc">${tocHtml}</aside>` : ""}
@@ -234,6 +280,9 @@ ${this.toolbarHtml(state)}
 </div>
 <script>
   const vscode = acquireVsCodeApi();
+  const variant = document.body.dataset.variant;
+  const initialAnchor = document.body.dataset.initialAnchor;
+  const codeEl = document.querySelector('.code');
 
   document.getElementById('variant')?.addEventListener('change', (e) => {
     vscode.postMessage({ type: 'selectVariant', variant: e.target.value });
@@ -242,11 +291,29 @@ ${this.toolbarHtml(state)}
     vscode.postMessage({ type: 'refresh' });
   });
 
-  // Auto-scroll to the function under the source cursor, if any.
-  const initial = document.body.dataset.initialAnchor;
-  if (initial) {
-    const el = document.getElementById('L' + initial);
+  // Restore per-variant scroll position across panel rebuilds (variant
+  // switches, auto-refresh on save, manual refresh) — but if the host
+  // gave us an explicit anchor (cursor-aware open), honor that first.
+  const persisted = vscode.getState() ?? {};
+  const variantState = persisted[variant];
+  if (initialAnchor) {
+    const el = document.getElementById('L' + initialAnchor);
     if (el) el.scrollIntoView({ block: 'center' });
+  } else if (codeEl && variantState && typeof variantState.scrollTop === 'number') {
+    requestAnimationFrame(() => { codeEl.scrollTop = variantState.scrollTop; });
+  }
+
+  if (codeEl) {
+    let pending = null;
+    codeEl.addEventListener('scroll', () => {
+      if (pending !== null) cancelAnimationFrame(pending);
+      pending = requestAnimationFrame(() => {
+        const next = vscode.getState() ?? {};
+        next[variant] = { scrollTop: codeEl.scrollTop };
+        vscode.setState(next);
+        pending = null;
+      });
+    }, { passive: true });
   }
 </script>
 </body>
