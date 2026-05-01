@@ -744,6 +744,64 @@ contract A {
     });
   });
 
+  describe("shadowing-state detection", () => {
+    it("flags a parameter whose name matches a state variable", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    address owner;
+    function setOwner(address owner) external {
+        owner = owner; // bug: writes to the parameter, not state
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "shadowing-state");
+      assert.equal(flags.length, 1);
+    });
+
+    it("flags a local variable that shadows state", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    uint256 total;
+    function f() external pure returns (uint256) {
+        uint256 total = 1;
+        return total;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "shadowing-state");
+      assert.equal(flags.length, 1);
+    });
+
+    it("does NOT flag the conventional underscore-prefixed parameter", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    address owner;
+    function setOwner(address _owner) external {
+        owner = _owner;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "shadowing-state");
+      assert.equal(flags.length, 0);
+    });
+
+    it("does NOT flag a function with no state vars in scope", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(uint256 amount) external pure returns (uint256) {
+        return amount * 2;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "shadowing-state");
+      assert.equal(flags.length, 0);
+    });
+  });
+
   describe("multiple-pragma detection", () => {
     it("flags a file with two pragma solidity directives", () => {
       const diags = lint(`

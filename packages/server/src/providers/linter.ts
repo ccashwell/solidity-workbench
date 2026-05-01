@@ -78,6 +78,7 @@ export class SolidityLinter {
           ...this.checkWeakPrngAst(rawContract),
           ...this.checkEcrecoverZeroCheckAst(rawContract),
           ...this.checkUnsafeErc20CallAst(rawContract),
+          ...this.checkShadowingStateAst(contract, rawContract),
         );
       }
 
@@ -271,6 +272,69 @@ export class SolidityLinter {
         },
       });
     }
+    return diagnostics;
+  }
+
+  // ── Shadowing state ────────────────────────────────────────────────
+
+  /**
+   * Flag function parameters or locally-declared variables whose name
+   * collides with a state variable of the same contract. Shadowed
+   * names are confusing at best (the local wins, the state var becomes
+   * inaccessible without `this.`) and a real bug source — typos can
+   * silently shift writes from state to a stack variable.
+   *
+   * Inherited state-var shadowing is not yet detected (would need an
+   * inheritance walk). The immediate-contract case catches the common
+   * footgun.
+   */
+  private checkShadowingStateAst(
+    contract: ContractDefinition,
+    rawContract: RawContract,
+  ): Diagnostic[] {
+    const diagnostics: Diagnostic[] = [];
+    const stateVarNames = new Set(
+      contract.stateVariables.map((v) => v.name).filter((n): n is string => !!n),
+    );
+    if (stateVarNames.size === 0) return diagnostics;
+
+    for (const sub of rawContract.subNodes ?? []) {
+      if (sub?.type !== "FunctionDefinition") continue;
+      const func = sub as RawFunction & { parameters?: RawNode[] };
+
+      for (const p of func.parameters ?? []) {
+        const param = p as RawNode & {
+          name?: string;
+          identifier?: RawNode;
+        };
+        if (!param.name || !stateVarNames.has(param.name)) continue;
+        diagnostics.push({
+          severity: DiagnosticSeverity.Information,
+          range: this.nodeRange(param.identifier ?? param),
+          message: `Parameter '${param.name}' shadows a state variable in '${contract.name}'.`,
+          source: "solidity-workbench",
+          code: "shadowing-state",
+        });
+      }
+
+      if (!func.body) continue;
+      visit(func.body as any, {
+        VariableDeclarationStatement: (stmt: any) => {
+          for (const v of stmt.variables ?? []) {
+            if (!v?.name || !stateVarNames.has(v.name)) continue;
+            diagnostics.push({
+              severity: DiagnosticSeverity.Information,
+              range: this.nodeRange(v.identifier ?? v),
+              message: `Local variable '${v.name}' shadows a state variable in '${contract.name}'.`,
+              source: "solidity-workbench",
+              code: "shadowing-state",
+            });
+          }
+          return undefined;
+        },
+      });
+    }
+
     return diagnostics;
   }
 
