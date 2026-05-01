@@ -77,10 +77,46 @@ export class SolidityLinter {
       diagnostics.push(...this.checkMissingZeroCheck(contract, lines));
     }
 
+    // File-level rules (need raw AST top-level children)
+    diagnostics.push(...this.checkMultiplePragma(rawAst, lines));
+
     // Line-only rules
     diagnostics.push(...this.checkLargeLiterals(lines));
 
     return diagnostics.filter((d) => !this.isSuppressed(d, lines));
+  }
+
+  // ── Multiple pragma directives (file-level) ────────────────────────
+
+  /**
+   * Solidity allows only one `pragma solidity ...` per file. Multiple
+   * directives are accepted by `@solidity-parser/parser` but rejected
+   * by the compiler with a confusing error; surface it earlier.
+   */
+  private checkMultiplePragma(rawAst: unknown, lines: string[]): Diagnostic[] {
+    const diagnostics: Diagnostic[] = [];
+    if (!rawAst) return diagnostics;
+    const ast = rawAst as { children?: RawNode[] };
+    let seenSolidityPragma = false;
+    for (const child of ast.children ?? []) {
+      if (child?.type !== "PragmaDirective") continue;
+      const name = (child as RawNode & { name?: string }).name;
+      if (name !== "solidity") continue;
+      if (!seenSolidityPragma) {
+        seenSolidityPragma = true;
+        continue;
+      }
+      const range = this.nodeRange(child);
+      diagnostics.push({
+        severity: DiagnosticSeverity.Warning,
+        range: this.fullLineRange(range.start.line, lines),
+        message:
+          "Multiple `pragma solidity` directives in one file — Solidity only honors one and the compiler will reject this.",
+        source: "solidity-workbench",
+        code: "multiple-pragma",
+      });
+    }
+    return diagnostics;
   }
 
   // ── Suppression ────────────────────────────────────────────────────

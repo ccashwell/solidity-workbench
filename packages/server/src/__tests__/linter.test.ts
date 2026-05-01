@@ -299,4 +299,35 @@ contract Safe {
       assert.equal(missing.length, 0);
     });
   });
+
+  describe("multiple-pragma detection", () => {
+    it("flags a file with two pragma solidity directives", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+pragma solidity ^0.8.25;
+contract A {}
+`);
+      const dup = diags.filter((d) => d.code === "multiple-pragma");
+      assert.equal(dup.length, 1);
+    });
+
+    it("does NOT flag pragma abicoder / experimental alongside one solidity pragma", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+pragma abicoder v2;
+contract A {}
+`);
+      const dup = diags.filter((d) => d.code === "multiple-pragma");
+      assert.equal(dup.length, 0);
+    });
+
+    it("does NOT flag a file with a single pragma solidity", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {}
+`);
+      const dup = diags.filter((d) => d.code === "multiple-pragma");
+      assert.equal(dup.length, 0);
+    });
+  });
 });
