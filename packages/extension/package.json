@@ -310,6 +310,10 @@
       {
         "command": "solidity-workbench.remoteChain.open",
         "title": "Solidity Workbench: Open Remote Chain UI"
+      },
+      {
+        "command": "solidity-workbench.viewIR",
+        "title": "Solidity Workbench: View IR (Yul / Assembly)"
       }
     ],
     "views": {
@@ -352,6 +356,11 @@
           "command": "solidity-workbench.inheritanceGraph",
           "when": "resourceLangId == solidity",
           "group": "solidity-workbench@5"
+        },
+        {
+          "command": "solidity-workbench.viewIR",
+          "when": "resourceLangId == solidity",
+          "group": "solidity-workbench@5a"
         },
         {
           "command": "solidity-workbench.chisel.sendSelection",

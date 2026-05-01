@@ -22,6 +22,7 @@ import { InheritanceGraphPanel } from "./views/inheritance-graph.js";
 import { AbiPanel } from "./views/abi-panel.js";
 import { GasDiffProvider } from "./views/gas-diff.js";
 import { RemoteChainPanel } from "./views/remote-chain.js";
+import { IrViewerPanel } from "./views/ir-viewer.js";
 
 let client: LanguageClient;
 
@@ -160,6 +161,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const remoteChain = new RemoteChainPanel();
   remoteChain.activate(context);
+
+  // ── IR Viewer ─────────────────────────────────────────────────────
+
+  const irViewer = new IrViewerPanel();
+  irViewer.activate(context);
 
   // ── Static Analysis ───────────────────────────────────────────────
 
