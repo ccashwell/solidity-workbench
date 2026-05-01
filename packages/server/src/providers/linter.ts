@@ -73,6 +73,7 @@ export class SolidityLinter {
           ...this.checkPayableFallbackAst(rawContract, lines),
           ...this.checkFuncVisibilityExplicitAst(rawContract, lines),
           ...this.checkBooleanEqualityAst(rawContract, lines),
+          ...this.checkDivideBeforeMultiplyAst(rawContract),
         );
       }
 
@@ -231,6 +232,59 @@ export class SolidityLinter {
       });
     }
     return diagnostics;
+  }
+
+  // ── Divide before multiply ─────────────────────────────────────────
+
+  /**
+   * Integer division in Solidity truncates, so `(a / b) * c` loses
+   * precision compared to `(a * c) / b`. Flag any multiplication whose
+   * direct operand is a division. We don't recurse into nested
+   * sub-expressions — the canonical "lost precision" pattern is the
+   * one-step `(a / b) * c`; deeper structures are usually intentional.
+   */
+  private checkDivideBeforeMultiplyAst(rawContract: RawContract): Diagnostic[] {
+    const diagnostics: Diagnostic[] = [];
+    for (const sub of rawContract.subNodes ?? []) {
+      if (sub?.type !== "FunctionDefinition") continue;
+      const func = sub as RawFunction;
+      if (!func.body) continue;
+      visit(func.body as any, {
+        BinaryOperation: (n: any) => {
+          if (n.operator !== "*") return undefined;
+          if (!this.isDivisionExpression(n.left) && !this.isDivisionExpression(n.right)) {
+            return undefined;
+          }
+          diagnostics.push({
+            severity: DiagnosticSeverity.Warning,
+            range: this.nodeRange(n),
+            message:
+              "Division before multiplication loses precision in integer arithmetic. Reorder so the multiplication runs first (e.g. `(a * c) / b` instead of `(a / b) * c`).",
+            source: "solidity-workbench",
+            code: "divide-before-multiply",
+          });
+          return undefined;
+        },
+      });
+    }
+    return diagnostics;
+  }
+
+  /**
+   * Peel `TupleExpression` parens (`(expr)` parses as a one-element
+   * tuple) and report whether the underlying expression is a binary
+   * division.
+   */
+  private isDivisionExpression(expr: unknown): boolean {
+    let cur: { type?: string; operator?: string; components?: unknown[] } | undefined = expr as {
+      type?: string;
+      operator?: string;
+      components?: unknown[];
+    };
+    while (cur?.type === "TupleExpression" && cur.components?.length === 1) {
+      cur = cur.components[0] as typeof cur;
+    }
+    return cur?.type === "BinaryOperation" && cur.operator === "/";
   }
 
   // ── Multiple pragma directives (file-level) ────────────────────────

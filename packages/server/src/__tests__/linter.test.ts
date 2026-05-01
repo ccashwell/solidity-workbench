@@ -471,6 +471,62 @@ contract A {
     });
   });
 
+  describe("divide-before-multiply detection", () => {
+    it("flags `(a / b) * c`", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(uint256 a, uint256 b, uint256 c) external pure returns (uint256) {
+        return (a / b) * c;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "divide-before-multiply");
+      assert.equal(flags.length, 1);
+    });
+
+    it("flags `c * (a / b)`", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(uint256 a, uint256 b, uint256 c) external pure returns (uint256) {
+        return c * (a / b);
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "divide-before-multiply");
+      assert.equal(flags.length, 1);
+    });
+
+    it("does NOT flag the safe ordering `(a * c) / b`", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(uint256 a, uint256 b, uint256 c) external pure returns (uint256) {
+        return (a * c) / b;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "divide-before-multiply");
+      assert.equal(flags.length, 0);
+    });
+
+    it("does NOT flag stand-alone divisions or multiplications", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(uint256 a, uint256 b) external pure returns (uint256) {
+        uint256 x = a / b;
+        uint256 y = a * b;
+        return x + y;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "divide-before-multiply");
+      assert.equal(flags.length, 0);
+    });
+  });
+
   describe("multiple-pragma detection", () => {
     it("flags a file with two pragma solidity directives", () => {
       const diags = lint(`
