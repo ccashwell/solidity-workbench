@@ -352,6 +352,42 @@ interface I { function ping() external; }
     });
   });
 
+  describe("payable-fallback detection", () => {
+    it("flags non-payable fallback() when there is no receive()", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract C {
+    fallback() external {}
+}
+`);
+      const flags = diags.filter((d) => d.code === "payable-fallback");
+      assert.equal(flags.length, 1);
+    });
+
+    it("does NOT flag non-payable fallback() when a payable receive() is present", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract C {
+    receive() external payable {}
+    fallback() external {}
+}
+`);
+      const flags = diags.filter((d) => d.code === "payable-fallback");
+      assert.equal(flags.length, 0);
+    });
+
+    it("does NOT flag a payable fallback()", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract C {
+    fallback() external payable {}
+}
+`);
+      const flags = diags.filter((d) => d.code === "payable-fallback");
+      assert.equal(flags.length, 0);
+    });
+  });
+
   describe("multiple-pragma detection", () => {
     it("flags a file with two pragma solidity directives", () => {
       const diags = lint(`

@@ -70,6 +70,7 @@ export class SolidityLinter {
           ...this.checkDangerousDelegatecallAst(rawContract, lines),
           ...this.checkUnprotectedSelfdestructAst(contract, rawContract, lines),
           ...this.checkEmptyBlockAst(rawContract, lines),
+          ...this.checkPayableFallbackAst(rawContract, lines),
         );
       }
 
@@ -118,6 +119,47 @@ export class SolidityLinter {
       });
     }
     return diagnostics;
+  }
+
+  // ── Non-payable fallback ───────────────────────────────────────────
+
+  /**
+   * `fallback()` is invoked when calldata doesn't match any function.
+   * In Solidity 0.6+, `receive()` handles bare-ETH transfers and
+   * `fallback()` handles everything else. If `fallback()` isn't
+   * payable AND the contract has no `receive()`, the contract can't
+   * accept ETH at all — sends will revert at runtime.
+   *
+   * We only flag the non-payable fallback when no `receive()` is
+   * present; with a payable `receive()`, a non-payable `fallback()`
+   * is intentional and correct.
+   */
+  private checkPayableFallbackAst(rawContract: RawContract, lines: string[]): Diagnostic[] {
+    let hasReceive = false;
+    let nonPayableFallback: RawFunction | null = null;
+
+    for (const sub of rawContract.subNodes ?? []) {
+      if (sub?.type !== "FunctionDefinition") continue;
+      const func = sub as RawFunction;
+      if (func.isReceiveEther) hasReceive = true;
+      if (func.isFallback && func.stateMutability !== "payable") {
+        nonPayableFallback = func;
+      }
+    }
+
+    if (!nonPayableFallback || hasReceive) return [];
+
+    const range = this.nodeRange(nonPayableFallback);
+    return [
+      {
+        severity: DiagnosticSeverity.Warning,
+        range: this.fullLineRange(range.start.line, lines),
+        message:
+          "fallback() is not payable and there is no receive(); plain ETH transfers to this contract will revert. Mark fallback() payable or add a receive().",
+        source: "solidity-workbench",
+        code: "payable-fallback",
+      },
+    ];
   }
 
   // ── Multiple pragma directives (file-level) ────────────────────────
@@ -892,6 +934,8 @@ interface RawFunction extends RawNode {
   isConstructor?: boolean;
   isReceiveEther?: boolean;
   isFallback?: boolean;
+  stateMutability?: string | null;
+  visibility?: string;
 }
 
 interface RawFunctionCall extends RawNode {
