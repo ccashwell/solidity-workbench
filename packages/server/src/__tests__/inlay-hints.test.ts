@@ -94,6 +94,38 @@ contract C {
   });
 
   describe("comment handling", () => {
+    it("does not emit hints for the `event Bootstrap` NatSpec example", () => {
+      // Exact prose from a real-world report: a vault contract whose
+      // event NatSpec used parenthesised, colon-prefixed annotations
+      // (`(assets: bootstrap)`, ``sqrt(a: received0 * received1)``)
+      // that the regex would otherwise treat as call sites for the
+      // `deposit` and `sqrt` functions defined elsewhere in the file.
+      const text = `pragma solidity ^0.8.0;
+contract V {
+    function deposit(uint256 assets, address provider) external returns (uint256) { return assets; }
+    function sqrt(uint256 a) internal pure returns (uint256) { return a; }
+
+    /// @notice Emitted on first deposit (assets: bootstrap) -- sets the initial share/asset ratio.
+    /// @param vaultId   The vault being bootstrapped.
+    /// @param provider  The address that received the bootstrap shares.
+    /// @param shares    Total shares minted (\`sqrt(a: received0 * received1)\`).
+    /// @param amount0   Asset0 transferred from the bootstrapper (post-FoT receipt).
+    /// @param amount1   Asset1 transferred from the bootstrapper (post-FoT receipt).
+    event Bootstrap(uint256 vaultId, address provider, uint256 shares, uint256 amount0, uint256 amount1);
+}`;
+      const { doc, provider } = setup("file:///w/Bs.sol", text);
+      const lineCount = text.split("\n").length;
+      const hints = provider.provideInlayHints(doc, {
+        start: { line: 0, character: 0 },
+        end: { line: lineCount, character: 0 },
+      });
+      assert.equal(
+        hints.length,
+        0,
+        `expected zero hints for prose-only NatSpec, got ${JSON.stringify(hints.map((h) => h.label))}`,
+      );
+    });
+
     it("does not emit hints for call-like patterns inside ///, //, or block comments", () => {
       // Real-world trigger: NatSpec for `bootstrap` documents the
       // share-mint formula as `sqrt(a: amount0 * amount1)`. The
