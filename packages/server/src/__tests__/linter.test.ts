@@ -413,6 +413,64 @@ contract A {
     });
   });
 
+  describe("boolean-equality detection", () => {
+    it("flags `x == true` and `x != false`", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(bool x) external pure returns (bool) {
+        if (x == true) return true;
+        if (x != false) return true;
+        return false;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "boolean-equality");
+      assert.equal(flags.length, 2);
+    });
+
+    it("flags `true == x` (literal on the left side)", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(bool x) external pure returns (bool) {
+        return true == x;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "boolean-equality");
+      assert.equal(flags.length, 1);
+    });
+
+    it("does NOT flag the boolean used directly", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(bool x) external pure returns (bool) {
+        if (x) return true;
+        if (!x) return false;
+        return x;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "boolean-equality");
+      assert.equal(flags.length, 0);
+    });
+
+    it("does NOT flag non-boolean equality", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    function f(uint256 a, uint256 b) external pure returns (bool) {
+        return a == b;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "boolean-equality");
+      assert.equal(flags.length, 0);
+    });
+  });
+
   describe("multiple-pragma detection", () => {
     it("flags a file with two pragma solidity directives", () => {
       const diags = lint(`

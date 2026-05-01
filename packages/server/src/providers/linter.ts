@@ -72,6 +72,7 @@ export class SolidityLinter {
           ...this.checkEmptyBlockAst(rawContract, lines),
           ...this.checkPayableFallbackAst(rawContract, lines),
           ...this.checkFuncVisibilityExplicitAst(rawContract, lines),
+          ...this.checkBooleanEqualityAst(rawContract, lines),
         );
       }
 
@@ -191,6 +192,42 @@ export class SolidityLinter {
         message: `Function '${func.name ?? "<anonymous>"}' has no explicit visibility — declare it as public, external, internal, or private.`,
         source: "solidity-workbench",
         code: "func-visibility-explicit",
+      });
+    }
+    return diagnostics;
+  }
+
+  // ── Boolean equality ───────────────────────────────────────────────
+
+  /**
+   * Flag `x == true` / `x == false` / `x != true` / `x != false` (and
+   * the symmetric forms). Using the boolean directly is shorter, more
+   * idiomatic, and avoids a class of bugs where a typo turns the
+   * expression into an assignment-and-compare on a non-bool variable.
+   */
+  private checkBooleanEqualityAst(rawContract: RawContract, lines: string[]): Diagnostic[] {
+    const diagnostics: Diagnostic[] = [];
+    void lines;
+    for (const sub of rawContract.subNodes ?? []) {
+      if (sub?.type !== "FunctionDefinition") continue;
+      const func = sub as RawFunction;
+      if (!func.body) continue;
+      visit(func.body as any, {
+        BinaryOperation: (n: any) => {
+          if (n.operator !== "==" && n.operator !== "!=") return undefined;
+          const isBoolLit = (e: { type?: string } | undefined): boolean =>
+            e?.type === "BooleanLiteral";
+          if (!isBoolLit(n.left) && !isBoolLit(n.right)) return undefined;
+          diagnostics.push({
+            severity: DiagnosticSeverity.Warning,
+            range: this.nodeRange(n),
+            message:
+              "Avoid comparing a boolean to a literal `true`/`false`; use the boolean directly (e.g. `if (x)` or `if (!x)`).",
+            source: "solidity-workbench",
+            code: "boolean-equality",
+          });
+          return undefined;
+        },
       });
     }
     return diagnostics;
