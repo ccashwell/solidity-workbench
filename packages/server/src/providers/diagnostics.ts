@@ -10,6 +10,31 @@ import type { SolidityParser } from "../parser/solidity-parser.js";
 import { LineIndex } from "../utils/line-index.js";
 
 /**
+ * solc warning codes whose semantics are exclusively about *deployment*
+ * to a real chain. These are noise on `test/` and `script/` files —
+ * Foundry test contracts run inside the local EVM where the Spurious
+ * Dragon and Shanghai size limits don't apply.
+ *
+ * - 5574: contract code size exceeds 24,576 bytes (Spurious Dragon)
+ * - 3860: contract initcode size exceeds 49,152 bytes (Shanghai)
+ */
+export const DEPLOY_ONLY_SOLC_CODES: ReadonlySet<string> = new Set(["5574", "3860"]);
+
+/**
+ * True when a solc error/warning should be hidden from the user given
+ * the tier its file belongs to. Currently only filters
+ * `DEPLOY_ONLY_SOLC_CODES` on `tests`-tier files; `project` and `deps`
+ * are unaffected.
+ */
+export function shouldSuppressForTier(
+  errorCode: string | undefined,
+  tier: "project" | "tests" | "deps" | null,
+): boolean {
+  if (!errorCode || tier !== "tests") return false;
+  return DEPLOY_ONLY_SOLC_CODES.has(errorCode);
+}
+
+/**
  * Provides diagnostics (errors/warnings) from three sources:
  *
  * 1. **Fast path** (on every change): Parser-based syntax errors
@@ -269,6 +294,9 @@ export class DiagnosticsProvider {
       if (!file) continue;
 
       const fileUri = URI.file(path.join(this.workspace.root, file)).toString();
+
+      if (shouldSuppressForTier(code, this.workspace.getFileTier(fileUri))) continue;
+
       const diags = diagnosticsByFile.get(fileUri) ?? [];
 
       diags.push({
@@ -304,6 +332,13 @@ export class DiagnosticsProvider {
     if (!file) return;
 
     const fileUri = URI.file(path.join(this.workspace.root, file)).toString();
+
+    // Suppress deploy-only warnings on test/script files — they're never
+    // deployed, so Spurious Dragon / Shanghai size warnings are noise.
+    if (shouldSuppressForTier(error.errorCode, this.workspace.getFileTier(fileUri))) {
+      return;
+    }
+
     const diags = diagnosticsByFile.get(fileUri) ?? [];
 
     // Convert solc UTF-8 byte offsets to LSP Positions via the line index

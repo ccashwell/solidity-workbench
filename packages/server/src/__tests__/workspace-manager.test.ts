@@ -70,6 +70,24 @@ describe("WorkspaceManager", () => {
       fs.rmSync(rootPath, { recursive: true, force: true });
     });
 
+    it("getFileTier returns the right tier for each known file and null for unknowns", async () => {
+      const rootPath = makeFixtureRoot();
+      const ws = new WorkspaceManager(URI.file(rootPath).toString(), makeFakeConnection());
+      await ws.initialize();
+
+      const tiers = ws.getFileUrisByTier();
+      const findByBase = (uris: string[], base: string): string =>
+        uris.find((u) => path.basename(URI.parse(u).fsPath) === base) ?? "";
+
+      assert.equal(ws.getFileTier(findByBase(tiers.project, "Counter.sol")), "project");
+      assert.equal(ws.getFileTier(findByBase(tiers.tests, "Counter.t.sol")), "tests");
+      assert.equal(ws.getFileTier(findByBase(tiers.tests, "Deploy.s.sol")), "tests");
+      assert.equal(ws.getFileTier(findByBase(tiers.deps, "Test.sol")), "deps");
+      assert.equal(ws.getFileTier("file:///nope/Unknown.sol"), null);
+
+      fs.rmSync(rootPath, { recursive: true, force: true });
+    });
+
     it("returns empty tiers for a workspace with no Solidity files", async () => {
       const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ws-mgr-empty-"));
       fs.writeFileSync(path.join(tmp, "foundry.toml"), "[profile.default]\n");

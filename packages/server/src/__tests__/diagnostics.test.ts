@@ -1,6 +1,10 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
-import { DiagnosticsProvider } from "../providers/diagnostics.js";
+import {
+  DiagnosticsProvider,
+  DEPLOY_ONLY_SOLC_CODES,
+  shouldSuppressForTier,
+} from "../providers/diagnostics.js";
 
 describe("DiagnosticsProvider.extractSyntaxDiagnostics", () => {
   describe("SPDX license header", () => {
@@ -112,5 +116,37 @@ contract A {
         );
       }
     });
+  });
+});
+
+describe("shouldSuppressForTier", () => {
+  it("suppresses deploy-only codes (5574, 3860) on tests-tier files", () => {
+    for (const code of DEPLOY_ONLY_SOLC_CODES) {
+      assert.equal(shouldSuppressForTier(code, "tests"), true);
+    }
+  });
+
+  it("does NOT suppress deploy-only codes on project-tier files", () => {
+    assert.equal(shouldSuppressForTier("5574", "project"), false);
+    assert.equal(shouldSuppressForTier("3860", "project"), false);
+  });
+
+  it("does NOT suppress deploy-only codes on deps-tier files", () => {
+    assert.equal(shouldSuppressForTier("5574", "deps"), false);
+  });
+
+  it("does NOT suppress codes outside the deploy-only set", () => {
+    // 2018 is the canonical "function visibility could be view" warning,
+    // which applies equally to test and project code.
+    assert.equal(shouldSuppressForTier("2018", "tests"), false);
+  });
+
+  it("does NOT suppress when the tier is unknown (fail-open)", () => {
+    assert.equal(shouldSuppressForTier("5574", null), false);
+  });
+
+  it("does NOT suppress when the error has no code", () => {
+    assert.equal(shouldSuppressForTier(undefined, "tests"), false);
+    assert.equal(shouldSuppressForTier("", "tests"), false);
   });
 });

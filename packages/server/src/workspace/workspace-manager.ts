@@ -405,6 +405,21 @@ export class WorkspaceManager {
     return { project, tests, deps };
   }
 
+  /**
+   * Return the indexing tier for a file URI, or `null` if the file is
+   * unknown to the workspace. Useful for diagnostics that only apply to
+   * deployable contracts (e.g. Spurious Dragon code-size and Shanghai
+   * initcode-size warnings should be suppressed for `tests`-tier files).
+   */
+  getFileTier(uri: string): FileTier | null {
+    for (const root of this.roots.values()) {
+      if (root.filesByTier.project.has(uri)) return "project";
+      if (root.filesByTier.tests.has(uri)) return "tests";
+      if (root.filesByTier.deps.has(uri)) return "deps";
+    }
+    return null;
+  }
+
   uriToPath(uri: string): string {
     return URI.parse(uri).fsPath;
   }
