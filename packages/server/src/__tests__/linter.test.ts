@@ -802,6 +802,78 @@ contract A {
     });
   });
 
+  describe("state-could-be-constant / state-could-be-immutable", () => {
+    it("suggests `constant` for a state var only initialized at declaration", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    uint256 fee = 100;
+    function get() external view returns (uint256) { return fee; }
+}
+`);
+      const c = diags.filter((d) => d.code === "state-could-be-constant");
+      const i = diags.filter((d) => d.code === "state-could-be-immutable");
+      assert.equal(c.length, 1);
+      assert.equal(i.length, 0);
+    });
+
+    it("suggests `immutable` for a state var only assigned in constructor", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    address owner;
+    constructor(address o) { owner = o; }
+    function get() external view returns (address) { return owner; }
+}
+`);
+      const i = diags.filter((d) => d.code === "state-could-be-immutable");
+      const c = diags.filter((d) => d.code === "state-could-be-constant");
+      assert.equal(i.length, 1);
+      assert.equal(c.length, 0);
+    });
+
+    it("does NOT suggest constant when init reaches block/msg/tx", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    uint256 deployedAt = block.timestamp;
+    function get() external view returns (uint256) { return deployedAt; }
+}
+`);
+      const c = diags.filter((d) => d.code === "state-could-be-constant");
+      assert.equal(c.length, 0);
+    });
+
+    it("does NOT suggest either when the var is mutated in a function", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    uint256 counter;
+    function bump() external { counter += 1; }
+}
+`);
+      const c = diags.filter((d) => d.code === "state-could-be-constant");
+      const i = diags.filter((d) => d.code === "state-could-be-immutable");
+      assert.equal(c.length, 0);
+      assert.equal(i.length, 0);
+    });
+
+    it("does NOT suggest anything for already-constant or already-immutable vars", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract A {
+    uint256 constant FEE = 100;
+    address immutable OWNER;
+    constructor(address o) { OWNER = o; }
+}
+`);
+      const c = diags.filter((d) => d.code === "state-could-be-constant");
+      const i = diags.filter((d) => d.code === "state-could-be-immutable");
+      assert.equal(c.length, 0);
+      assert.equal(i.length, 0);
+    });
+  });
+
   describe("multiple-pragma detection", () => {
     it("flags a file with two pragma solidity directives", () => {
       const diags = lint(`

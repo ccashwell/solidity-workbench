@@ -79,6 +79,7 @@ export class SolidityLinter {
           ...this.checkEcrecoverZeroCheckAst(rawContract),
           ...this.checkUnsafeErc20CallAst(rawContract),
           ...this.checkShadowingStateAst(contract, rawContract),
+          ...this.checkStateOptimizableAst(rawContract),
         );
       }
 
@@ -273,6 +274,124 @@ export class SolidityLinter {
       });
     }
     return diagnostics;
+  }
+
+  // ── state-could-be-constant / state-could-be-immutable ────────────
+
+  /**
+   * Suggest `constant` or `immutable` for state variables that never
+   * change after deployment.
+   *
+   *   - Only initialized at declaration, never assigned anywhere → could be `constant`.
+   *   - Assigned exactly once in the constructor and never again → could be `immutable`.
+   *
+   * `constant` requires a compile-time-evaluable init expression; we
+   * skip the suggestion when the init reaches `block.*` / `msg.*` /
+   * `tx.*` (clearly runtime values). Solc will reject anything else
+   * non-constexpr at compile time — keeping the rule a Hint rather
+   * than a Warning since the verification is necessarily incomplete.
+   */
+  private checkStateOptimizableAst(rawContract: RawContract): Diagnostic[] {
+    const diagnostics: Diagnostic[] = [];
+
+    const subs = rawContract.subNodes ?? [];
+    const ctorBody = subs
+      .filter((s): s is RawFunction => s?.type === "FunctionDefinition")
+      .find((f) => f.isConstructor)?.body;
+    const otherBodies = subs
+      .filter((s): s is RawFunction => s?.type === "FunctionDefinition")
+      .filter((f) => !f.isConstructor)
+      .map((f) => f.body)
+      .filter((b): b is NonNullable<typeof b> => !!b);
+
+    for (const sub of subs) {
+      if (sub?.type !== "StateVariableDeclaration") continue;
+      const decls = (sub as RawNode & { variables?: RawNode[] }).variables ?? [];
+      for (const raw of decls) {
+        const v = raw as RawNode & {
+          name?: string;
+          identifier?: RawNode;
+          expression?: RawNode | null;
+          isDeclaredConst?: boolean;
+          isImmutable?: boolean;
+        };
+        if (!v?.name) continue;
+        if (v.isDeclaredConst || v.isImmutable) continue;
+
+        const nameSet = new Set([v.name]);
+        const ctorAssigns = ctorBody ? this.countStateAssignments(ctorBody, nameSet) : 0;
+        let otherAssigns = 0;
+        for (const body of otherBodies) {
+          otherAssigns += this.countStateAssignments(body, nameSet);
+          if (otherAssigns > 0) break;
+        }
+        if (otherAssigns > 0) continue;
+
+        const hasInit = !!v.expression;
+        const range = this.nodeRange(v.identifier ?? v);
+
+        if (hasInit && ctorAssigns === 0) {
+          if (this.containsRuntimeReference(v.expression)) continue;
+          diagnostics.push({
+            severity: DiagnosticSeverity.Hint,
+            range,
+            message: `State variable '${v.name}' is only initialized at declaration and never reassigned — consider declaring it 'constant' (saves storage, deploy gas, and reads).`,
+            source: "solidity-workbench",
+            code: "state-could-be-constant",
+          });
+        } else if (!hasInit && ctorAssigns === 1) {
+          diagnostics.push({
+            severity: DiagnosticSeverity.Hint,
+            range,
+            message: `State variable '${v.name}' is only assigned in the constructor — consider declaring it 'immutable' (saves an SLOAD per read).`,
+            source: "solidity-workbench",
+            code: "state-could-be-immutable",
+          });
+        }
+      }
+    }
+
+    return diagnostics;
+  }
+
+  /** Count assignments / `++` / `--` mutations of any name in `names` within `body`. */
+  private countStateAssignments(body: RawNode, names: Set<string>): number {
+    let count = 0;
+    visit(body as any, {
+      BinaryOperation: (n: any) => {
+        if (!this.isAssignmentOperator(n.operator)) return undefined;
+        if (this.targetsStateVariable(n.left, names)) count++;
+        return undefined;
+      },
+      UnaryOperation: (n: any) => {
+        if (n.operator !== "++" && n.operator !== "--") return undefined;
+        if (this.targetsStateVariable(n.subExpression, names)) count++;
+        return undefined;
+      },
+    });
+    return count;
+  }
+
+  /**
+   * True when `expr`'s subtree references a runtime-only value: `block`,
+   * `msg`, `tx`, or an immediate `Identifier` access of one of those
+   * three. These exclude a state variable from being declared
+   * `constant` (the compiler would reject it).
+   */
+  private containsRuntimeReference(expr: RawNode | null | undefined): boolean {
+    if (!expr) return false;
+    let found = false;
+    visit(expr as any, {
+      MemberAccess: (n: any) => {
+        const baseName = n.expression?.type === "Identifier" ? n.expression?.name : undefined;
+        if (baseName === "block" || baseName === "msg" || baseName === "tx") {
+          found = true;
+          return false;
+        }
+        return undefined;
+      },
+    });
+    return found;
   }
 
   // ── Shadowing state ────────────────────────────────────────────────
