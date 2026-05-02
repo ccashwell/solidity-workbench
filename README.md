@@ -206,6 +206,7 @@ Press `F5` in VS Code to launch an Extension Development Host with the extension
    - **`Cmd/Ctrl+Shift+P`** → *Solidity Workbench: Gas Snapshot* for inline gas
    - **`Cmd/Ctrl+Shift+P`** → *Solidity Workbench: Run Coverage* for line-level decorations
    - **`Cmd/Ctrl+Shift+P`** → *Solidity Workbench: Storage Layout Visualization* for the slot webview
+   - With your cursor inside a function, **`Cmd/Ctrl+Shift+P`** → *Solidity Workbench: View IR (Yul / Assembly)* — the panel opens scrolled to that function's Yul block, then auto-refreshes on save
 
 ---
 
@@ -306,6 +307,31 @@ Quick picks for `sig`, `4byte`, `calldata-decode`, `abi-encode`, `keccak`, `to-w
 
 Terminal-based: `forge test --debug`, `forge debug`, or `forge debug --rpc-url <url> <txHash>`.
 A Debug Adapter Protocol (DAP) implementation is planned.
+
+### IR inspection
+
+Webview that runs `forge inspect <Contract> (irOptimized | ir | assembly)` and renders the dump
+alongside a function-level table of contents parsed from the Yul output. Built for iterative
+optimization passes — see in real time how the compiler's optimizer represents your code.
+
+- **Variant switcher** — flip between optimized Yul, raw Yul, and EVM assembly without reopening.
+  Per-variant scroll position is persisted across switches.
+- **Function TOC** — Yul function names get demangled to their Solidity-level identifier (`fun_increment_15`
+  surfaces as **increment** with the AST id in subscript). Bucketed by intent: External entries / Functions /
+  Getters / Constructor / Modifiers expanded by default; ABI / Storage / Memory / Math / Reverts / Cleanup
+  collapsed.
+- **Cursor-aware open** — invoking the command with your cursor inside a Solidity function scrolls the
+  panel directly to that function's Yul block.
+- **Auto-refresh on save** — debounced 600ms, scoped to the same Foundry root, with scroll position
+  preserved per variant so the iterative-edit loop doesn't jerk you back to the top.
+- **Pin baseline + per-function deltas** — capture the current output as a baseline; subsequent
+  refreshes annotate every TOC entry with `+12` / `-5` / `new` / `gone`, plus a header banner with net
+  line delta and grew/shrunk counts. Functions are matched by mangled name (which embeds the source AST
+  id), so the comparison is stable across recompiles.
+- **Assembly variant** skips the TOC since it's an opcode listing, not Yul.
+
+Command: **`Cmd/Ctrl+Shift+P`** → *Solidity Workbench: View IR (Yul / Assembly)*, or right-click in any
+`.sol` editor.
 
 ---
 
