@@ -14,6 +14,7 @@ import { CoverageProvider } from "./views/coverage.js";
 import { StorageLayoutPanel } from "./views/storage-layout.js";
 import { SlitherIntegration } from "./analysis/slither.js";
 import { AderynIntegration } from "./analysis/aderyn.js";
+import { WakeIntegration } from "./analysis/wake.js";
 import { SolidityDebugProvider } from "./debugger/debug-adapter.js";
 import { ChiselPanel } from "./views/chisel-panel.js";
 import { FoundryTomlProvider } from "./views/foundry-toml-schema.js";
@@ -183,8 +184,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("solidity-workbench.aderyn", () => aderyn.analyze()),
   );
 
-  // Opt-in on-save hooks for both analyzers. Each analyzer bails
-  // internally when its own `enabled` setting is false, so the
+  const wake = new WakeIntegration();
+  context.subscriptions.push({ dispose: () => wake.dispose() });
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("solidity-workbench.wake", () => wake.analyze()),
+  );
+
+  // Opt-in on-save hooks for the optional analyzers. Each analyzer
+  // bails internally when its own `enabled` setting is false, so the
   // handler just unconditionally delegates.
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
@@ -192,6 +200,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const config = vscode.workspace.getConfiguration("solidity-workbench");
       if (config.get<boolean>("slither.enabled")) slither.analyze();
       if (config.get<boolean>("aderyn.enabled")) aderyn.analyze();
+      if (config.get<boolean>("wake.enabled")) wake.analyze();
     }),
   );
 

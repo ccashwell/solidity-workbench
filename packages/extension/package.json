@@ -101,6 +101,16 @@
           "default": "",
           "description": "Path to the aderyn binary. Leave empty to use PATH."
         },
+        "solidity-workbench.wake.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Wake (Ackee Blockchain) static analysis integration. Runs on demand via the command palette and, when enabled, on save."
+        },
+        "solidity-workbench.wake.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the wake binary. Leave empty to use PATH."
+        },
         "solidity-workbench.inlayHints.parameterNames": {
           "type": "boolean",
           "default": true,
@@ -197,6 +207,10 @@
       {
         "command": "solidity-workbench.aderyn",
         "title": "Solidity Workbench: Run Aderyn Analysis"
+      },
+      {
+        "command": "solidity-workbench.wake",
+        "title": "Solidity Workbench: Run Wake Analysis"
       },
       {
         "command": "solidity-workbench.indexer.scaffold",
