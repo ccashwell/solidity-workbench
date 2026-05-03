@@ -28,3 +28,21 @@ coverage/
 /packages/extension/README.md
 /packages/extension/LICENSE
 /packages/extension/CHANGELOG.md
+
+# Stale tsc outputs that landed in src/ from older runs. The proper
+# build path (`pnpm build:test`) emits to dist/test/ via tsconfig.test.json;
+# anything emitted alongside the .ts sources is misconfigured cruft.
+/packages/extension/src/test/**/*.js
+/packages/extension/src/test/**/*.js.map
+/packages/extension/src/test/**/*.d.ts
+/packages/extension/src/test/**/*.d.ts.map
+
+# Local planning notes.
+/.plans/
+
+# Foundry gas-regression baselines. They're tooling output, not source —
+# users who want to commit one for regression tracking can `git add -f`.
+**/.gas-snapshot
+
+# vsce-generated package manifest — recreated on every `pnpm package`.
+/vsixmanifest.xml
