@@ -135,6 +135,7 @@ Completions, hover docs, and value validation for `[profile.default]`, `[fmt]`, 
 - **Built-in linter** — 21 AST-based rules in the LSP (see above)
 - **Slither** (optional) — findings surfaced as VS Code diagnostics with severity mapping; auto-runs on save when enabled
 - **Aderyn** (optional) — Cyfrin's Rust analyzer; JSON report parsed and mapped to diagnostics with related-information links between instances; on-demand or on-save
+- **Wake** (optional) — Ackee Blockchain's Python framework; `wake detect all --output-format json` parsed and mapped to diagnostics, with confidence rating in each message and column-precise ranges when Wake provides them; on-demand or on-save
 
 Static analysis (built-in linter + the syntax-rule warnings: `missing-spdx`,
 `floating-pragma`, `tx-origin`, `deprecated-selfdestruct`) is suppressed on
@@ -368,6 +369,8 @@ All settings under `solidity-workbench.*`:
 | `slither.path` | string | `""` | Absolute path to `slither` binary |
 | `aderyn.enabled` | boolean | `false` | Enable Aderyn on-save analysis |
 | `aderyn.path` | string | `""` | Absolute path to `aderyn` binary |
+| `wake.enabled` | boolean | `false` | Enable Wake on-save analysis |
+| `wake.path` | string | `""` | Absolute path to `wake` binary |
 | `inlayHints.parameterNames` | boolean | `true` | Parameter name hints at call sites |
 | `gasEstimates.enabled` | boolean | `true` | Gas estimate code lens from `.gas-snapshot` |
 | `test.verbosity` | number | `2` | `forge test` verbosity (0–5) |
@@ -422,8 +425,8 @@ Settings take effect dynamically without a restart.
 └──────────────────────────────────────────────────────────────┘
          │                │                   │
     ┌────┴─────┐     ┌────┴─────┐      ┌─────────┴──────────┐
-    │   solc   │     │  forge   │      │ slither / aderyn   │
-    │(compiler)│     │build/test│      │      (opt.)        │
+    │   solc   │     │  forge   │      │ slither / aderyn / │
+    │(compiler)│     │build/test│      │   wake (optional)  │
     └──────────┘     └──────────┘      └────────────────────┘
 ```
 
@@ -495,15 +498,16 @@ chisel output adapter, ABI signature formatters, and text utilities.
 ## Roadmap
 
 All P1 and P2 items are resolved. Aderyn integration, the trigram-backed
-fuzzy workspace symbols, the subgraph scaffold, the chisel webview, and
-the remote chain UI all landed in the April 2026 sweeps. Remaining P3
-enhancements — see [PRODUCTION_GAPS.md](PRODUCTION_GAPS.md):
+fuzzy workspace symbols, the subgraph scaffold, the chisel webview, the
+remote chain UI, the IR Viewer, and the Wake bridge all landed in the
+April–May 2026 sweeps. Remaining P3 enhancements — see
+[PRODUCTION_GAPS.md](PRODUCTION_GAPS.md):
 
 | Item | Effort | Description |
 | --- | --- | --- |
 | DAP debugger | 3–4 weeks | Source-level step-through via forge trace + source maps |
 | Solar integration | 2–3 weeks | Swap parser hot path to Solar WASM for ~40× speed once Solar publishes a stable LSP |
-| Wake / Mythril analyzers | ~1 week each | Same shape as the Aderyn / Slither bridges |
+| Mythril analyzer | ~1 week | Same shape as the Aderyn / Slither / Wake bridges |
 | More E2E coverage | Ongoing | Test-explorer discovery after `forge build`, coverage decoration rendering, storage-layout webview shape, Slither / Aderyn diagnostic round-trip |
 
 ---

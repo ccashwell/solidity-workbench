@@ -174,6 +174,23 @@ None.
   start block, writes the scaffold files plus a copy of the ABI into
   `subgraph/<ContractName>/`, and opens the manifest.
 
+### Wake static-analysis integration (was P3 #5b — May 2026 sweep)
+
+- Pure JSON-report parser added to `@solidity-workbench/common/wake-report`
+  with 12 unit tests covering the canonical and legacy top-level
+  shapes, field-name fallbacks across Wake versions
+  (`detector_name`/`detector`/`name`,
+  `impact`/`severity`,
+  `source_unit_name`/`file`/`path`,
+  `line_from`/`line`/`start_line`), `location.start: [line, col]`
+  tuples, dedup of subdetections, and informational-impact aliases.
+- `WakeIntegration` VSCode wrapper mirrors the Aderyn shape — new
+  `solidity-workbench.wake` command, `wake.enabled` / `wake.path`
+  settings, and an opt-in on-save hook. Captures stdout (Wake has
+  no `--output` flag), parses, and surfaces each finding with
+  column-precise ranges where Wake provides them and the confidence
+  rating in the diagnostic message.
+
 ### Expanded E2E coverage (was P3 #8)
 
 - Corrected the stale `uniswap.solidity-workbench` extension ID in the
@@ -252,13 +269,15 @@ resolver hot path via WASM for ~40× speed and true type resolution.
 
 **Effort**: 2–3 weeks once Solar is ready.
 
-### 5. Wake / Mythril integrations alongside Slither and Aderyn
+### 5. Mythril integration alongside Slither, Aderyn, and Wake
 
-Aderyn landed in the third sweep. Wake and Mythril remain as natural
-next analyzer integrations — both share the same shape as
-Aderyn/Slither (run external tool → parse JSON → map to diagnostics).
+Aderyn landed in the third sweep, Wake (Ackee Blockchain) in the May
+2026 sweep. Mythril is the remaining natural next analyzer
+integration — same shape as the others (run external tool → parse
+JSON → map to diagnostics) but its symbolic-execution runtime is
+slower so the on-save toggle wants to be off by default.
 
-**Effort**: 1 week per integration.
+**Effort**: 1 week.
 
 ### 8. More E2E coverage (ongoing)
 
@@ -280,6 +299,8 @@ report.
 | P1 | 0 | — |
 | P2 | 0 | — |
 | P3 | 4 | ~5–8 weeks (DAP dominates) |
+<!-- Counts: DAP debugger, Solar migration (blocked on upstream), Mythril integration, ongoing E2E coverage. -->
+
 | **Total to public beta** | **0** | **ship the VSIX** |
 | **Total to v1.0** | **0** | **ship the VSIX** |
 
