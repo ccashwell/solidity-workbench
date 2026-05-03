@@ -12,3 +12,4 @@ export * from "./chisel-output.js";
 export * from "./abi-signature.js";
 export * from "./yul-outline.js";
 export * from "./wake-report.js";
+export * from "./mythril-report.js";
