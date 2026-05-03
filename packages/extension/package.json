@@ -111,6 +111,16 @@
           "default": "",
           "description": "Path to the wake binary. Leave empty to use PATH."
         },
+        "solidity-workbench.mythril.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable Mythril (ConsenSys) symbolic-execution integration. Mythril is slow (often tens of seconds to minutes per contract); the on-save trigger is opt-in. Runs against the active editor's Solidity file."
+        },
+        "solidity-workbench.mythril.path": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the myth binary. Leave empty to use PATH."
+        },
         "solidity-workbench.inlayHints.parameterNames": {
           "type": "boolean",
           "default": true,
@@ -211,6 +221,10 @@
       {
         "command": "solidity-workbench.wake",
         "title": "Solidity Workbench: Run Wake Analysis"
+      },
+      {
+        "command": "solidity-workbench.mythril",
+        "title": "Solidity Workbench: Run Mythril Analysis (current file)"
       },
       {
         "command": "solidity-workbench.indexer.scaffold",

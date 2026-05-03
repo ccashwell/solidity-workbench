@@ -15,6 +15,7 @@ import { StorageLayoutPanel } from "./views/storage-layout.js";
 import { SlitherIntegration } from "./analysis/slither.js";
 import { AderynIntegration } from "./analysis/aderyn.js";
 import { WakeIntegration } from "./analysis/wake.js";
+import { MythrilIntegration } from "./analysis/mythril.js";
 import { SolidityDebugProvider } from "./debugger/debug-adapter.js";
 import { ChiselPanel } from "./views/chisel-panel.js";
 import { FoundryTomlProvider } from "./views/foundry-toml-schema.js";
@@ -191,9 +192,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("solidity-workbench.wake", () => wake.analyze()),
   );
 
+  const mythril = new MythrilIntegration();
+  context.subscriptions.push({ dispose: () => mythril.dispose() });
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("solidity-workbench.mythril", () => mythril.analyze()),
+  );
+
   // Opt-in on-save hooks for the optional analyzers. Each analyzer
   // bails internally when its own `enabled` setting is false, so the
-  // handler just unconditionally delegates.
+  // handler just unconditionally delegates. Mythril runs against
+  // the saved file specifically (per-file analysis) where the
+  // others run against the whole workspace.
   context.subscriptions.push(
     vscode.workspace.onDidSaveTextDocument((doc) => {
       if (doc.languageId !== "solidity") return;
@@ -201,6 +211,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (config.get<boolean>("slither.enabled")) slither.analyze();
       if (config.get<boolean>("aderyn.enabled")) aderyn.analyze();
       if (config.get<boolean>("wake.enabled")) wake.analyze();
+      if (config.get<boolean>("mythril.enabled")) mythril.analyze(doc.uri);
     }),
   );
 
