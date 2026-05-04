@@ -270,17 +270,61 @@ None.
 ### 1. Real DAP debugger
 
 Today's "debugger" is three terminal-wrapped `forge debug` / `forge
-test --debug` invocations. A real DAP adapter means:
+test --debug` invocations. A real DAP adapter means launching forge
+with trace output, parsing solc source maps, walking opcodes, and
+implementing the DAP request set. Stage 1 (scaffold) landed in the
+May 2026 sweep; the remaining stages are tracked below.
 
-1. Launch forge with trace output (`-vvvvv --json`).
-2. Parse the source map from compiled artifacts (`out/C.sol/C.json`
-   `sourceMap` + `generatedSources`).
-3. Walk EVM opcodes step-by-step, mapping back to source positions.
-4. Implement DAP `stackTrace`, `scopes`, `variables`,
-   `stepIn` / `stepOut` / `stepOver`.
-5. Expose storage and memory as "globals".
+**Stage 1 — scaffold (DONE).** May 2026 sweep:
 
-**Effort**: 3–4 weeks. Simbolik is the commercial gold standard here.
+- Pure `parseSourceMap` / `buildPcToInstructionIndex` /
+  `resolveSourcePosition` helpers in
+  `@solidity-workbench/common/source-map` with 17 unit tests
+  covering compression rules, the `fileIndex = -1` sentinel, PUSH1–
+  PUSH32 + PUSH0 operand walks, hex-prefix tolerance, and
+  recoverable map-shorter-than-bytecode mismatches.
+- `SolidityDapAdapter` (inline `DebugAdapterInlineImplementation`)
+  speaks the DAP wire format directly. Stubs initialize / launch /
+  threads / stackTrace / scopes / variables / step* / terminate.
+  Unimplemented requests return `success: false` with a "Not yet
+  implemented" message rather than blocking the host.
+- `package.json` declares `breakpoints: [{ language: "solidity" }]`,
+  the `solidity-workbench` debug type with a launch.json schema
+  (`program`, `test`, `stopOnEntry`), an initial config, and an
+  auto-completer snippet. `SolidityDapConfigurationProvider` fills
+  in defaults for F5-without-launch.json.
+
+**Stage 2 — trace ingestion.** Run
+`forge test --match-test ... --debug --json`, parse the resulting
+JSON trace into a structured stream of `{ pc, opcode, depth, gas,
+stack, memory, storage }` steps. Pure helper in `common`, plus a
+`TraceCursor` for the adapter to navigate (next, previous, by
+source position).
+
+**Stage 3 — source-position-driven step semantics.** Wire `next`
+(step over), `stepIn`, `stepOut`, `continue` to the trace cursor.
+"Step over" advances the cursor until the source position changes
+beyond the current statement; `stepIn` follows function-entry
+JUMPs (`jump: "i"` from the source map); `stepOut` walks until the
+matching function-exit (`jump: "o"`). Implement `setBreakpoints`
+keyed on source line.
+
+**Stage 4 — `stackTrace` / `scopes` / `variables`.** Build a call
+stack from the source-map's `jump: "i"` / `jump: "o"` markers and
+the current depth. Expose `stack`, `memory`, `storage`, and
+`calldata` as scopes. Decode local variables from the AST + a
+walk of the trace's stack snapshots.
+
+**Stage 5 — `disassemble` request + storage/memory pretty-print.**
+Add the `evaluate` request for hover-over watch values. Pretty-
+print storage entries by attaching the contract's storage layout
+JSON. Add `restart` and `setVariable` for the canonical
+inspect-and-tweak workflow.
+
+**Effort remaining (stages 2–5)**: ~3 weeks. Simbolik is the
+commercial gold standard here; we explicitly aren't trying to
+match its symbolic reasoning, just give the user a reliable
+step-through.
 
 ### 2. Migrate parsing hot path to Solar when it stabilizes
 
