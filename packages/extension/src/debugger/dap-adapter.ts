@@ -1,6 +1,10 @@
 import * as vscode from "vscode";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
+
+const execFileAsync = promisify(execFile);
 import {
   parseTraceJson,
   TraceCursor,
@@ -100,7 +104,10 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       case "initialize":
         return this.handleInitialize(msg);
       case "launch":
-        return this.handleLaunch(msg);
+        // `handleLaunch` is async — fire-and-forget; it sends its
+        // own response/events.
+        void this.handleLaunch(msg);
+        return;
       case "configurationDone":
         return this.respond(msg, true);
       case "threads":
@@ -173,7 +180,7 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     this.fireEvent("initialized");
   }
 
-  private handleLaunch(msg: DapRequest): void {
+  private async handleLaunch(msg: DapRequest): Promise<void> {
     const args = (msg.arguments ?? {}) as LaunchArguments;
 
     if (args.artifact) {
@@ -189,6 +196,8 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       }
     }
 
+    // Trace source: prefer `traceFile` when set; otherwise fetch live
+    // via `cast run --json` if `txHash` (+ optional `rpcUrl`) is set.
     if (args.traceFile) {
       const error = this.loadTraceFile(args.traceFile);
       if (error) {
@@ -196,6 +205,17 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
         this.fireEvent("output", {
           category: "stderr",
           output: `Failed to load trace from '${args.traceFile}': ${error}\n`,
+        });
+        this.fireEvent("terminated");
+        return;
+      }
+    } else if (args.txHash) {
+      const error = await this.loadTraceFromCastRun(args);
+      if (error) {
+        this.respond(msg, true);
+        this.fireEvent("output", {
+          category: "stderr",
+          output: `Failed to fetch trace via cast run: ${error}\n`,
         });
         this.fireEvent("terminated");
         return;
@@ -745,6 +765,58 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
   // ── Loading ─────────────────────────────────────────────────────
 
   /**
+   * Spawn `cast run --json <txHash> [--rpc-url <url>]` to fetch a
+   * structLogs trace from a live Anvil / RPC endpoint. Avoids the
+   * "save to file, point launch.json at it" two-step. Returns a
+   * human-readable error on failure (timeout, cast not on PATH,
+   * unparseable output).
+   *
+   * Stretch goal: a fully-automated `forge test --debug` driver
+   * would launch the test, capture the tx hash, and call this with
+   * it. For now, the user supplies the tx hash directly — they
+   * either know it from a prior `forge test -vvvv` run or got it
+   * from a fork.
+   */
+  private async loadTraceFromCastRun(args: LaunchArguments): Promise<string | null> {
+    if (!args.txHash) return "Missing `txHash` in launch configuration.";
+    const config = vscode.workspace.getConfiguration("solidity-workbench");
+    const castPath = config.get<string>("castPath") || "cast";
+    const argv = ["run", "--json", args.txHash];
+    if (args.rpcUrl) argv.push("--rpc-url", args.rpcUrl);
+
+    const cwd =
+      args.projectRoot ??
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
+      process.cwd();
+
+    let stdout = "";
+    try {
+      const result = await execFileAsync(castPath, argv, {
+        cwd,
+        maxBuffer: 256 * 1024 * 1024,
+        timeout: 10 * 60 * 1000,
+      });
+      stdout = result.stdout;
+    } catch (err: unknown) {
+      // Some cast versions exit non-zero when the trace contains
+      // a revert; the JSON is still on stdout, so try it before
+      // declaring the run a failure.
+      const e = err as { stdout?: string; stderr?: string; message?: string };
+      stdout = e.stdout ?? "";
+      if (!stdout) {
+        return e.stderr?.trim() || e.message || String(err);
+      }
+    }
+
+    const trace = parseTraceJson(stdout);
+    if (!trace) {
+      return "cast run output didn't match an expected structLogs shape — make sure you're using a recent Foundry release.";
+    }
+    this.cursor = new TraceCursor(trace.steps);
+    return null;
+  }
+
+  /**
    * Read and parse a `cast run --json` (or `debug_traceTransaction`)
    * dump from disk. Returns a human-readable error string on
    * failure rather than throwing, so the launch handler can surface
@@ -1053,10 +1125,23 @@ interface LaunchArguments {
   /**
    * Path to a JSON file with a pre-saved EVM trace
    * (`cast run --json <txhash> > trace.json` is the canonical
-   * source). Stage 2 escape hatch until stage 4 wires the live
-   * `forge test --debug --json` execution path.
+   * source). Mutually exclusive with `txHash` — if both are set,
+   * `traceFile` wins.
    */
   traceFile?: string;
+  /**
+   * Transaction hash to fetch via `cast run --json <txHash>` at
+   * launch time. The adapter spawns `cast run` and ingests the
+   * resulting structLogs trace, eliminating the
+   * "save trace to disk, point launch.json at it" two-step.
+   */
+  txHash?: string;
+  /**
+   * Optional `--rpc-url` passed to `cast run`. When omitted, cast
+   * picks up its default endpoint (typically a local Anvil at
+   * 127.0.0.1:8545).
+   */
+  rpcUrl?: string;
   /**
    * Path to a forge artifact JSON (`out/<file>.sol/<Contract>.json`).
    * Stage 3 reads this for the deployed bytecode + sourceMap +

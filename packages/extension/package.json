@@ -66,6 +66,11 @@
           "default": "",
           "description": "Path to forge binary. Leave empty to use PATH."
         },
+        "solidity-workbench.castPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to cast binary. Leave empty to use PATH."
+        },
         "solidity-workbench.formatOnSave": {
           "type": "boolean",
           "default": true,
@@ -429,7 +434,15 @@
               },
               "traceFile": {
                 "type": "string",
-                "description": "Optional path to a pre-saved EVM trace JSON (e.g. `cast run --json <txhash> > trace.json`). When supplied, the adapter steps through this trace instead of launching a live execution. Useful while the live-launch path matures."
+                "description": "Optional path to a pre-saved EVM trace JSON (e.g. `cast run --json <txhash> > trace.json`). When supplied, the adapter steps through this trace. Mutually exclusive with `txHash` — `traceFile` wins if both are set."
+              },
+              "txHash": {
+                "type": "string",
+                "description": "Transaction hash to fetch live via `cast run --json <txhash>` at launch time. Eliminates the save-trace-to-file two-step. Combine with `rpcUrl` to point at a non-default endpoint."
+              },
+              "rpcUrl": {
+                "type": "string",
+                "description": "Optional `--rpc-url` passed to `cast run`. Defaults to whatever cast picks up (typically a local Anvil at 127.0.0.1:8545)."
               },
               "artifact": {
                 "type": "string",
