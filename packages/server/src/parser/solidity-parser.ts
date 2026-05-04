@@ -569,12 +569,20 @@ export class SolidityParser {
   private nameRange(node: any): SourceRange {
     // Try to compute a name-specific range from the node's location
     if (node.loc && node.name) {
+      const name = String(node.name);
       const startLine = (node.loc.start?.line ?? 1) - 1;
       const startCol = node.loc.start?.column ?? 0;
-      // Heuristic: the name often starts near the beginning of the node
+      const line = this.currentLines?.[startLine] ?? "";
+      const actualStart = line.indexOf(name, startCol);
+      if (actualStart >= 0) {
+        return {
+          start: { line: startLine, character: actualStart },
+          end: { line: startLine, character: actualStart + name.length },
+        };
+      }
       return {
         start: { line: startLine, character: startCol },
-        end: { line: startLine, character: startCol + (node.name?.length ?? 0) },
+        end: { line: startLine, character: startCol + name.length },
       };
     }
     return this.locToRange(node.loc);

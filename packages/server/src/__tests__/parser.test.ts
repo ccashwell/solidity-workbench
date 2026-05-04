@@ -546,6 +546,25 @@ contract C {
       assert.equal(func.natspec.returns?.result, "The output");
     });
 
+    it("maps function nameRange to the identifier, not the function keyword", () => {
+      const result = parser.parse(
+        "name-range-function.sol",
+        `
+pragma solidity ^0.8.24;
+
+contract C {
+    function _effectiveBalance(uint256 poolId) internal view returns (uint256 bal) {}
+}
+`,
+      );
+
+      const func = result.sourceUnit.contracts[0].functions[0];
+      assert.deepEqual(func.nameRange, {
+        start: { line: 4, character: 13 },
+        end: { line: 4, character: 30 },
+      });
+    });
+
     it("extracts natspec from a block comment (/** ... */) form", () => {
       const result = parser.parse(
         "natspec-block.sol",
