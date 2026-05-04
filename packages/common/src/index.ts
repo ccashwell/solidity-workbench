@@ -15,3 +15,5 @@ export * from "./wake-report.js";
 export * from "./mythril-report.js";
 export * from "./source-map.js";
 export * from "./trace.js";
+export * from "./line-index.js";
+export * from "./forge-artifact.js";

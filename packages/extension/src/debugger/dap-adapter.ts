@@ -1,6 +1,18 @@
 import * as vscode from "vscode";
 import { readFileSync } from "node:fs";
-import { parseTraceJson, TraceCursor } from "@solidity-workbench/common";
+import * as path from "node:path";
+import {
+  parseTraceJson,
+  TraceCursor,
+  type TraceStep,
+  parseSourceMap,
+  buildPcToInstructionIndex,
+  resolveSourcePosition,
+  type SourceMapEntry,
+  parseForgeArtifact,
+  type ForgeArtifact,
+  LineIndex,
+} from "@solidity-workbench/common";
 
 /**
  * Solidity Workbench Debug Adapter Protocol (DAP) adapter.
@@ -27,22 +39,42 @@ import { parseTraceJson, TraceCursor } from "@solidity-workbench/common";
  * Delivery stages (see PRODUCTION_GAPS.md > "DAP debugger"):
  *
  * - Stage 1 — scaffold (DONE).
- * - Stage 2 — trace ingestion (THIS REVISION). When the launch
- *   config supplies `traceFile`, the adapter loads it via
- *   `parseTraceJson` and drives a `TraceCursor` from
- *   `next` / `previous` requests. The Call Stack panel surfaces
- *   the cursor's current `pc`/`op`/`depth` so the user sees
- *   meaningful state. Source-position resolution and `setBreakpoints`
- *   are stage 3.
- * - Stages 3-5 — see PRODUCTION_GAPS.md.
+ * - Stage 2 — trace ingestion (DONE).
+ * - Stage 3 — source-position resolution + step semantics +
+ *   setBreakpoints (THIS REVISION). When the launch config supplies
+ *   `artifact` (path to a forge artifact JSON), the adapter loads the
+ *   deployed bytecode + sourceMap, builds a `ContractContext`, and:
+ *     * `stackTrace` reports the actual source file + line for the
+ *       cursor's current step.
+ *     * `next` advances until the source line changes (skipping
+ *       generated helpers and inner-call opcodes naturally).
+ *     * `stepIn` is identical to `next` in single-contract mode —
+ *       multi-contract source resolution lands in stage 4.
+ *     * `stepOut` advances until the call depth drops below the
+ *       current frame.
+ *     * `continue` advances to the next breakpoint or end-of-trace.
+ *     * `setBreakpoints` accepts source-line breakpoints and
+ *       reports them all verified.
+ *     * `loadedSources` enumerates the artifact's source list.
+ * - Stages 4-5 — see PRODUCTION_GAPS.md.
  */
 export class SolidityDapAdapter implements vscode.DebugAdapter {
   private readonly _onDidSendMessage = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
   readonly onDidSendMessage = this._onDidSendMessage.event;
 
   private seq = 0;
-  /** Loaded once during `launch` when the config carries a `traceFile`. */
+  /** Loaded once during `launch` when the config supplies a `traceFile`. */
   private cursor: TraceCursor | null = null;
+  /** Loaded once during `launch` when the config supplies an `artifact`. */
+  private contractContext: ContractContext | null = null;
+  /**
+   * Active breakpoints, keyed by normalised absolute file path. The
+   * inner `Set<number>` holds 0-based line indexes (DAP's 1-based
+   * lines are converted at the request boundary).
+   */
+  private breakpoints = new Map<string, Set<number>>();
+  /** Cached so `next` knows when the source line has actually changed. */
+  private lastReportedLine: { filePath: string; line: number } | null = null;
 
   handleMessage(message: vscode.DebugProtocolMessage): void {
     const msg = message as DapRequest;
@@ -63,11 +95,17 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
         return this.handleScopes(msg);
       case "variables":
         return this.handleVariables(msg);
+      case "setBreakpoints":
+        return this.handleSetBreakpoints(msg);
+      case "loadedSources":
+        return this.handleLoadedSources(msg);
       case "continue":
+        return this.handleContinue(msg);
       case "next":
       case "stepIn":
+        return this.handleStep(msg);
       case "stepOut":
-        return this.handleStepStub(msg);
+        return this.handleStepOut(msg);
       case "pause":
         return this.respond(msg, true);
       case "disconnect":
@@ -82,9 +120,6 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
 
   private handleInitialize(msg: DapRequest): void {
     this.respond(msg, true, {
-      // Capabilities the adapter advertises today. As stages 2-5
-      // land we'll flip more of these to true (breakpoints, hover
-      // evaluate, conditional breakpoints, etc.).
       supportsConfigurationDoneRequest: true,
       supportsTerminateRequest: true,
       supportsRestartRequest: false,
@@ -97,7 +132,9 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       supportsExceptionInfoRequest: false,
       supportsValueFormattingOptions: false,
       supportsModulesRequest: false,
-      supportsLoadedSourcesRequest: false,
+      // Stage 3 lights this up — we enumerate the artifact's
+      // source list under `loadedSources`.
+      supportsLoadedSourcesRequest: true,
       supportsLogPoints: false,
       supportsTerminateThreadsRequest: false,
       supportsSetExpression: false,
@@ -110,40 +147,284 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       supportsInstructionBreakpoints: false,
       supportsExceptionFilterOptions: false,
     });
-    // The `initialized` event tells VSCode it can now send any
-    // setBreakpoints / setExceptionBreakpoints requests it has
-    // queued for us, followed by `configurationDone`.
+    // `initialized` lets VSCode flush queued setBreakpoints /
+    // setExceptionBreakpoints requests, then issue
+    // `configurationDone`.
     this.fireEvent("initialized");
   }
 
   private handleLaunch(msg: DapRequest): void {
     const args = (msg.arguments ?? {}) as LaunchArguments;
-    if (args.traceFile) {
-      const loadError = this.loadTraceFile(args.traceFile);
-      if (loadError) {
-        // Acknowledge the launch but surface the load failure to
-        // the user via `output` and `terminated`. Failing the launch
-        // outright leaves VSCode in an awkward "session never
-        // started" state.
+
+    if (args.artifact) {
+      const error = this.loadArtifact(args.artifact, args.projectRoot);
+      if (error) {
         this.respond(msg, true);
         this.fireEvent("output", {
           category: "stderr",
-          output: `Failed to load trace from '${args.traceFile}': ${loadError}\n`,
+          output: `Failed to load artifact '${args.artifact}': ${error}\n`,
         });
         this.fireEvent("terminated");
         return;
       }
     }
+
+    if (args.traceFile) {
+      const error = this.loadTraceFile(args.traceFile);
+      if (error) {
+        this.respond(msg, true);
+        this.fireEvent("output", {
+          category: "stderr",
+          output: `Failed to load trace from '${args.traceFile}': ${error}\n`,
+        });
+        this.fireEvent("terminated");
+        return;
+      }
+    }
+
     this.respond(msg, true);
     this.fireEvent("stopped", {
       reason: "entry",
       threadId: 1,
       allThreadsStopped: true,
-      description: this.cursor
-        ? `Loaded ${this.cursor.length} trace step${this.cursor.length === 1 ? "" : "s"}`
-        : "Live execution path not yet wired (stage 3) — supply `traceFile` to step through a saved trace.",
+      description: this.summariseLoadState(),
     });
   }
+
+  private handleThreads(msg: DapRequest): void {
+    this.respond(msg, true, { threads: [{ id: 1, name: "EVM" }] });
+  }
+
+  private handleStackTrace(msg: DapRequest): void {
+    const step = this.cursor?.current;
+    if (!step) {
+      this.respond(msg, true, {
+        stackFrames: [
+          {
+            id: 0,
+            name: "(no trace loaded — supply `traceFile` in launch.json)",
+            line: 0,
+            column: 0,
+            presentationHint: "label",
+          },
+        ],
+        totalFrames: 1,
+      });
+      return;
+    }
+
+    const source = this.resolveStepSource(step);
+    const cursor = this.cursor!;
+    const frameLabel = `${step.op} @ pc=${step.pc} (depth ${step.depth}, gas ${step.gas})`;
+    if (source) {
+      this.respond(msg, true, {
+        stackFrames: [
+          {
+            id: cursor.index,
+            name: frameLabel,
+            // DAP lines / columns are 1-based.
+            line: source.line + 1,
+            column: source.character + 1,
+            source: { path: source.filePath, name: path.basename(source.filePath) },
+          },
+        ],
+        totalFrames: 1,
+      });
+      this.lastReportedLine = { filePath: source.filePath, line: source.line };
+    } else {
+      this.respond(msg, true, {
+        stackFrames: [
+          {
+            id: cursor.index,
+            name: frameLabel + (this.contractContext ? " — generated/no source" : ""),
+            line: 0,
+            column: 0,
+            presentationHint: "label",
+          },
+        ],
+        totalFrames: 1,
+      });
+    }
+  }
+
+  private handleScopes(msg: DapRequest): void {
+    this.respond(msg, true, { scopes: [] });
+  }
+
+  private handleVariables(msg: DapRequest): void {
+    this.respond(msg, true, { variables: [] });
+  }
+
+  private handleSetBreakpoints(msg: DapRequest): void {
+    const args = msg.arguments as SetBreakpointsArgs | undefined;
+    const requestedBps = args?.breakpoints ?? [];
+    if (!args?.source.path) {
+      this.respond(msg, true, { breakpoints: [] });
+      return;
+    }
+    const normalisedPath = path.normalize(args.source.path);
+    const lines = new Set<number>(requestedBps.map((bp) => bp.line - 1)); // DAP -> 0-based
+    if (lines.size === 0) {
+      this.breakpoints.delete(normalisedPath);
+    } else {
+      this.breakpoints.set(normalisedPath, lines);
+    }
+    this.respond(msg, true, {
+      breakpoints: requestedBps.map((bp) => ({ verified: true, line: bp.line })),
+    });
+  }
+
+  private handleLoadedSources(msg: DapRequest): void {
+    const sources = this.contractContext?.sources.map((s) => ({
+      name: path.basename(s.absolutePath),
+      path: s.absolutePath,
+    })) ?? [];
+    this.respond(msg, true, { sources });
+  }
+
+  private handleContinue(msg: DapRequest): void {
+    if (!this.cursor) {
+      this.respond(msg, true, { allThreadsContinued: true });
+      this.fireEvent("terminated");
+      return;
+    }
+
+    while (this.cursor.next()) {
+      const source = this.currentLine();
+      if (source && this.matchesBreakpoint(source)) {
+        this.respond(msg, true, { allThreadsContinued: true });
+        this.fireEvent("stopped", {
+          reason: "breakpoint",
+          threadId: 1,
+          allThreadsStopped: true,
+        });
+        return;
+      }
+    }
+    // Trace exhausted without hitting a breakpoint.
+    this.respond(msg, true, { allThreadsContinued: true });
+    this.fireEvent("terminated");
+  }
+
+  private handleStep(msg: DapRequest): void {
+    if (!this.cursor) {
+      this.respond(msg, true);
+      this.fireEvent("terminated");
+      return;
+    }
+    // Source-aware step: advance until the source position changes
+    // OR we hit a breakpoint OR the trace ends. When no contract
+    // context is loaded, fall back to single-step behaviour from
+    // stage 2 so the user can still walk opcode-by-opcode.
+    if (!this.contractContext) {
+      if (!this.cursor.next() || this.cursor.isAtEnd) {
+        this.respond(msg, true);
+        this.fireEvent("terminated");
+        return;
+      }
+      this.respond(msg, true);
+      this.fireEvent("stopped", { reason: "step", threadId: 1, allThreadsStopped: true });
+      return;
+    }
+
+    const initial = this.currentLine();
+    while (this.cursor.next()) {
+      const here = this.currentLine();
+      if (!here) continue; // generated opcodes — keep walking
+      if (this.matchesBreakpoint(here)) {
+        this.respond(msg, true);
+        this.fireEvent("stopped", { reason: "breakpoint", threadId: 1, allThreadsStopped: true });
+        return;
+      }
+      const lineChanged =
+        !initial || here.filePath !== initial.filePath || here.line !== initial.line;
+      if (lineChanged) {
+        this.respond(msg, true);
+        this.fireEvent("stopped", { reason: "step", threadId: 1, allThreadsStopped: true });
+        return;
+      }
+    }
+    this.respond(msg, true);
+    this.fireEvent("terminated");
+  }
+
+  private handleStepOut(msg: DapRequest): void {
+    if (!this.cursor || !this.cursor.current) {
+      this.respond(msg, true);
+      this.fireEvent("terminated");
+      return;
+    }
+    // Step-out: run forward until the call depth drops below the
+    // current frame's depth. Falls back to "continue" semantics
+    // when the cursor is already at the top frame.
+    const targetDepth = this.cursor.current.depth - 1;
+    if (targetDepth <= 0) {
+      this.handleContinue(msg);
+      return;
+    }
+    while (this.cursor.next()) {
+      const cur = this.cursor.current;
+      if (!cur) break;
+      if (cur.depth <= targetDepth) {
+        this.respond(msg, true);
+        this.fireEvent("stopped", { reason: "step", threadId: 1, allThreadsStopped: true });
+        return;
+      }
+    }
+    this.respond(msg, true);
+    this.fireEvent("terminated");
+  }
+
+  private handleTerminate(msg: DapRequest): void {
+    this.respond(msg, true);
+    this.fireEvent("terminated");
+    this.fireEvent("exited", { exitCode: 0 });
+  }
+
+  // ── Source resolution ────────────────────────────────────────────
+
+  /**
+   * Map a single trace step to a source position via the loaded
+   * contract context. Returns `null` for generated opcodes
+   * (`fileIndex === -1`) and for steps in inner call frames whose
+   * source we don't have loaded — single-contract stage-3 caveat.
+   */
+  private resolveStepSource(
+    step: TraceStep,
+  ): { filePath: string; line: number; character: number } | null {
+    if (!this.contractContext) return null;
+    if (step.depth !== this.contractContext.depth) {
+      // Inner call frames: their bytecode isn't ours. Multi-frame
+      // resolution lands in stage 4.
+      return null;
+    }
+    const entry = resolveSourcePosition(
+      step.pc,
+      this.contractContext.pcMap,
+      this.contractContext.sourceMap,
+    );
+    if (!entry) return null;
+    const source = this.contractContext.sources[entry.fileIndex];
+    if (!source || !source.lineIndex) return null;
+    const pos = source.lineIndex.positionAt(entry.start);
+    return { filePath: source.absolutePath, line: pos.line, character: pos.character };
+  }
+
+  /** Convenience for the step / continue loops. */
+  private currentLine(): { filePath: string; line: number } | null {
+    const step = this.cursor?.current;
+    if (!step) return null;
+    const src = this.resolveStepSource(step);
+    if (!src) return null;
+    return { filePath: src.filePath, line: src.line };
+  }
+
+  private matchesBreakpoint(line: { filePath: string; line: number }): boolean {
+    const lines = this.breakpoints.get(path.normalize(line.filePath));
+    return !!lines && lines.has(line.line);
+  }
+
+  // ── Loading ─────────────────────────────────────────────────────
 
   /**
    * Read and parse a `cast run --json` (or `debug_traceTransaction`)
@@ -151,10 +432,10 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
    * failure rather than throwing, so the launch handler can surface
    * it via `output` events.
    */
-  private loadTraceFile(path: string): string | null {
+  private loadTraceFile(p: string): string | null {
     let raw: string;
     try {
-      raw = readFileSync(path, "utf-8");
+      raw = readFileSync(p, "utf-8");
     } catch (err) {
       return err instanceof Error ? err.message : String(err);
     }
@@ -166,92 +447,61 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     return null;
   }
 
-  private handleThreads(msg: DapRequest): void {
-    this.respond(msg, true, {
-      threads: [{ id: 1, name: "EVM" }],
-    });
-  }
-
-  private handleStackTrace(msg: DapRequest): void {
-    // Stage 2: when a trace cursor is loaded, surface the current
-    // step's PC / opcode / depth in the Call Stack panel so the
-    // user sees meaningful state. Source-position resolution
-    // (mapping PC → file/line via the source-map module) lands in
-    // stage 3.
-    const step = this.cursor?.current;
-    if (step) {
-      this.respond(msg, true, {
-        stackFrames: [
-          {
-            id: this.cursor!.index,
-            name: `${step.op} @ pc=${step.pc} (depth ${step.depth}, gas ${step.gas})`,
-            line: 0,
-            column: 0,
-            presentationHint: "label",
-          },
-        ],
-        totalFrames: 1,
-      });
-      return;
+  /**
+   * Load a forge artifact and build a `ContractContext`. Source
+   * paths are resolved against `projectRoot` (the launch config or
+   * the workspace folder). Each source file is read once and
+   * indexed for fast byte-offset → line conversion.
+   */
+  private loadArtifact(artifactPath: string, projectRoot: string | undefined): string | null {
+    let raw: string;
+    try {
+      raw = readFileSync(artifactPath, "utf-8");
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
     }
-    this.respond(msg, true, {
-      stackFrames: [
-        {
-          id: 0,
-          name: "(no trace loaded — supply `traceFile` in launch.json)",
-          line: 0,
-          column: 0,
-          presentationHint: "label",
-        },
-      ],
-      totalFrames: 1,
-    });
-  }
-
-  private handleScopes(msg: DapRequest): void {
-    this.respond(msg, true, { scopes: [] });
-  }
-
-  private handleVariables(msg: DapRequest): void {
-    this.respond(msg, true, { variables: [] });
-  }
-
-  private handleStepStub(msg: DapRequest): void {
-    // Stage 2: when a trace cursor is loaded, advance / rewind it
-    // by one step per request and re-fire `stopped` so VSCode
-    // refreshes the Call Stack panel. Source-position-aware
-    // step-over / step-in / step-out semantics land in stage 3.
-    if (this.cursor) {
-      if (msg.command === "continue") {
-        this.cursor.seek(this.cursor.length);
-      } else if (msg.command === "stepOut") {
-        // Without source-position info we can't compute the matching
-        // call's exit. Until stage 3 lands, treat stepOut as continue.
-        this.cursor.seek(this.cursor.length);
-      } else {
-        this.cursor.next();
-      }
-      if (this.cursor.isAtEnd) {
-        this.respond(msg, true);
-        this.fireEvent("terminated");
-        return;
-      }
+    const artifact = parseForgeArtifact(raw);
+    if (!artifact) {
+      return "Artifact JSON did not match an expected forge / solc shape (missing deployedBytecode).";
     }
-    this.respond(msg, true);
-    this.fireEvent("stopped", {
-      reason: "step",
-      threadId: 1,
-      allThreadsStopped: true,
+    const root =
+      projectRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? path.dirname(artifactPath);
+    this.contractContext = this.buildContractContext(artifact, root);
+    return null;
+  }
+
+  private buildContractContext(artifact: ForgeArtifact, projectRoot: string): ContractContext {
+    const sourceMap = parseSourceMap(artifact.deployedSourceMap);
+    const pcMap = artifact.deployedBytecode
+      ? buildPcToInstructionIndex(artifact.deployedBytecode)
+      : [];
+    const sources = artifact.sources.map((relPath) => {
+      const absolutePath = path.isAbsolute(relPath) ? relPath : path.resolve(projectRoot, relPath);
+      let lineIndex: LineIndex | null = null;
+      try {
+        lineIndex = LineIndex.fromText(readFileSync(absolutePath, "utf-8"));
+      } catch {
+        lineIndex = null;
+      }
+      return { absolutePath, lineIndex };
     });
+    return { sourceMap, pcMap, sources, depth: 1 };
   }
 
-  private handleTerminate(msg: DapRequest): void {
-    this.respond(msg, true);
-    this.fireEvent("terminated");
-    this.fireEvent("exited", { exitCode: 0 });
-  }
+  // ── Wire helpers ─────────────────────────────────────────────────
 
-  // ── Wire helpers ──────────────────────────────────────────────────
+  private summariseLoadState(): string {
+    const parts: string[] = [];
+    if (this.cursor) parts.push(`${this.cursor.length} trace steps`);
+    if (this.contractContext) {
+      const sourcesWithIndex = this.contractContext.sources.filter((s) => s.lineIndex).length;
+      parts.push(`${sourcesWithIndex} source file${sourcesWithIndex === 1 ? "" : "s"} indexed`);
+    }
+    if (parts.length === 0) {
+      return "Live execution path not yet wired (stage 4) — supply `traceFile` and `artifact` for stage-3 stepping.";
+    }
+    return `Loaded: ${parts.join(", ")}`;
+  }
 
   private respond(
     request: DapRequest,
@@ -326,11 +576,24 @@ export class SolidityDapConfigurationProvider implements vscode.DebugConfigurati
   }
 }
 
-// ── Local DAP type aliases ──────────────────────────────────────────
-//
-// We avoid pulling `@vscode/debugprotocol` for the scaffold. The
-// shape is documented at https://microsoft.github.io/debug-adapter-protocol/
-// and we only touch a handful of fields per request.
+// ── Internal types ──────────────────────────────────────────────────
+
+/**
+ * One loaded contract's debug context: the parsed source map, the
+ * pre-computed PC → instruction-index table, and the source-file
+ * line indexes the source map references via `fileIndex`.
+ *
+ * `depth` is the call-stack depth at which this context's bytecode
+ * is executing. Stage 3 supports a single context at the entry
+ * depth (1); stage 4 will track a stack of contexts as the trace
+ * crosses CALL / CREATE boundaries.
+ */
+interface ContractContext {
+  sourceMap: SourceMapEntry[];
+  pcMap: number[];
+  sources: { absolutePath: string; lineIndex: LineIndex | null }[];
+  depth: number;
+}
 
 interface DapRequest {
   seq: number;
@@ -339,7 +602,12 @@ interface DapRequest {
   arguments?: unknown;
 }
 
-/** `launch` request arguments — kept loose; concrete properties land per stage. */
+interface SetBreakpointsArgs {
+  source: { path?: string; name?: string };
+  breakpoints?: { line: number; column?: number; condition?: string }[];
+}
+
+/** `launch` request arguments — concrete properties land per stage. */
 interface LaunchArguments {
   program?: string;
   test?: string;
@@ -347,8 +615,20 @@ interface LaunchArguments {
   /**
    * Path to a JSON file with a pre-saved EVM trace
    * (`cast run --json <txhash> > trace.json` is the canonical
-   * source). Stage 2 escape hatch until stage 3 wires the live
+   * source). Stage 2 escape hatch until stage 4 wires the live
    * `forge test --debug --json` execution path.
    */
   traceFile?: string;
+  /**
+   * Path to a forge artifact JSON (`out/<file>.sol/<Contract>.json`).
+   * Stage 3 reads this for the deployed bytecode + sourceMap +
+   * sources list, which together let the adapter resolve trace
+   * PCs back to source positions.
+   */
+  artifact?: string;
+  /**
+   * Project root used to resolve the artifact's relative source
+   * paths. Defaults to the workspace folder.
+   */
+  projectRoot?: string;
 }
