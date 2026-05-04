@@ -77,15 +77,21 @@ function setupFixture(files: Record<string, string>): Fixture {
 
   for (const [name, contents] of Object.entries(files)) {
     const filePath = path.join(tmpDir, name);
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, contents, "utf-8");
     const uri = URI.file(filePath).toString();
     uris.push(uri);
     uriByName[name] = uri;
   }
 
-  const workspace: Pick<WorkspaceManager, "getAllFileUris" | "uriToPath"> = {
+  const workspace: Pick<WorkspaceManager, "getAllFileUris" | "uriToPath" | "resolveImport"> = {
     getAllFileUris: () => uris.slice(),
     uriToPath: (uri: string) => URI.parse(uri).fsPath,
+    resolveImport: (importPath: string, fromFile: string) => {
+      if (!importPath.startsWith(".")) return null;
+      const target = path.resolve(path.dirname(fromFile), importPath);
+      return fs.existsSync(target) ? target : null;
+    },
   };
 
   const parser = new SolidityParser();
@@ -227,6 +233,17 @@ describe("CallHierarchyProvider", () => {
         calleeNames.includes("transfer"),
         `expected useB's outgoing calls to include transfer, got [${calleeNames.join(", ")}]`,
       );
+
+      const transfer = calls.find((c) => c.to.name === "transfer");
+      assert.ok(transfer, "expected transfer outgoing call");
+      const incoming = await fixture.provider.getIncomingCalls(transfer.to);
+      const incomingNames = incoming.map((c) => c.from.name);
+      assert.ok(
+        incomingNames.includes("useB"),
+        `expected switching to callers of returned transfer item to include useB, got [${incomingNames.join(
+          ", ",
+        )}]`,
+      );
     });
 
     it("uses semantic targets for outgoing calls when SolcBridge resolves the callee", async () => {
@@ -273,6 +290,65 @@ contract B {
         assert.equal(calls[0].to.detail, "A");
       } finally {
         teardownFixture(exact);
+      }
+    });
+
+    it("resolves calls through local variable receiver types before global same-name methods", async () => {
+      const erc4626 = setupFixture({
+        "src/IERC4626.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+interface IERC4626 {
+    function convertToAssets(uint256 shares) external view returns (uint256 assets);
+}
+`,
+        "src/PoolVault.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "./IERC4626.sol";
+
+abstract contract MultiAssetVault {}
+
+abstract contract PoolVault is MultiAssetVault {
+    mapping(uint256 => IERC4626) public vaults;
+
+    function _effectiveBalance(uint256 poolId) internal view returns (uint256 bal) {
+        IERC4626 vault = vaults[poolId];
+        if (address(vault) != address(0)) {
+            uint256 shares = 1;
+            bal += vault.convertToAssets(shares);
+        }
+    }
+}
+`,
+        "test/MockERC4626.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract MockERC4626 {
+    function convertToAssets(uint256 shares) public view returns (uint256 assets) {
+        return shares;
+    }
+}
+`,
+      });
+
+      try {
+        const poolVaultUri = URI.file(path.join(erc4626.tmpDir, "src/PoolVault.sol")).toString();
+        const calls = await erc4626.provider.getOutgoingCalls({
+          name: "_effectiveBalance",
+          kind: SymbolKind.Function,
+          uri: poolVaultUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "PoolVault",
+        });
+
+        const convert = calls.find((call) => call.to.name === "convertToAssets");
+        assert.ok(convert, "expected convertToAssets outgoing call");
+        assert.equal(convert.to.detail, "IERC4626");
+        assert.notEqual(convert.to.detail, "MockERC4626");
+      } finally {
+        teardownFixture(erc4626);
       }
     });
   });

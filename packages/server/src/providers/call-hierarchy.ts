@@ -80,13 +80,21 @@ export class CallHierarchyProvider {
 
     if (funcSymbols.length === 0) return [];
 
-    return funcSymbols.map((sym) => ({
+    const symbolsAtCursor = funcSymbols.filter(
+      (sym) =>
+        sym.filePath === document.uri &&
+        this.positionInRange(position, sym.nameRange.start, sym.nameRange.end),
+    );
+    const prepared = symbolsAtCursor.length > 0 ? symbolsAtCursor : funcSymbols;
+
+    return prepared.map((sym) => ({
       name: sym.name,
       kind: sym.kind === "modifier" ? SymbolKind.Method : SymbolKind.Function,
       uri: sym.filePath,
       range: sym.range,
       selectionRange: sym.nameRange,
       detail: sym.containerName,
+      data: this.makeKey(sym.filePath, sym.name, sym.containerName),
     }));
   }
 
@@ -119,13 +127,17 @@ export class CallHierarchyProvider {
         continue;
       }
 
-      const callerKey = `${site.callerUri}:${site.callerName}`;
+      const callerKey = this.makeKey(site.callerUri, site.callerName, site.callerContainer);
       let entry = callerMap.get(callerKey);
 
       if (!entry) {
         const callerSymbols = this.symbolIndex.findSymbols(site.callerName);
         const callerSym =
-          callerSymbols.find((s) => s.filePath === site.callerUri) ?? callerSymbols[0];
+          callerSymbols.find(
+            (s) => s.filePath === site.callerUri && s.containerName === site.callerContainer,
+          ) ??
+          callerSymbols.find((s) => s.filePath === site.callerUri) ??
+          callerSymbols[0];
         if (!callerSym) continue;
 
         entry = {
@@ -136,6 +148,7 @@ export class CallHierarchyProvider {
             range: callerSym.range,
             selectionRange: callerSym.nameRange,
             detail: callerSym.containerName,
+            data: this.makeKey(callerSym.filePath, callerSym.name, callerSym.containerName),
           },
           ranges: [],
         };
@@ -161,7 +174,7 @@ export class CallHierarchyProvider {
     await this.ensureIndexed(token);
     if (token?.isCancellationRequested) return [];
 
-    const key = this.makeKey(item.uri, item.name);
+    const key = this.makeKey(item.uri, item.name, item.detail);
     const sites = this.outgoingCalls.get(key) ?? [];
 
     // Group by callee function
@@ -174,15 +187,7 @@ export class CallHierarchyProvider {
       let entry = calleeMap.get(calleeKey);
 
       if (!entry) {
-        const calleeSym =
-          site.target ??
-          this.symbolIndex.findSymbols(site.calleeName).map((sym) => ({
-            name: sym.name,
-            uri: sym.filePath,
-            range: sym.range,
-            selectionRange: sym.nameRange,
-            containerName: sym.containerName,
-          }))[0];
+        const calleeSym = site.target ?? this.resolveCalleeSymbol(site);
         if (!calleeSym) continue;
 
         entry = {
@@ -193,6 +198,7 @@ export class CallHierarchyProvider {
             range: calleeSym.range,
             selectionRange: calleeSym.selectionRange,
             detail: calleeSym.containerName,
+            data: this.makeKey(calleeSym.uri, calleeSym.name, calleeSym.containerName),
           },
           ranges: [],
         };
@@ -268,7 +274,7 @@ export class CallHierarchyProvider {
     for (const contract of result.sourceUnit.contracts) {
       for (const func of contract.functions) {
         const callerName = func.name ?? func.kind;
-        const callerKey = this.makeKey(uri, callerName);
+        const callerKey = this.makeKey(uri, callerName, contract.name);
 
         const bodyRange = this.getFunctionBodyRange(text, func.range.start.line);
         if (!bodyRange) continue;
@@ -296,9 +302,13 @@ export class CallHierarchyProvider {
           if (CALL_LIKE_KEYWORDS.has(calleeName)) continue;
           if (isSolidityBuiltinType(calleeName)) continue;
 
-          const qualifier = this.resolveQualifier(rawQualifier, func, contract);
-
           const absoluteMatchStart = match.index + match[0].lastIndexOf(calleeName);
+          const qualifier = this.resolveQualifier(
+            rawQualifier,
+            func,
+            contract,
+            bodyText.slice(0, absoluteMatchStart),
+          );
           const precedingInBody = bodyText.slice(0, absoluteMatchStart);
           const newlinesBefore = (precedingInBody.match(/\n/g) ?? []).length;
           const callLine = bodyRange.bodyStartLine + newlinesBefore;
@@ -314,11 +324,27 @@ export class CallHierarchyProvider {
           const target = this.resolveSemanticCallTarget(uri, text, callRange);
 
           const outgoing = this.outgoingCalls.get(callerKey) ?? [];
-          outgoing.push({ calleeName, qualifier, callRange, callerUri: uri, callerName, target });
+          outgoing.push({
+            calleeName,
+            qualifier,
+            callRange,
+            callerUri: uri,
+            callerName,
+            callerContainer: contract.name,
+            target,
+          });
           this.outgoingCalls.set(callerKey, outgoing);
 
           const incoming = this.incomingCalls.get(calleeName) ?? [];
-          incoming.push({ calleeName, qualifier, callRange, callerUri: uri, callerName, target });
+          incoming.push({
+            calleeName,
+            qualifier,
+            callRange,
+            callerUri: uri,
+            callerName,
+            callerContainer: contract.name,
+            target,
+          });
           this.incomingCalls.set(calleeName, incoming);
         }
       }
@@ -392,6 +418,7 @@ export class CallHierarchyProvider {
     rawQualifier: string | undefined,
     func: FunctionDefinition,
     contract: ContractDefinition,
+    bodyPrefix: string,
   ): string | undefined {
     if (!rawQualifier) return undefined;
 
@@ -408,6 +435,10 @@ export class CallHierarchyProvider {
         return this.stripTypeDecorations(p.typeName) ?? rawQualifier;
       }
     }
+
+    const localType = this.findLocalVariableType(bodyPrefix, rawQualifier);
+    if (localType) return localType;
+
     for (const v of contract.stateVariables) {
       if (v.name === rawQualifier) {
         return this.stripTypeDecorations(v.typeName) ?? rawQualifier;
@@ -415,6 +446,92 @@ export class CallHierarchyProvider {
     }
 
     return rawQualifier;
+  }
+
+  private findLocalVariableType(bodyPrefix: string, name: string): string | undefined {
+    const escapedName = escapeRegExp(name);
+    const declarationRe = new RegExp(
+      String.raw`(?:^|[;{}\n])\s*([A-Za-z_$][\w$]*(?:\s*\[[^\]]*\])*)\s+(?:(?:memory|storage|calldata)\s+)?${escapedName}\b`,
+      "g",
+    );
+    let match: RegExpExecArray | null;
+    let typeName: string | undefined;
+    while ((match = declarationRe.exec(bodyPrefix)) !== null) {
+      typeName = this.stripTypeDecorations(match[1]);
+    }
+    return typeName;
+  }
+
+  private resolveCalleeSymbol(site: CallSite): CallTarget | undefined {
+    const candidates = this.symbolIndex
+      .findSymbols(site.calleeName)
+      .filter((sym) => sym.kind === "function" || sym.kind === "modifier");
+    if (candidates.length === 0) return undefined;
+
+    const visible = this.filterVisibleSymbols(site.callerUri, candidates);
+    const pool = visible.length > 0 ? visible : candidates;
+
+    if (site.qualifier) {
+      const allowed = this.computeAllowedQualifiers(site.qualifier);
+      const qualified = pool.find((sym) => sym.containerName && allowed.has(sym.containerName));
+      if (qualified) return this.symbolToTarget(qualified);
+    }
+
+    const local = pool.find(
+      (sym) => sym.filePath === site.callerUri && sym.containerName === site.callerContainer,
+    );
+    if (local) return this.symbolToTarget(local);
+
+    return this.symbolToTarget(pool[0]);
+  }
+
+  private symbolToTarget(sym: {
+    name: string;
+    filePath: string;
+    range: Range;
+    nameRange: Range;
+    containerName?: string;
+  }): CallTarget {
+    return {
+      name: sym.name,
+      uri: sym.filePath,
+      range: sym.range,
+      selectionRange: sym.nameRange,
+      containerName: sym.containerName,
+    };
+  }
+
+  private filterVisibleSymbols<T extends { filePath: string }>(callerUri: string, symbols: T[]): T[] {
+    const resolveImport = (this.workspace as Partial<WorkspaceManager>).resolveImport;
+    if (!resolveImport) return symbols;
+    const reachable = this.collectReachableUris(callerUri);
+    return symbols.filter((sym) => reachable.has(sym.filePath));
+  }
+
+  private collectReachableUris(uri: string, visited: Set<string> = new Set()): Set<string> {
+    if (visited.has(uri)) return visited;
+    visited.add(uri);
+
+    const resolveImport = (this.workspace as Partial<WorkspaceManager>).resolveImport;
+    if (!resolveImport) return visited;
+
+    const result = this.parser.get(uri);
+    if (!result) return visited;
+
+    let fsPath: string;
+    try {
+      fsPath = this.workspace.uriToPath(uri);
+    } catch {
+      return visited;
+    }
+
+    for (const imp of result.sourceUnit.imports) {
+      const targetPath = resolveImport.call(this.workspace, imp.path, fsPath);
+      if (!targetPath) continue;
+      this.collectReachableUris(URI.file(targetPath).toString(), visited);
+    }
+
+    return visited;
   }
 
   /**
@@ -439,6 +556,15 @@ export class CallHierarchyProvider {
     const endsAfter =
       range.end.line > end.line ||
       (range.end.line === end.line && range.end.character >= end.character);
+    return startsBefore && endsAfter;
+  }
+
+  private positionInRange(position: Position, start: Position, end: Position): boolean {
+    const startsBefore =
+      start.line < position.line ||
+      (start.line === position.line && start.character <= position.character);
+    const endsAfter =
+      end.line > position.line || (end.line === position.line && end.character >= position.character);
     return startsBefore && endsAfter;
   }
 
@@ -495,8 +621,8 @@ export class CallHierarchyProvider {
     return null;
   }
 
-  private makeKey(uri: string, name: string): string {
-    return `${uri}#${name}`;
+  private makeKey(uri: string, name: string, containerName?: string): string {
+    return `${uri}#${containerName ?? ""}#${name}`;
   }
 }
 
@@ -513,6 +639,7 @@ interface CallSite {
   callRange: Range;
   callerUri: string;
   callerName: string;
+  callerContainer?: string;
   target?: CallTarget;
 }
 
@@ -522,4 +649,8 @@ interface CallTarget {
   range: Range;
   selectionRange: Range;
   containerName?: string;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
