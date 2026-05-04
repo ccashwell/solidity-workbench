@@ -384,14 +384,43 @@ May 2026 sweep:
   layout. `supportsEvaluateForHovers` flipped on so VSCode's
   hover surfaces values inline.
 
-**Stretch goals (not blocking).** A live `forge test --debug
---json` execution path (so users don't have to hand-feed a
-saved trace), AST-driven local-variable decoding (mapping
-Solidity identifiers to stack slots), and multi-contract source
-maps (loading the inner contract's artifact when a CALL crosses
-a boundary). All three are valuable but the adapter is functional
-without them — users can step through any trace they save with
-`cast run --json` against a single contract.
+**Stretch goals (DONE).** May 2026 sweep:
+
+- **Live `cast run --json` launch path.** Setting `txHash`
+  (and optionally `rpcUrl` / `castPath`) in launch.json makes
+  the adapter spawn `cast run --json <txhash>` itself instead
+  of requiring a hand-saved trace file. 10-min timeout, 256 MB
+  stdout buffer, ingests on cast non-zero exit (revert) too.
+- **AST-driven Locals scope + named call frames.** New
+  `extractFunctions` / `findEnclosingFunction` helpers in
+  `@solidity-workbench/common` walk the artifact's compactAST
+  (and legacyAST) for FunctionDefinition nodes with their
+  parameters and locally-declared `VariableDeclaration`s.
+  Internal call-stack frames now use the actual Solidity
+  function name; a "Source-level locals" scope lists the
+  enclosing function's parameters and in-scope locals (out-of-
+  scope ones are filtered via the AST node's `src` byte
+  range). Stack-slot mapping (which EVM stack position each
+  identifier lives at) remains a placeholder — values render
+  as `(parameter — stack-slot mapping pending)`. 8 unit tests
+  on the AST walker.
+- **Multi-contract source maps.** Launch config gains a
+  `contracts: [{ address, artifact, projectRoot? }]` array.
+  The adapter loads each into an `auxContexts` map keyed by
+  address, walks the trace once at launch to build a per-step
+  `(ContractContext | null)[]` stream (CALL / STATICCALL /
+  DELEGATECALL targets read from the stack), and routes
+  `resolveStepSource` / storage pretty-print / disassembly /
+  identifier-evaluate through `activeContext()` instead of the
+  fixed entry contract. `loadedSources` unions every loaded
+  contract's source list so VSCode's panel shows them all.
+
+The remaining nice-to-have, *not* blocking anything: full
+EVM-stack tracking that maps live Solidity identifiers to their
+runtime stack slots so the Source-level locals scope shows
+actual values. Doing that properly needs a parallel stack
+simulator that walks the disassembled bytecode alongside the
+trace; left for a future iteration.
 
 ### 2. Migrate parsing hot path to Solar when it stabilizes
 

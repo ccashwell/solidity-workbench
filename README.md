@@ -313,10 +313,14 @@ Two paths:
   `forge debug --rpc-url <url> <txHash>` for the canonical Foundry
   TUI.
 - **Native DAP adapter** (`type: "solidity-workbench"`): step
-  through any saved EVM trace from VSCode's Run-and-Debug panel.
-  Hand the adapter a trace from `cast run --json <txhash> > trace.json`
-  plus the contract's forge artifact, and it resolves PCs back to
-  source lines on the fly:
+  through any EVM trace from VSCode's Run-and-Debug panel. Two
+  ways to feed a trace in:
+  - **Live**: set `txHash` (and optionally `rpcUrl`) in
+    launch.json — the adapter spawns `cast run --json <txhash>`
+    itself.
+  - **Saved**: set `traceFile` to a previously-captured
+    `cast run --json <txhash> > trace.json`.
+  Pair either with the contract's forge artifact:
     - **Source-aware step over / step in / step out / continue**,
       with line breakpoints set in the gutter of any `.sol` file.
     - **Internal call stack** built from solc's source-map jump
@@ -330,12 +334,18 @@ Two paths:
       `storage[<slot>]`, and bare state-variable identifiers.
     - **Disassembly view** of the deployed bytecode through
       Cancun + post-Cancun opcodes.
+    - **Source-level locals** listing the enclosing function's
+      parameters and in-scope locals (names + types), surfaced
+      via the artifact's solc AST.
+    - **Multi-contract** source resolution: list deployed
+      contracts under `contracts: [{ address, artifact }]` in
+      launch.json and the adapter switches the active source
+      map / storage layout when a CALL crosses a boundary.
   See the launch.json snippet (Cmd+Shift+P → "Debug: Add
-  Configuration..." → "Solidity Workbench: Debug Foundry Test")
-  or read [PRODUCTION_GAPS.md](PRODUCTION_GAPS.md) for the
-  remaining stretch goals (live `forge test --debug --json`
-  launch, AST-driven local-variable decoding, multi-contract
-  source maps).
+  Configuration..." → "Solidity Workbench: Debug Foundry Test").
+  The remaining nice-to-have, runtime-value resolution for
+  source-level locals (mapping Solidity identifiers to live EVM
+  stack slots), is tracked in [PRODUCTION_GAPS.md](PRODUCTION_GAPS.md).
 
 ### IR inspection
 
