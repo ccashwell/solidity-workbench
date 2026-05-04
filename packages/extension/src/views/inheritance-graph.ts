@@ -158,6 +158,11 @@ export class InheritanceGraphPanel {
   .title { font-weight: 600; white-space: nowrap; }
   .stats { color: var(--muted); white-space: nowrap; }
   .spacer { flex: 1; }
+  .controls {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
   input[type="search"] {
     width: min(320px, 25vw);
     background: var(--input);
@@ -182,12 +187,27 @@ export class InheritanceGraphPanel {
     cursor: pointer;
   }
   button:hover { border-color: var(--accent); }
+  button.compact {
+    min-width: 30px;
+    padding-inline: 7px;
+  }
+  .zoom {
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    min-width: 42px;
+    text-align: center;
+  }
   .canvas {
     position: relative;
     overflow: auto;
     height: 100%;
+    cursor: grab;
   }
-  svg { display: block; min-width: 100%; min-height: 100%; }
+  .canvas.panning {
+    cursor: grabbing;
+    user-select: none;
+  }
+  svg { display: block; transform-origin: 0 0; }
   .lane-label {
     fill: var(--muted);
     font-size: 11px;
@@ -241,7 +261,13 @@ export class InheritanceGraphPanel {
       <label><input id="tests" type="checkbox"> Tests</label>
       <label><input id="deps" type="checkbox"> Deps</label>
       <div class="spacer"></div>
-      <button id="fit" title="Fit graph">Fit</button>
+      <div class="controls">
+        <button class="compact" id="zoomOut" title="Zoom out">-</button>
+        <span class="zoom" id="zoomLabel">100%</span>
+        <button class="compact" id="zoomIn" title="Zoom in">+</button>
+        <button id="fit" title="Fit graph to the current panel">Fit</button>
+        <button id="reset" title="Reset zoom and scroll">Reset</button>
+      </div>
     </div>
     <div class="canvas" id="canvas"></div>
   </div>
@@ -253,7 +279,12 @@ export class InheritanceGraphPanel {
       focused: Boolean(graph.focusId),
       tests: false,
       deps: false,
+      zoom: 1,
+      autoFit: true,
     };
+    let svgSize = { width: 0, height: 0 };
+    let isPanning = false;
+    let panStart = { x: 0, y: 0, left: 0, top: 0 };
 
     const els = {
       canvas: document.getElementById("canvas"),
@@ -263,6 +294,10 @@ export class InheritanceGraphPanel {
       tests: document.getElementById("tests"),
       deps: document.getElementById("deps"),
       fit: document.getElementById("fit"),
+      reset: document.getElementById("reset"),
+      zoomIn: document.getElementById("zoomIn"),
+      zoomOut: document.getElementById("zoomOut"),
+      zoomLabel: document.getElementById("zoomLabel"),
     };
     els.focused.checked = state.focused;
     els.focused.disabled = !graph.focusId;
@@ -380,6 +415,9 @@ export class InheritanceGraphPanel {
       els.canvas.innerHTML = '<svg width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '">' +
         '<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)"></path></marker></defs>' +
         lanes + edges + nodes + '</svg>';
+      svgSize = { width, height };
+      if (state.autoFit) fitToView(false);
+      else applyZoom();
 
       for (const el of els.canvas.querySelectorAll(".node")) {
         el.addEventListener("click", () => {
@@ -388,6 +426,46 @@ export class InheritanceGraphPanel {
           vscode.postMessage({ type: "navigate", uri: node.uri, selectionRange: node.selectionRange });
         });
       }
+    }
+
+    function applyZoom() {
+      const svg = els.canvas.querySelector("svg");
+      if (!svg) return;
+      svg.style.width = Math.round(svgSize.width * state.zoom) + "px";
+      svg.style.height = Math.round(svgSize.height * state.zoom) + "px";
+      els.zoomLabel.textContent = Math.round(state.zoom * 100) + "%";
+    }
+
+    function setZoom(nextZoom, anchor) {
+      const previous = state.zoom;
+      state.zoom = Math.max(0.25, Math.min(2.5, nextZoom));
+      state.autoFit = false;
+      applyZoom();
+      if (!anchor || previous === 0) return;
+      const ratio = state.zoom / previous;
+      els.canvas.scrollLeft = (els.canvas.scrollLeft + anchor.x) * ratio - anchor.x;
+      els.canvas.scrollTop = (els.canvas.scrollTop + anchor.y) * ratio - anchor.y;
+    }
+
+    function fitToView(smooth) {
+      if (svgSize.width === 0 || svgSize.height === 0) return;
+      const xScale = (els.canvas.clientWidth - 32) / svgSize.width;
+      const yScale = (els.canvas.clientHeight - 32) / svgSize.height;
+      state.zoom = Math.max(0.25, Math.min(1.25, xScale, yScale));
+      state.autoFit = true;
+      applyZoom();
+      els.canvas.scrollTo({
+        left: 0,
+        top: 0,
+        behavior: smooth ? "smooth" : "auto",
+      });
+    }
+
+    function resetView() {
+      state.zoom = 1;
+      state.autoFit = false;
+      applyZoom();
+      els.canvas.scrollTo({ left: 0, top: 0, behavior: "smooth" });
     }
 
     function computeLevels(nodes, edges) {
@@ -432,7 +510,47 @@ export class InheritanceGraphPanel {
     els.focused.addEventListener("change", () => { state.focused = els.focused.checked; render(); });
     els.tests.addEventListener("change", () => { state.tests = els.tests.checked; render(); });
     els.deps.addEventListener("change", () => { state.deps = els.deps.checked; render(); });
-    els.fit.addEventListener("click", () => { els.canvas.scrollTo({ left: 0, top: 0, behavior: "smooth" }); });
+    els.zoomOut.addEventListener("click", () => {
+      setZoom(state.zoom - 0.15, { x: els.canvas.clientWidth / 2, y: els.canvas.clientHeight / 2 });
+    });
+    els.zoomIn.addEventListener("click", () => {
+      setZoom(state.zoom + 0.15, { x: els.canvas.clientWidth / 2, y: els.canvas.clientHeight / 2 });
+    });
+    els.fit.addEventListener("click", () => fitToView(true));
+    els.reset.addEventListener("click", resetView);
+    els.canvas.addEventListener("wheel", (event) => {
+      if (!event.metaKey && !event.ctrlKey) return;
+      event.preventDefault();
+      setZoom(state.zoom + (event.deltaY < 0 ? 0.1 : -0.1), {
+        x: event.clientX - els.canvas.getBoundingClientRect().left,
+        y: event.clientY - els.canvas.getBoundingClientRect().top,
+      });
+    }, { passive: false });
+    els.canvas.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target.closest(".node")) return;
+      isPanning = true;
+      panStart = {
+        x: event.clientX,
+        y: event.clientY,
+        left: els.canvas.scrollLeft,
+        top: els.canvas.scrollTop,
+      };
+      els.canvas.classList.add("panning");
+      els.canvas.setPointerCapture(event.pointerId);
+    });
+    els.canvas.addEventListener("pointermove", (event) => {
+      if (!isPanning) return;
+      els.canvas.scrollLeft = panStart.left - (event.clientX - panStart.x);
+      els.canvas.scrollTop = panStart.top - (event.clientY - panStart.y);
+    });
+    els.canvas.addEventListener("pointerup", (event) => {
+      isPanning = false;
+      els.canvas.classList.remove("panning");
+      els.canvas.releasePointerCapture(event.pointerId);
+    });
+    window.addEventListener("resize", () => {
+      if (state.autoFit) fitToView(false);
+    });
 
     render();
   </script>

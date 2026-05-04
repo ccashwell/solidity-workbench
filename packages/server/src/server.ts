@@ -44,6 +44,7 @@ import { DocumentLinksProvider } from "./providers/document-links.js";
 import { ImplementationProvider } from "./providers/implementation.js";
 import { InheritanceGraphProvider } from "./providers/inheritance-graph.js";
 import { SolcBridge } from "./compiler/solc-bridge.js";
+import { SemanticResolver } from "./analyzer/semantic-resolver.js";
 import { listTests } from "./providers/list-tests.js";
 import {
   GetInheritanceGraph,
@@ -90,6 +91,7 @@ let selectionRangesProvider: SelectionRangesProvider;
 let documentLinksProvider: DocumentLinksProvider;
 let implementationProvider: ImplementationProvider;
 let inheritanceGraphProvider: InheritanceGraphProvider;
+let semanticResolver: SemanticResolver;
 let solcBridge: SolcBridge;
 
 /**
@@ -146,9 +148,10 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   parserPool = createParserPool();
   if (parserPool) parser.setPool(parserPool);
 
+  semanticResolver = new SemanticResolver(parser, workspaceManager, symbolIndex);
   completionProvider = new CompletionProvider(symbolIndex, workspaceManager);
-  definitionProvider = new DefinitionProvider(symbolIndex, workspaceManager);
-  hoverProvider = new HoverProvider(symbolIndex, parser, workspaceManager);
+  definitionProvider = new DefinitionProvider(symbolIndex, workspaceManager, semanticResolver);
+  hoverProvider = new HoverProvider(symbolIndex, parser, workspaceManager, semanticResolver);
   diagnosticsProvider = new DiagnosticsProvider(workspaceManager, connection, documents);
   diagnosticsProvider.setParser(parser);
   semanticTokensProvider = new SemanticTokensProvider(parser);
@@ -161,14 +164,23 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   codeLensProvider = new CodeLensProvider(symbolIndex, parser, workspaceManager);
   referencesProvider = new ReferencesProvider(symbolIndex, workspaceManager, parser, documents);
   autoImportProvider = new AutoImportProvider(symbolIndex, workspaceManager, parser);
-  callHierarchyProvider = new CallHierarchyProvider(symbolIndex, workspaceManager, parser);
-  typeHierarchyProvider = new TypeHierarchyProvider(symbolIndex, parser);
+  callHierarchyProvider = new CallHierarchyProvider(
+    symbolIndex,
+    workspaceManager,
+    parser,
+    semanticResolver,
+  );
+  typeHierarchyProvider = new TypeHierarchyProvider(symbolIndex, parser, semanticResolver);
   documentHighlightProvider = new DocumentHighlightProvider(symbolIndex, parser);
   foldingRangesProvider = new FoldingRangesProvider(parser);
   selectionRangesProvider = new SelectionRangesProvider(parser);
   documentLinksProvider = new DocumentLinksProvider(parser, workspaceManager);
   implementationProvider = new ImplementationProvider(symbolIndex);
-  inheritanceGraphProvider = new InheritanceGraphProvider(parser, workspaceManager);
+  inheritanceGraphProvider = new InheritanceGraphProvider(
+    parser,
+    workspaceManager,
+    semanticResolver,
+  );
   solcBridge = new SolcBridge(workspaceManager);
 
   // Make the type-resolved AST cache available to providers that want it
@@ -354,6 +366,7 @@ connection.onDidChangeWatchedFiles(async (params) => {
   if (needsWorkspaceReload) {
     connection.console.log("foundry.toml or remappings.txt changed — reloading workspace");
     await workspaceManager.initialize();
+    semanticResolver.invalidate();
     await symbolIndex.indexWorkspace();
     pushServerState({
       phase: "idle",

@@ -4,6 +4,7 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
+import { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { DefinitionProvider } from "../providers/definition.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
@@ -135,6 +136,56 @@ contract D {
       assert.ok(def, "expected member resolution");
       const locs = Array.isArray(def) ? def : [def];
       assert.equal((locs[0] as any).range.start.line, 2);
+    });
+
+    it("uses the importing file to disambiguate duplicate receiver contracts", () => {
+      const currentUri = "file:///w/src/Use.sol";
+      const srcBaseUri = "file:///w/src/Base.sol";
+      const testBaseUri = "file:///w/test/Base.sol";
+      const files = {
+        [srcBaseUri]: `pragma solidity ^0.8.0;
+contract Base {
+    function ping() public {}
+}`,
+        [testBaseUri]: `pragma solidity ^0.8.0;
+contract Base {
+    function ping() public {}
+}`,
+        [currentUri]: `pragma solidity ^0.8.0;
+import "./Base.sol";
+contract Use {
+    function f() external { Base.ping(); }
+}`,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, from: string) =>
+          importPath === "./Base.sol" && from.endsWith("/src/Use.sol")
+            ? URI.parse(srcBaseUri).fsPath
+            : null,
+      } as unknown as WorkspaceManager;
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, workspace);
+      const docs: Record<string, TextDocument> = {};
+      for (const [uri, text] of Object.entries(files)) {
+        parser.parse(uri, text);
+        idx.updateFile(uri);
+        docs[uri] = doc(uri, text);
+      }
+
+      const resolver = new SemanticResolver(parser, workspace, idx);
+      const provider = new DefinitionProvider(idx, workspace, resolver);
+      const line = files[currentUri].split("\n")[3];
+      const def = provider.provideDefinition(docs[currentUri], {
+        line: 3,
+        character: line.indexOf("ping") + 1,
+      });
+
+      assert.ok(def, "expected imported member definition");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc, "expected a Location result");
+      assert.equal(loc.uri, srcBaseUri);
     });
   });
 

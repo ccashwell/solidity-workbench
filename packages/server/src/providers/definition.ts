@@ -5,6 +5,7 @@ import { URI } from "vscode-uri";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
+import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { getWordAtPosition } from "../utils/text.js";
 import { readFileSync } from "node:fs";
 
@@ -23,6 +24,7 @@ export class DefinitionProvider {
   constructor(
     private symbolIndex: SymbolIndex,
     private workspace: WorkspaceManager,
+    private resolver?: SemanticResolver,
   ) {}
 
   /**
@@ -58,8 +60,12 @@ export class DefinitionProvider {
     // Check for dotted access (Type.member)
     const dottedTarget = this.getDottedAccess(text, position);
     if (dottedTarget) {
-      const resolved = this.resolveMemberDefinition(dottedTarget.type, dottedTarget.member);
-      if (resolved) return resolved;
+      const resolved = this.resolveMemberDefinition(
+        dottedTarget.type,
+        dottedTarget.member,
+        document.uri,
+      );
+      if (resolved || this.resolver) return resolved;
     }
 
     // Look up in symbol index
@@ -179,57 +185,56 @@ export class DefinitionProvider {
     return null;
   }
 
+  private resolveMemberDefinition(
+    typeName: string,
+    memberName: string,
+    fromUri?: string,
+  ): Definition | null {
+    const resolved = this.resolver?.findMemberInInheritanceChain(typeName, memberName, fromUri);
+    if (resolved) return Location.create(resolved.filePath, resolved.nameRange);
+
+    const chain = this.symbolIndex.getInheritanceChain(typeName);
+    for (const contract of chain) {
+      const func = contract.functions.find((f) => f.name === memberName);
+      if (func) {
+        const entry = this.symbolIndex.getContract(contract.name);
+        if (entry) return Location.create(entry.uri, func.nameRange);
+      }
+
+      const svar = contract.stateVariables.find((v) => v.name === memberName);
+      if (svar) {
+        const entry = this.symbolIndex.getContract(contract.name);
+        if (entry) return Location.create(entry.uri, svar.nameRange);
+      }
+
+      const event = contract.events.find((e) => e.name === memberName);
+      if (event) {
+        const entry = this.symbolIndex.getContract(contract.name);
+        if (entry) return Location.create(entry.uri, event.nameRange);
+      }
+    }
+    return null;
+  }
+
   private getDottedAccess(
     text: string,
     position: Position,
   ): { type: string; member: string } | null {
     const line = text.split("\n")[position.line] ?? "";
-    const before = line.slice(0, position.character);
+    let memberStart = position.character;
+    while (memberStart > 0 && /[\w$]/.test(line[memberStart - 1])) memberStart--;
+    if (memberStart === 0 || line[memberStart - 1] !== ".") return null;
 
-    // Match patterns like `ContractName.functionName` or `variable.member`
-    const match = before.match(/(\w+)\.(\w*)$/);
-    if (match) {
-      return { type: match[1], member: match[2] || this.getWordAfterDot(line, position.character) };
-    }
-    return null;
-  }
+    const receiverEnd = memberStart - 1;
+    let receiverStart = receiverEnd;
+    while (receiverStart > 0 && /[\w$]/.test(line[receiverStart - 1])) receiverStart--;
+    if (receiverStart === receiverEnd) return null;
 
-  private resolveMemberDefinition(typeName: string, memberName: string): Definition | null {
-    const chain = this.symbolIndex.getInheritanceChain(typeName);
-    for (const contract of chain) {
-      // Search functions
-      const func = contract.functions.find((f) => f.name === memberName);
-      if (func) {
-        const entry = this.symbolIndex.getContract(contract.name);
-        if (entry) {
-          return Location.create(entry.uri, func.nameRange);
-        }
-      }
+    let memberEnd = position.character;
+    while (memberEnd < line.length && /[\w$]/.test(line[memberEnd])) memberEnd++;
 
-      // Search state variables
-      const svar = contract.stateVariables.find((v) => v.name === memberName);
-      if (svar) {
-        const entry = this.symbolIndex.getContract(contract.name);
-        if (entry) {
-          return Location.create(entry.uri, svar.nameRange);
-        }
-      }
-
-      // Search events
-      const event = contract.events.find((e) => e.name === memberName);
-      if (event) {
-        const entry = this.symbolIndex.getContract(contract.name);
-        if (entry) {
-          return Location.create(entry.uri, event.nameRange);
-        }
-      }
-    }
-    return null;
-  }
-
-  private getWordAfterDot(line: string, dotPosition: number): string {
-    let end = dotPosition;
-    while (end < line.length && /[\w$]/.test(line[end])) end++;
-    return line.slice(dotPosition, end);
+    const receiver = line.slice(receiverStart, receiverEnd);
+    const member = line.slice(memberStart, memberEnd);
+    return receiver && member ? { type: receiver, member } : null;
   }
 }

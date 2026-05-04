@@ -3,6 +3,7 @@ import { SymbolKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
+import type { ResolvedContract, SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { ContractDefinition } from "@solidity-workbench/common";
 import { getWordAtPosition } from "../utils/text.js";
 
@@ -21,6 +22,7 @@ export class TypeHierarchyProvider {
   constructor(
     private symbolIndex: SymbolIndex,
     private parser: SolidityParser,
+    private resolver?: SemanticResolver,
   ) {}
 
   /**
@@ -31,10 +33,11 @@ export class TypeHierarchyProvider {
     const word = getWordAtPosition(text, position)?.text ?? null;
     if (!word) return [];
 
-    const entry = this.symbolIndex.getContract(word);
-    if (!entry) return [];
+    const resolved = this.resolver?.resolveContract(word, document.uri);
+    if (resolved) return [this.contractToItem(resolved.contract, resolved.uri, resolved.id)];
 
-    return [this.contractToItem(entry.contract, entry.uri)];
+    const entry = this.symbolIndex.getContract(word);
+    return entry ? [this.contractToItem(entry.contract, entry.uri)] : [];
   }
 
   /**
@@ -42,6 +45,18 @@ export class TypeHierarchyProvider {
    * Walks the `is` clause.
    */
   getSupertypes(item: TypeHierarchyItem): TypeHierarchyItem[] {
+    const resolved = this.resolveItemContract(item);
+    if (resolved && this.resolver) {
+      const supertypes: TypeHierarchyItem[] = [];
+      for (const base of resolved.contract.baseContracts) {
+        const baseEntry = this.resolver.resolveBaseContract(resolved.uri, base.baseName);
+        if (baseEntry) {
+          supertypes.push(this.contractToItem(baseEntry.contract, baseEntry.uri, baseEntry.id));
+        }
+      }
+      return supertypes;
+    }
+
     const entry = this.symbolIndex.getContract(item.name);
     if (!entry) return [];
 
@@ -62,6 +77,13 @@ export class TypeHierarchyProvider {
    * Scans all contracts for `is ThisContract`.
    */
   getSubtypes(item: TypeHierarchyItem): TypeHierarchyItem[] {
+    const resolved = this.resolveItemContract(item);
+    if (resolved && this.resolver) {
+      return this.resolver
+        .getSubtypes(resolved)
+        .map((entry) => this.contractToItem(entry.contract, entry.uri, entry.id));
+    }
+
     const subtypes: TypeHierarchyItem[] = [];
 
     for (const [, entry] of this.symbolIndex.getAllContracts()) {
@@ -76,7 +98,21 @@ export class TypeHierarchyProvider {
     return subtypes;
   }
 
-  private contractToItem(contract: ContractDefinition, uri: string): TypeHierarchyItem {
+  private resolveItemContract(item: TypeHierarchyItem): ResolvedContract | undefined {
+    const id =
+      typeof item.data === "object" && item.data && "id" in item.data ? item.data.id : null;
+    if (typeof id === "string") {
+      const byId = this.resolver?.resolveContractById(id);
+      if (byId) return byId;
+    }
+    return this.resolver?.resolveContract(item.name, item.uri);
+  }
+
+  private contractToItem(
+    contract: ContractDefinition,
+    uri: string,
+    id?: string,
+  ): TypeHierarchyItem {
     const kind =
       contract.kind === "interface"
         ? SymbolKind.Interface
@@ -96,6 +132,7 @@ export class TypeHierarchyProvider {
       range: contract.range,
       selectionRange: contract.nameRange,
       detail,
+      data: id ? { id } : undefined,
     };
   }
 }

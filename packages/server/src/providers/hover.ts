@@ -13,6 +13,7 @@ import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { URI } from "vscode-uri";
 import { readFileSync } from "node:fs";
 
@@ -32,6 +33,7 @@ export class HoverProvider {
     private symbolIndex: SymbolIndex,
     private parser: SolidityParser,
     private workspace?: WorkspaceManager,
+    private resolver?: SemanticResolver,
   ) {}
 
   /**
@@ -58,7 +60,7 @@ export class HoverProvider {
     // we return `null` — no hover is better than a misleading one.
     const dotted = this.getDottedAccessAtPosition(text, position);
     if (dotted && dotted.member === word) {
-      return this.resolveDottedHover(dotted.receiver, dotted.member);
+      return this.resolveDottedHover(dotted.receiver, dotted.member, document.uri);
     }
 
     const builtinHover = this.getBuiltinHover(word);
@@ -121,7 +123,7 @@ export class HoverProvider {
    * identified but the member can't be located — surfacing the wrong
    * symbol is worse than surfacing no symbol.
    */
-  private resolveDottedHover(receiver: string, member: string): Hover | null {
+  private resolveDottedHover(receiver: string, member: string, fromUri: string): Hover | null {
     const receiverSymbols = this.symbolIndex.findSymbols(receiver);
     if (receiverSymbols.length === 0) return null;
 
@@ -133,10 +135,10 @@ export class HoverProvider {
 
     for (const receiverSym of receiverSymbols) {
       if (receiverSym.kind === "contract" || receiverSym.kind === "interface") {
-        const hit = this.findMemberInInheritanceChain(receiver, member);
+        const hit = this.findMemberInInheritanceChain(receiver, member, fromUri);
         if (hit) return this.buildHover(hit);
       } else if (receiverSym.kind === "library") {
-        const hit = this.findMemberInContract(receiver, member);
+        const hit = this.findMemberInContract(receiver, member, fromUri);
         if (hit) return this.buildHover(hit);
       } else if (receiverSym.kind === "struct") {
         const hit = this.findStructMember(receiverSym, member);
@@ -213,6 +215,7 @@ export class HoverProvider {
   }
 
   private filterVisibleSymbols(currentUri: string, symbols: SolSymbol[]): SolSymbol[] {
+    if (this.resolver) return this.resolver.filterVisibleSymbols(currentUri, symbols);
     const reachable = this.collectReachableUris(currentUri);
     return symbols.filter((sym) => reachable.has(sym.filePath));
   }
@@ -241,7 +244,14 @@ export class HoverProvider {
     return visited;
   }
 
-  private findMemberInInheritanceChain(receiver: string, member: string): SolSymbol | null {
+  private findMemberInInheritanceChain(
+    receiver: string,
+    member: string,
+    fromUri?: string,
+  ): SolSymbol | null {
+    const resolved = this.resolver?.findMemberInInheritanceChain(receiver, member, fromUri);
+    if (resolved) return resolved;
+
     const chain = this.symbolIndex.getInheritanceChain(receiver);
     for (const contract of chain) {
       const sym = this.lookupMember(contract.name, contract, member);
@@ -250,7 +260,17 @@ export class HoverProvider {
     return null;
   }
 
-  private findMemberInContract(receiver: string, member: string): SolSymbol | null {
+  private findMemberInContract(
+    receiver: string,
+    member: string,
+    fromUri?: string,
+  ): SolSymbol | null {
+    const resolvedContract = this.resolver?.resolveContract(receiver, fromUri);
+    if (resolvedContract) {
+      const resolved = this.resolver?.findMemberInContract(resolvedContract, member);
+      if (resolved) return resolved;
+    }
+
     const entry = this.symbolIndex.getContract(receiver);
     if (!entry) return null;
     return this.lookupMember(entry.contract.name, entry.contract, member);

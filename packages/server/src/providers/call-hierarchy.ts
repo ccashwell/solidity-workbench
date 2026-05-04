@@ -16,6 +16,7 @@ import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
+import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { getWordAtPosition, CALL_LIKE_KEYWORDS, isSolidityBuiltinType } from "../utils/text.js";
 
 const CALL_HIERARCHY_INDEX_BATCH_SIZE = 24;
@@ -67,6 +68,7 @@ export class CallHierarchyProvider {
     private symbolIndex: SymbolIndex,
     private workspace: WorkspaceManager,
     private parser: SolidityParser,
+    private resolver?: SemanticResolver,
   ) {}
 
   setSolcBridge(bridge: SolcBridge): void {
@@ -237,6 +239,7 @@ export class CallHierarchyProvider {
     this.reachableCache.clear();
     this.qualifierCache.clear();
     this.fileTextCache.delete(uri);
+    this.resolver?.invalidate(uri);
   }
 
   private async ensureIndexedForItem(
@@ -322,9 +325,15 @@ export class CallHierarchyProvider {
     const allowed = new Set<string>();
     if (!containerName) return allowed;
     allowed.add(containerName);
-    const chain = this.symbolIndex.getInheritanceChain(containerName);
-    for (const base of chain) {
-      if (base.name) allowed.add(base.name);
+    const chain = this.resolver?.getInheritanceChain(containerName) ?? [];
+    if (chain.length > 0) {
+      for (const base of chain) {
+        if (base.contract.name) allowed.add(base.contract.name);
+      }
+    } else {
+      for (const base of this.symbolIndex.getInheritanceChain(containerName)) {
+        if (base.name) allowed.add(base.name);
+      }
     }
     this.qualifierCache.set(containerName, allowed);
     return allowed;
@@ -538,6 +547,15 @@ export class CallHierarchyProvider {
     const pool = visible.length > 0 ? visible : candidates;
 
     if (site.qualifier) {
+      const resolved = this.resolver?.findMemberInInheritanceChain(
+        site.qualifier,
+        site.calleeName,
+        site.callerUri,
+      );
+      if (resolved && (resolved.kind === "function" || resolved.kind === "modifier")) {
+        return this.symbolToTarget(resolved);
+      }
+
       const allowed = this.computeAllowedQualifiers(site.qualifier);
       const qualified = pool.find((sym) => sym.containerName && allowed.has(sym.containerName));
       if (qualified) return this.symbolToTarget(qualified);
