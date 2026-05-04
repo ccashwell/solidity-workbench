@@ -130,6 +130,46 @@ describe("SemanticTokensProvider", () => {
         `expected exactly 1 property token (declaration only), got ${propertyTokens.length}: ${JSON.stringify(propertyTokens)}`,
       );
     });
+
+    it("does not let parameters from one function recolor same-named references in another", () => {
+      const code = `contract C {
+    address public owner;
+    function set(address owner) external {
+        owner;
+    }
+    function read() external view returns (address) {
+        return owner;
+    }
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+
+      const setLine = 3;
+      const setCol = code.split("\n")[setLine].indexOf("owner");
+      const readLine = 6;
+      const readCol = code.split("\n")[readLine].indexOf("owner");
+
+      assert.ok(
+        tokens.some(
+          (t) =>
+            t.line === setLine &&
+            t.char === setCol &&
+            t.length === "owner".length &&
+            t.type === "parameter",
+        ),
+        "expected set() body owner to be colored as a parameter",
+      );
+      assert.ok(
+        tokens.some(
+          (t) =>
+            t.line === readLine &&
+            t.char === readCol &&
+            t.length === "owner".length &&
+            t.type === "property",
+        ),
+        "expected read() body owner to remain a state-variable property",
+      );
+    });
   });
 
   describe("struct members", () => {

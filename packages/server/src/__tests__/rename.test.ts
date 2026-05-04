@@ -217,5 +217,50 @@ describe("RenameProvider", () => {
         "expected exactly one edited file (src only)",
       );
     });
+
+    it("uses semantic SolcBridge references instead of rewriting every same-named function", async () => {
+      const file: TestFile = {
+        path: path.join(SRC_DIR, "Overloads.sol"),
+        text:
+          "contract A {\n" +
+          "    function ping() external {}\n" +
+          "    function call() external { ping(); }\n" +
+          "}\n" +
+          "contract B {\n" +
+          "    function ping(uint256 x) external {}\n" +
+          "}\n",
+      };
+      const h = setupHarness([file]);
+      const doc = h.docForPath(file.path);
+      const text = doc.getText();
+      const declOffset = text.indexOf("function ping()") + "function ".length;
+      const callOffset = text.indexOf("ping();");
+      h.provider.setSolcBridge({
+        findReferencesAt: () => ({
+          declaration: {
+            filePath: file.path,
+            offset: text.indexOf("function ping()"),
+            length: "function ping() external {}".length,
+          },
+          references: [{ filePath: file.path, offset: callOffset, length: "ping".length }],
+        }),
+      } as any);
+
+      const result = await h.provider.provideRename(
+        doc,
+        doc.positionAt(declOffset),
+        "pong",
+      );
+
+      assert.ok(result?.changes);
+      const edits = result.changes[h.uriFor(file.path)] ?? [];
+      assert.equal(edits.length, 2, `expected declaration + one call edit, got ${edits.length}`);
+      assert.ok(edits.some((e) => e.range.start.line === 1 && e.newText === "pong"));
+      assert.ok(edits.some((e) => e.range.start.line === 2 && e.newText === "pong"));
+      assert.ok(
+        !edits.some((e) => e.range.start.line === 5),
+        "semantic rename must not rewrite B.ping(uint256)",
+      );
+    });
   });
 });

@@ -38,6 +38,10 @@ import { AutoImportProvider } from "./providers/auto-import.js";
 import { CallHierarchyProvider } from "./providers/call-hierarchy.js";
 import { TypeHierarchyProvider } from "./providers/type-hierarchy.js";
 import { DocumentHighlightProvider } from "./providers/document-highlight.js";
+import { FoldingRangesProvider } from "./providers/folding-ranges.js";
+import { SelectionRangesProvider } from "./providers/selection-ranges.js";
+import { DocumentLinksProvider } from "./providers/document-links.js";
+import { ImplementationProvider } from "./providers/implementation.js";
 import { SolcBridge } from "./compiler/solc-bridge.js";
 import { listTests } from "./providers/list-tests.js";
 import {
@@ -77,6 +81,10 @@ let autoImportProvider: AutoImportProvider;
 let callHierarchyProvider: CallHierarchyProvider;
 let typeHierarchyProvider: TypeHierarchyProvider;
 let documentHighlightProvider: DocumentHighlightProvider;
+let foldingRangesProvider: FoldingRangesProvider;
+let selectionRangesProvider: SelectionRangesProvider;
+let documentLinksProvider: DocumentLinksProvider;
+let implementationProvider: ImplementationProvider;
 let solcBridge: SolcBridge;
 
 /**
@@ -151,6 +159,10 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   callHierarchyProvider = new CallHierarchyProvider(symbolIndex, workspaceManager, parser);
   typeHierarchyProvider = new TypeHierarchyProvider(symbolIndex, parser);
   documentHighlightProvider = new DocumentHighlightProvider(symbolIndex, parser);
+  foldingRangesProvider = new FoldingRangesProvider(parser);
+  selectionRangesProvider = new SelectionRangesProvider(parser);
+  documentLinksProvider = new DocumentLinksProvider(parser, workspaceManager);
+  implementationProvider = new ImplementationProvider(symbolIndex);
   solcBridge = new SolcBridge(workspaceManager);
 
   // Make the type-resolved AST cache available to providers that want it
@@ -161,6 +173,9 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   completionProvider.setSolcBridge(solcBridge);
   codeLensProvider.setSolcBridge(solcBridge);
   renameProvider.setSolcBridge(solcBridge);
+  referencesProvider.setSolcBridge(solcBridge);
+  documentHighlightProvider.setSolcBridge(solcBridge);
+  callHierarchyProvider.setSolcBridge(solcBridge);
 
   connection.console.log(
     `Solidity Workbench LSP server initializing for ${workspaceManager.rootCount} root(s)`,
@@ -177,6 +192,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 
       definitionProvider: true,
       typeDefinitionProvider: true,
+      implementationProvider: true,
       referencesProvider: true,
 
       hoverProvider: true,
@@ -217,6 +233,11 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
       callHierarchyProvider: true,
       typeHierarchyProvider: true,
       documentHighlightProvider: true,
+      foldingRangeProvider: true,
+      selectionRangeProvider: true,
+      documentLinkProvider: {
+        resolveProvider: false,
+      },
 
       workspace: {
         workspaceFolders: {
@@ -422,6 +443,13 @@ connection.onTypeDefinition(async (params, token) => {
   return definitionProvider.provideTypeDefinition(doc, params.position);
 });
 
+connection.onImplementation(async (params, token) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return null;
+  if (token.isCancellationRequested) return null;
+  return implementationProvider.provideImplementation(doc, params.position);
+});
+
 connection.onReferences(async (params, token) => {
   const doc = documents.get(params.textDocument.uri);
   if (!doc) return [];
@@ -570,6 +598,27 @@ connection.onDocumentHighlight(async (params, token) => {
   if (!doc) return [];
   if (token.isCancellationRequested) return [];
   return documentHighlightProvider.provideDocumentHighlights(doc, params.position);
+});
+
+connection.onFoldingRanges(async (params, token) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  if (token.isCancellationRequested) return [];
+  return foldingRangesProvider.provideFoldingRanges(doc);
+});
+
+connection.onSelectionRanges(async (params, token) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  if (token.isCancellationRequested) return [];
+  return selectionRangesProvider.provideSelectionRanges(doc, params.positions);
+});
+
+connection.onDocumentLinks(async (params, token) => {
+  const doc = documents.get(params.textDocument.uri);
+  if (!doc) return [];
+  if (token.isCancellationRequested) return [];
+  return documentLinksProvider.provideDocumentLinks(doc);
 });
 
 // ── Custom requests ─────────────────────────────────────────────────

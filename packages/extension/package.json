@@ -2,7 +2,7 @@
   "name": "solidity-workbench",
   "displayName": "Solidity Workbench",
   "description": "Modern Solidity IDE Integration with Foundry-native LSP, test explorer, and static analysis",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "publisher": "ccashwell",
   "license": "MIT",
   "icon": "resources/icon.png",

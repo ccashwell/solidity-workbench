@@ -175,8 +175,8 @@ export class SolidityParser {
   getRawAst(uri: string): unknown | null {
     const cached = this.cache.get(uri);
     if (!cached) return null;
-    if (cached.rawAst != null) return cached.rawAst;
-    if (cached.text == null) return null;
+    if (cached.rawAst !== null && cached.rawAst !== undefined) return cached.rawAst;
+    if (cached.text === null || cached.text === undefined) return null;
     this.parse(uri, cached.text);
     return this.cache.get(uri)?.rawAst ?? null;
   }

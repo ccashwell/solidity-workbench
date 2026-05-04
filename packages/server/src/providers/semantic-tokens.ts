@@ -62,7 +62,7 @@ export class SemanticTokensProvider {
     this.collectDeclarationTokens(result, tokens);
     if (token?.isCancellationRequested) return tokens;
 
-    const nameKinds = this.buildNameKinds(result);
+    const nameKinds = this.buildGlobalNameKinds(result);
     this.collectReferenceTokens(result, lines, nameKinds, tokens, token);
 
     return tokens;
@@ -400,11 +400,11 @@ export class SemanticTokensProvider {
 
   // ── Reference-site tokens ───────────────────────────────────────────
 
-  private buildNameKinds(result: ParseResult): Map<string, string> {
-    // Map identifier text → semantic token type. Later writes win; the
-    // priority order (types → state vars → events → modifiers → functions
-    // → parameters) puts locals ahead of file-scoped symbols so parameter
-    // references mask state variable references when names collide.
+  private buildGlobalNameKinds(result: ParseResult): Map<string, string> {
+    // Map file/contract-scoped identifier text → semantic token type.
+    // Function parameters are intentionally added later per function body
+    // so a parameter named `owner` in one function does not recolor
+    // `owner` references in another function.
     const kinds = new Map<string, string>();
     const su = result.sourceUnit;
 
@@ -445,19 +445,6 @@ export class SemanticTokensProvider {
       for (const func of contract.functions) {
         if (func.name) kinds.set(func.name, "function");
       }
-      for (const func of contract.functions) {
-        for (const param of func.parameters) {
-          if (param.name) kinds.set(param.name, "parameter");
-        }
-        for (const param of func.returnParameters) {
-          if (param.name) kinds.set(param.name, "parameter");
-        }
-      }
-      for (const mod of contract.modifiers) {
-        for (const param of mod.parameters) {
-          if (param.name) kinds.set(param.name, "parameter");
-        }
-      }
     }
 
     return kinds;
@@ -478,9 +465,17 @@ export class SemanticTokensProvider {
         const bounds = getFunctionBodyBounds(lines, func.range.start.line);
         if (!bounds) continue;
 
+        const scopedNameKinds = new Map(nameKinds);
+        for (const param of func.parameters) {
+          if (param.name) scopedNameKinds.set(param.name, "parameter");
+        }
+        for (const param of func.returnParameters) {
+          if (param.name) scopedNameKinds.set(param.name, "parameter");
+        }
+
         const idents = scanIdentifiersInRange(lines, bounds);
         for (const id of idents) {
-          const kind = nameKinds.get(id.text);
+          const kind = scopedNameKinds.get(id.text);
           if (!kind) continue;
           tokens.push({
             line: id.line,

@@ -7,12 +7,15 @@ import type {
   Range,
 } from "vscode-languageserver/node.js";
 import { SymbolKind } from "vscode-languageserver/node.js";
-import type { TextDocument } from "vscode-languageserver-textdocument";
+import { TextDocument } from "vscode-languageserver-textdocument";
 import * as fs from "node:fs";
+import * as path from "node:path";
+import { URI } from "vscode-uri";
 import type { ContractDefinition, FunctionDefinition } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
+import type { SolcBridge } from "../compiler/solc-bridge.js";
 import { getWordAtPosition, CALL_LIKE_KEYWORDS, isSolidityBuiltinType } from "../utils/text.js";
 
 /**
@@ -52,12 +55,17 @@ export class CallHierarchyProvider {
   private outgoingCalls: Map<string, CallSite[]> = new Map();
 
   private indexedFiles: Set<string> = new Set();
+  private solcBridge: SolcBridge | null = null;
 
   constructor(
     private symbolIndex: SymbolIndex,
     private workspace: WorkspaceManager,
     private parser: SolidityParser,
   ) {}
+
+  setSolcBridge(bridge: SolcBridge): void {
+    this.solcBridge = bridge;
+  }
 
   /**
    * Prepare: identify the function at the cursor position.
@@ -104,6 +112,9 @@ export class CallHierarchyProvider {
     const callerMap = new Map<string, { item: CallHierarchyItem; ranges: Range[] }>();
 
     for (const site of sites) {
+      if (site.target && !this.matchesTarget(site.target, item)) {
+        continue;
+      }
       if (site.qualifier && item.detail && !allowedQualifiers.has(site.qualifier)) {
         continue;
       }
@@ -157,21 +168,30 @@ export class CallHierarchyProvider {
     const calleeMap = new Map<string, { item: CallHierarchyItem; ranges: Range[] }>();
 
     for (const site of sites) {
-      const calleeKey = site.calleeName;
+      const calleeKey = site.target
+        ? `${site.target.uri}:${site.target.containerName ?? ""}:${site.target.name}`
+        : site.calleeName;
       let entry = calleeMap.get(calleeKey);
 
       if (!entry) {
-        const calleeSymbols = this.symbolIndex.findSymbols(site.calleeName);
-        const calleeSym = calleeSymbols[0];
+        const calleeSym =
+          site.target ??
+          this.symbolIndex.findSymbols(site.calleeName).map((sym) => ({
+            name: sym.name,
+            uri: sym.filePath,
+            range: sym.range,
+            selectionRange: sym.nameRange,
+            containerName: sym.containerName,
+          }))[0];
         if (!calleeSym) continue;
 
         entry = {
           item: {
-            name: site.calleeName,
+            name: calleeSym.name,
             kind: SymbolKind.Function,
-            uri: calleeSym.filePath,
+            uri: calleeSym.uri,
             range: calleeSym.range,
-            selectionRange: calleeSym.nameRange,
+            selectionRange: calleeSym.selectionRange,
             detail: calleeSym.containerName,
           },
           ranges: [],
@@ -291,17 +311,68 @@ export class CallHierarchyProvider {
             start: { line: callLine, character: Math.max(0, callCol) },
             end: { line: callLine, character: Math.max(0, callCol) + calleeName.length },
           };
+          const target = this.resolveSemanticCallTarget(uri, text, callRange);
 
           const outgoing = this.outgoingCalls.get(callerKey) ?? [];
-          outgoing.push({ calleeName, qualifier, callRange, callerUri: uri, callerName });
+          outgoing.push({ calleeName, qualifier, callRange, callerUri: uri, callerName, target });
           this.outgoingCalls.set(callerKey, outgoing);
 
           const incoming = this.incomingCalls.get(calleeName) ?? [];
-          incoming.push({ calleeName, qualifier, callRange, callerUri: uri, callerName });
+          incoming.push({ calleeName, qualifier, callRange, callerUri: uri, callerName, target });
           this.incomingCalls.set(calleeName, incoming);
         }
       }
     }
+  }
+
+  private resolveSemanticCallTarget(
+    uri: string,
+    text: string,
+    callRange: Range,
+  ): CallTarget | undefined {
+    if (!this.solcBridge) return undefined;
+    const filePath = this.workspace.uriToPath(uri);
+    const doc = TextDocument.create(uri, "solidity", 1, text);
+    const ref = this.solcBridge.resolveReference(filePath, doc.offsetAt(callRange.start));
+    if (!ref) return undefined;
+
+    const targetUri = this.uriForPath(ref.filePath);
+    const targetText = targetUri === uri ? text : this.readFile(ref.filePath);
+    if (targetText === null) return undefined;
+    const targetDoc =
+      targetUri === uri ? doc : TextDocument.create(targetUri, "solidity", 1, targetText);
+    const start = targetDoc.positionAt(ref.offset);
+    const end = targetDoc.positionAt(ref.offset + ref.length);
+
+    for (const [, entry] of this.symbolIndex.getAllContracts()) {
+      if (entry.uri !== targetUri) continue;
+      for (const fn of entry.contract.functions) {
+        if (!fn.name) continue;
+        if (!this.rangeContains(fn.range, start, end)) continue;
+        return {
+          name: fn.name,
+          uri: targetUri,
+          range: fn.range,
+          selectionRange: fn.nameRange,
+          containerName: entry.contract.name,
+        };
+      }
+      for (const mod of entry.contract.modifiers) {
+        if (!this.rangeContains(mod.range, start, end)) continue;
+        return {
+          name: mod.name,
+          uri: targetUri,
+          range: mod.range,
+          selectionRange: mod.nameRange,
+          containerName: entry.contract.name,
+        };
+      }
+    }
+    return undefined;
+  }
+
+  private matchesTarget(target: CallTarget, item: CallHierarchyItem): boolean {
+    return target.name === item.name && (!item.detail || target.containerName === item.detail);
   }
 
   /**
@@ -361,6 +432,34 @@ export class CallHierarchyProvider {
     return t.length > 0 ? t : undefined;
   }
 
+  private rangeContains(range: Range, start: Position, end: Position): boolean {
+    const startsBefore =
+      range.start.line < start.line ||
+      (range.start.line === start.line && range.start.character <= start.character);
+    const endsAfter =
+      range.end.line > end.line ||
+      (range.end.line === end.line && range.end.character >= end.character);
+    return startsBefore && endsAfter;
+  }
+
+  private uriForPath(filePath: string): string {
+    return URI.file(this.absolutePath(filePath)).toString();
+  }
+
+  private readFile(filePath: string): string | null {
+    try {
+      return fs.readFileSync(this.absolutePath(filePath), "utf-8");
+    } catch {
+      return null;
+    }
+  }
+
+  private absolutePath(filePath: string): string {
+    if (path.isAbsolute(filePath)) return filePath;
+    const root = (this.workspace as { root?: string }).root ?? process.cwd();
+    return path.join(root, filePath);
+  }
+
   private getFunctionBodyRange(
     text: string,
     funcStartLine: number,
@@ -414,4 +513,13 @@ interface CallSite {
   callRange: Range;
   callerUri: string;
   callerName: string;
+  target?: CallTarget;
+}
+
+interface CallTarget {
+  name: string;
+  uri: string;
+  range: Range;
+  selectionRange: Range;
+  containerName?: string;
 }

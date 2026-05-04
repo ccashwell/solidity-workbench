@@ -1,4 +1,5 @@
 import { keccak256 } from "js-sha3";
+import * as path from "node:path";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
 /**
@@ -138,6 +139,50 @@ export class SolcBridge {
   }
 
   /**
+   * Find semantic references for the declaration under `filePath:offset`
+   * using solc's declaration IDs. Unlike the text/reference index this
+   * distinguishes unrelated same-named symbols, overloads, imports, and
+   * shadowed identifiers when the rich AST cache is warm.
+   */
+  findReferencesAt(
+    filePath: string,
+    offset: number,
+  ): {
+    declaration: { filePath: string; offset: number; length: number } | null;
+    references: { filePath: string; offset: number; length: number }[];
+  } | null {
+    const ast = this.cachedAst.get(filePath);
+    if (!ast) return null;
+
+    const node = this.findNodeAtOffset(ast.ast, offset);
+    if (!node) return null;
+
+    let declId: number | null = null;
+    if (typeof node.referencedDeclaration === "number") {
+      declId = node.referencedDeclaration;
+    } else if (typeof node.id === "number" && this.isDeclarationNode(node)) {
+      declId = node.id;
+    }
+    if (declId === null) return null;
+
+    let declaration: { filePath: string; offset: number; length: number } | null = null;
+    const references: { filePath: string; offset: number; length: number }[] = [];
+
+    for (const [fp, su] of this.cachedAst) {
+      if (!declaration) {
+        const decl = this.findNodeById(su.ast, declId);
+        if (decl?.src) {
+          const [declOffset, declLength] = this.parseSourceRange(decl.src);
+          declaration = { filePath: fp, offset: declOffset, length: declLength };
+        }
+      }
+      this.collectReferencesTo(su.ast, declId, references, fp);
+    }
+
+    return { declaration, references };
+  }
+
+  /**
    * Scope-aware reference lookup for a local variable, parameter, or
    * other function-scoped declaration.
    *
@@ -232,28 +277,38 @@ export class SolcBridge {
   private collectReferencesTo(
     node: any,
     declId: number,
-    out: { offset: number; length: number }[],
+    out: { filePath?: string; offset: number; length: number }[],
+    filePath?: string,
   ): void {
     if (!node || typeof node !== "object") return;
 
     if (
-      node.nodeType === "Identifier" &&
+      (node.nodeType === "Identifier" ||
+        node.nodeType === "IdentifierPath" ||
+        node.nodeType === "MemberAccess") &&
       node.referencedDeclaration === declId &&
       typeof node.src === "string"
     ) {
       const [start, length] = this.parseSourceRange(node.src);
-      out.push({ offset: start, length });
+      out.push(filePath ? { filePath, offset: start, length } : { offset: start, length });
     }
 
     for (const key of Object.keys(node)) {
       if (key === "src" || key === "typeDescriptions") continue;
       const child = node[key];
       if (Array.isArray(child)) {
-        for (const item of child) this.collectReferencesTo(item, declId, out);
+        for (const item of child) this.collectReferencesTo(item, declId, out, filePath);
       } else if (typeof child === "object" && child !== null) {
-        this.collectReferencesTo(child, declId, out);
+        this.collectReferencesTo(child, declId, out, filePath);
       }
     }
+  }
+
+  private isDeclarationNode(node: any): boolean {
+    return (
+      typeof node?.nodeType === "string" &&
+      (node.nodeType.endsWith("Definition") || node.nodeType.endsWith("Declaration"))
+    );
   }
 
   /**
@@ -344,9 +399,10 @@ export class SolcBridge {
 
     for (const [filePath, source] of Object.entries(output.sources) as [string, any][]) {
       if (source.ast) {
-        this.cachedAst.set(filePath, {
+        const absolute = this.absolutePath(filePath);
+        this.cachedAst.set(absolute, {
           id: source.id,
-          filePath,
+          filePath: absolute,
           ast: source.ast,
         });
       }
@@ -475,6 +531,10 @@ export class SolcBridge {
   private parseSourceRange(src: string): [number, number] {
     const parts = src.split(":");
     return [parseInt(parts[0], 10), parseInt(parts[1], 10)];
+  }
+
+  private absolutePath(filePath: string): string {
+    return path.isAbsolute(filePath) ? filePath : path.join(this.workspace.root, filePath);
   }
 }
 

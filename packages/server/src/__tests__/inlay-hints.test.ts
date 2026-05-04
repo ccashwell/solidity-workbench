@@ -50,6 +50,32 @@ contract A {
     assert.ok(labels.includes("amount:"), `expected "amount:" hint, got ${JSON.stringify(labels)}`);
   });
 
+  it("emits parameter-name hints for multi-line calls", () => {
+    const text = `pragma solidity ^0.8.0;
+contract A {
+    function transfer(address to, uint256 amount) public returns (bool) {
+        return true;
+    }
+    function trigger() external {
+        transfer(
+            address(0x1),
+            100
+        );
+    }
+}`;
+    const { doc, provider } = setup("file:///w/Multi.sol", text);
+    const hints = provider.provideInlayHints(doc, {
+      start: { line: 0, character: 0 },
+      end: { line: text.split("\n").length, character: 0 },
+    });
+
+    const labels = hints.map((h) => h.label);
+    assert.ok(labels.includes("to:"), `expected "to:" hint, got ${JSON.stringify(labels)}`);
+    assert.ok(labels.includes("amount:"), `expected "amount:" hint, got ${JSON.stringify(labels)}`);
+    const amount = hints.find((h) => h.label === "amount:");
+    assert.deepEqual(amount?.position, { line: 8, character: 12 });
+  });
+
   it("does not emit hints when the argument matches the parameter name", () => {
     const text = `pragma solidity ^0.8.0;
 contract B {

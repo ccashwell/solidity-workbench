@@ -37,25 +37,28 @@ runtime.
 
 ## Feature overview
 
-### Language intelligence (17 LSP providers)
+### Language intelligence (21 LSP providers)
 
 | Feature | Implementation |
 | --- | --- |
 | Semantic syntax highlighting | 20 token types, 10 modifiers, AST-driven |
 | Go-to definition / type definition | Cross-file, remapping-aware, solc-enriched overload disambiguation |
-| Find all references | Inverted index with O(1) lookup |
+| Find all references | Solc declaration-ID graph when warm; inverted index fallback |
 | Rename symbol | Workspace-wide for top-level names; scope-aware via solc AST for locals/parameters |
 | Hover | Signatures, NatSpec, built-in globals, solc-backed disambiguation |
 | Autocompletion | Context-aware: members, keywords, types, snippets, imports, NatSpec tags |
 | Auto-import | Code actions for `forge-std/...`, OpenZeppelin, relative paths |
 | Signature help | Parameter hints with NatSpec docs, overload switching, built-ins |
-| Inlay hints | Parameter name hints at call sites |
+| Inlay hints | Parameter name hints at single-line and multi-line call sites |
 | Document / workspace symbols | Outline, Go to Symbol, Quick Open |
 | Formatting | Backed by `forge fmt` — full document and range |
-| Code actions | Add SPDX, replace `tx.origin`, implement interface, NatSpec stub, auto-import |
+| Code actions | Add SPDX, pin pragma, add visibility, constant/immutable hints, replace `tx.origin`, implement interface, NatSpec stub, auto-import |
 | Code lens | Run Test / Debug, function selectors, event `topic0`, reference counts, gas estimates |
 | Call hierarchy | Incoming/outgoing with receiver-qualifier disambiguation |
 | Type hierarchy | Supertypes and subtypes across the `is` graph |
+| Implementation lookup | Interface / virtual method implementations across inheritance trees |
+| Folding / selection ranges | AST-backed declaration folds and smart selection expansion |
+| Document links | Clickable import paths resolved through Foundry remappings |
 | Diagnostics | Fast parser + linter on keystroke; full `forge build --json` on save |
 
 ### Built-in linter (21 rules)
@@ -226,13 +229,15 @@ Press `F5` in VS Code to launch an Extension Development Host with the extension
 
 - **Go to Definition** (`F12`): symbol index with inheritance chain traversal; solc AST for overload disambiguation
 - **Go to Type Definition**: resolves to the declaring contract / struct / enum / UDVT
-- **Find References** (`Shift+F12`): O(1) lookup via inverted index; includes/excludes declarations per context
+- **Go to Implementation**: jumps from interfaces / virtual methods to concrete implementors
+- **Find References** (`Shift+F12`): solc declaration-ID lookup when the rich AST is warm, with O(1) inverted-index fallback; includes/excludes declarations per context
 - **Workspace Symbols** (`Cmd/Ctrl+T`): substring search over all top-level symbols
+- **Document Links**: import strings are clickable and resolve through Foundry remappings
 
 ### Refactoring
 
 - **Rename** (`F2`): workspace-wide for top-level names (contracts, functions, events, errors, structs, enums, modifiers, state variables, UDVTs). Locals and parameters rename scope-aware via the solc AST. Ambiguous renames are refused with an explanation. `lib/` directories are excluded.
-- **Code actions**: add SPDX, replace `tx.origin`, generate NatSpec stub, implement interface methods, auto-import unresolved symbols
+- **Code actions**: add SPDX, pin floating pragmas, add missing visibility, apply constant/immutable hints, replace `tx.origin`, generate NatSpec stub, implement interface methods, auto-import unresolved symbols
 
 ### Semantic tokens
 
@@ -243,7 +248,7 @@ identifiers in different functions are a known limitation.
 
 ### Inlay hints
 
-Parameter name hints at call sites: `transfer(›to:‹ alice, ›amount:‹ 100)`.
+Parameter name hints at single-line and multi-line call sites: `transfer(›to:‹ alice, ›amount:‹ 100)`.
 Toggle: `solidity-workbench.inlayHints.parameterNames`.
 
 ### Signature help
@@ -457,11 +462,12 @@ Settings take effect dynamically without a restart.
 │                         │ (inverted index for O(1) refs)   │ │
 │                         └──────────────────────────────────┘ │
 │  ┌─────────────────────────────────────────────────────────┐ │
-│  │ 17 LSP providers: completion, definition, hover,        │ │
+│  │ 21 LSP providers: completion, definition, hover,        │ │
 │  │ diagnostics, semantic-tokens, code-actions, formatting, │ │
 │  │ document-symbols, inlay-hints, signature-help, rename,  │ │
-│  │ code-lens, references, auto-import, call-hierarchy,     │ │
-│  │ type-hierarchy, linter                                  │ │
+│  │ code-lens, references, implementation, call-hierarchy,  │ │
+│  │ type-hierarchy, document-highlight, folding, selection, │ │
+│  │ document-links, auto-import                             │ │
 │  └─────────────────────────────────────────────────────────┘ │
 │  ┌───────────────────┐  ┌──────────────────────────────────┐ │
 │  │   SolcBridge      │  │   LineIndex                      │ │

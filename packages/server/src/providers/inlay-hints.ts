@@ -42,13 +42,14 @@ export class InlayHintsProvider {
       lineNum++
     ) {
       const line = lines[lineNum];
-      this.findCallSiteHints(line, lineNum, document.uri, commentRanges, hints);
+      this.findCallSiteHints(lines, line, lineNum, document.uri, commentRanges, hints);
     }
 
     return hints;
   }
 
   private findCallSiteHints(
+    lines: string[],
     line: string,
     lineNum: number,
     _uri: string,
@@ -81,7 +82,7 @@ export class InlayHintsProvider {
       const openParenIdx = match.index + match[0].length - 1;
 
       // Parse args respecting nested `()` / `[]` / `{}` / string literals.
-      const parseResult = this.parseArgumentList(line, openParenIdx);
+      const parseResult = this.parseArgumentList(lines, lineNum, openParenIdx);
       if (!parseResult) continue;
 
       const paramNames = this.getParameterNames(funcName, receiver);
@@ -95,7 +96,7 @@ export class InlayHintsProvider {
         if (trimmed === paramNames[i]) continue; // redundant
 
         hints.push({
-          position: { line: lineNum, character: arg.start },
+          position: arg.start,
           label: `${paramNames[i]}:`,
           kind: InlayHintKind.Parameter,
           paddingRight: true,
@@ -105,34 +106,45 @@ export class InlayHintsProvider {
   }
 
   /**
-   * Parse the argument list that begins at `line[openParenIdx]` (which
-   * must be `(`). Returns `null` when no matching close-paren is found
-   * on the same line — inlay hints for multi-line argument lists is a
-   * future enhancement; today we skip that case rather than guess.
+   * Parse the argument list that begins at `lines[startLine][openParenIdx]`
+   * (which must be `(`). The scanner walks across lines, respecting nested
+   * delimiters and string literals, so common formatted calls like
+   * `transfer(\n  to,\n  amount\n)` get the same parameter hints as
+   * single-line calls.
    *
    * Each argument's `start` column is the index in `line` of its first
    * non-whitespace character, which is where we anchor the inlay hint.
    */
   private parseArgumentList(
-    line: string,
+    lines: string[],
+    startLine: number,
     openParenIdx: number,
-  ): { args: { text: string; start: number }[] } | null {
-    if (line[openParenIdx] !== "(") return null;
+  ): { args: { text: string; start: { line: number; character: number } }[] } | null {
+    if (lines[startLine]?.[openParenIdx] !== "(") return null;
 
-    const args: { text: string; start: number }[] = [];
+    const args: { text: string; start: { line: number; character: number } }[] = [];
     let depth = 1;
-    let argStartCol: number | null = null;
+    let argStart: { line: number; character: number } | null = null;
     let argText = "";
+    let lineNum = startLine;
     let i = openParenIdx + 1;
 
     const pushArg = (): void => {
-      if (argStartCol === null) return;
-      args.push({ text: argText, start: argStartCol });
+      if (argStart === null) return;
+      args.push({ text: argText, start: argStart });
       argText = "";
-      argStartCol = null;
+      argStart = null;
     };
 
-    while (i < line.length) {
+    while (lineNum < lines.length) {
+      const line = lines[lineNum];
+      if (i >= line.length) {
+        if (argStart !== null) argText += "\n";
+        lineNum++;
+        i = 0;
+        continue;
+      }
+
       const ch = line[i];
 
       // String literal handling so commas / parens inside strings don't
@@ -141,11 +153,18 @@ export class InlayHintsProvider {
         const quote = ch;
         // Start of argument? If we hadn't seen non-whitespace yet, seed
         // the argStart at this quote.
-        if (argStartCol === null) argStartCol = i;
+        if (argStart === null) argStart = { line: lineNum, character: i };
         argText += ch;
         i++;
-        while (i < line.length) {
-          const c = line[i];
+        while (lineNum < lines.length) {
+          const currentLine = lines[lineNum];
+          if (i >= currentLine.length) {
+            argText += "\n";
+            lineNum++;
+            i = 0;
+            continue;
+          }
+          const c = currentLine[i];
           argText += c;
           i++;
           if (c === "\\") {
@@ -162,7 +181,9 @@ export class InlayHintsProvider {
 
       if (ch === "(" || ch === "[" || ch === "{") {
         depth++;
-        if (argStartCol === null && !/\s/.test(ch)) argStartCol = i;
+        if (argStart === null && !/\s/.test(ch)) {
+          argStart = { line: lineNum, character: i };
+        }
         argText += ch;
         i++;
         continue;
@@ -185,14 +206,14 @@ export class InlayHintsProvider {
         continue;
       }
 
-      if (argStartCol === null) {
-        if (!/\s/.test(ch)) argStartCol = i;
+      if (argStart === null) {
+        if (!/\s/.test(ch)) argStart = { line: lineNum, character: i };
       }
-      if (argStartCol !== null) argText += ch;
+      if (argStart !== null) argText += ch;
       i++;
     }
 
-    // Unterminated paren on this line.
+    // Unterminated paren.
     return null;
   }
 

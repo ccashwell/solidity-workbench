@@ -164,5 +164,21 @@ contract User {
       assert.ok(ls.has("withdraw"), "external function should appear");
       assert.ok(!ls.has("_internal"), "private function should NOT appear");
     });
+
+    it("returns contract members after an explicit type cast", () => {
+      const text = `pragma solidity ^0.8.0;
+interface IERC20 {
+    function transfer(address to, uint256 amount) external returns (bool);
+}
+contract User {
+    function f(address token) external {
+        IERC20(token).
+    }
+}`;
+      const { doc, provider } = setup("file:///w/Cast.sol", text);
+      const items = provider.provideCompletions(doc, { line: 6, character: 22 });
+      const ls = labels(items);
+      assert.ok(ls.has("transfer"), "cast receiver should expose IERC20.transfer");
+    });
   });
 });

@@ -90,6 +90,78 @@ contract A {
       const edit = replace!.edit!.changes!["file:///w/B.sol"][0];
       assert.equal(edit.newText, "msg.sender");
     });
+
+    it("offers to pin floating pragmas", () => {
+      const text = `pragma solidity ^0.8.23;\ncontract A {}`;
+      const { doc, provider } = setup("file:///w/Pragma.sol", text);
+      const diag: Diagnostic = {
+        severity: DiagnosticSeverity.Information,
+        range: {
+          start: { line: 0, character: 0 },
+          end: { line: 0, character: text.split("\n")[0].length },
+        },
+        message: "Floating pragma detected.",
+        source: "solidity-workbench",
+        code: "floating-pragma",
+      };
+
+      const actions = provider.provideCodeActions(doc, diag.range, { diagnostics: [diag] });
+      const pin = actions.find((a) => a.title === "Pin pragma to 0.8.23");
+      assert.ok(pin, "expected pragma pin quick fix");
+      const edit = pin!.edit!.changes!["file:///w/Pragma.sol"][0];
+      assert.equal(edit.newText, "0.8.23");
+    });
+
+    it("offers state mutability quick-fixes for constant and immutable hints", () => {
+      const text = `pragma solidity ^0.8.0;
+contract A {
+    uint256 answer = 42;
+}`;
+      const { doc, provider } = setup("file:///w/Mut.sol", text);
+      const col = text.split("\n")[2].indexOf("answer");
+      const range = {
+        start: { line: 2, character: col },
+        end: { line: 2, character: col + "answer".length },
+      };
+      const diag: Diagnostic = {
+        severity: DiagnosticSeverity.Hint,
+        range,
+        message: "could be constant",
+        source: "solidity-workbench",
+        code: "state-could-be-constant",
+      };
+
+      const actions = provider.provideCodeActions(doc, range, { diagnostics: [diag] });
+      const constant = actions.find((a) => a.title.includes("constant"));
+      assert.ok(constant, "expected constant quick fix");
+      const edit = constant!.edit!.changes!["file:///w/Mut.sol"][0];
+      assert.equal(edit.newText, "constant ");
+      assert.deepEqual(edit.range.start, range.start);
+    });
+
+    it("offers visibility quick-fixes for missing visibility diagnostics", () => {
+      const text = `pragma solidity ^0.8.0;
+contract A {
+    function f() {
+    }
+}`;
+      const { doc, provider } = setup("file:///w/Vis.sol", text);
+      const diag: Diagnostic = {
+        severity: DiagnosticSeverity.Information,
+        range: {
+          start: { line: 2, character: 4 },
+          end: { line: 2, character: text.split("\n")[2].length },
+        },
+        message: "missing visibility",
+        source: "solidity-workbench",
+        code: "func-visibility-explicit",
+      };
+
+      const actions = provider.provideCodeActions(doc, diag.range, { diagnostics: [diag] });
+      for (const visibility of ["public", "external", "internal", "private"]) {
+        assert.ok(actions.some((a) => a.title === `Add ${visibility} visibility`));
+      }
+    });
   });
 
   describe("context-aware refactorings", () => {

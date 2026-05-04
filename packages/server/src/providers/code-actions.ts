@@ -43,10 +43,19 @@ export class CodeActionsProvider {
           actions.push(this.createAddSPDXAction(uri));
           break;
         case "floating-pragma":
-          // Could offer to pin the pragma version
+          actions.push(...this.createPinPragmaActions(uri, text, diagnostic.range));
           break;
         case "tx-origin":
           actions.push(this.createReplaceTxOriginAction(uri, diagnostic.range));
+          break;
+        case "state-could-be-constant":
+          actions.push(this.createInsertBeforeIdentifierAction(uri, diagnostic.range, "constant"));
+          break;
+        case "state-could-be-immutable":
+          actions.push(this.createInsertBeforeIdentifierAction(uri, diagnostic.range, "immutable"));
+          break;
+        case "func-visibility-explicit":
+          actions.push(...this.createAddVisibilityActions(uri, text, diagnostic.range.start.line));
           break;
       }
     }
@@ -132,6 +141,77 @@ export class CodeActionsProvider {
         },
       },
     };
+  }
+
+  private createPinPragmaActions(uri: string, text: string, range: Range): CodeAction[] {
+    const line = text.split("\n")[range.start.line] ?? "";
+    const match = line.match(/pragma\s+solidity\s+([^;]+);/);
+    if (!match) return [];
+
+    const current = match[1].trim();
+    const version = current.match(/\d+\.\d+\.\d+/)?.[0] ?? current.replace(/^[\^>=<~\s]+/, "");
+    if (!version) return [];
+
+    const start = line.indexOf(current);
+    if (start < 0) return [];
+    const versionRange: Range = {
+      start: { line: range.start.line, character: start },
+      end: { line: range.start.line, character: start + current.length },
+    };
+
+    return [
+      {
+        title: `Pin pragma to ${version}`,
+        kind: CodeActionKind.QuickFix,
+        edit: {
+          changes: {
+            [uri]: [TextEdit.replace(versionRange, version)],
+          },
+        },
+      },
+    ];
+  }
+
+  private createInsertBeforeIdentifierAction(
+    uri: string,
+    range: Range,
+    keyword: "constant" | "immutable",
+  ): CodeAction {
+    return {
+      title: `Declare state variable ${keyword}`,
+      kind: CodeActionKind.QuickFix,
+      edit: {
+        changes: {
+          [uri]: [TextEdit.insert(range.start, `${keyword} `)],
+        },
+      },
+    };
+  }
+
+  private createAddVisibilityActions(uri: string, text: string, lineNum: number): CodeAction[] {
+    const line = text.split("\n")[lineNum] ?? "";
+    const insertAt = this.visibilityInsertColumn(line);
+    if (insertAt === null) return [];
+
+    return ["public", "external", "internal", "private"].map((visibility) => ({
+      title: `Add ${visibility} visibility`,
+      kind: CodeActionKind.QuickFix,
+      edit: {
+        changes: {
+          [uri]: [
+            TextEdit.insert({ line: lineNum, character: insertAt }, ` ${visibility}`),
+          ],
+        },
+      },
+    }));
+  }
+
+  private visibilityInsertColumn(line: string): number | null {
+    const candidates = [line.indexOf("{"), line.indexOf(";")]
+      .filter((idx) => idx >= 0)
+      .sort((a, b) => a - b);
+    if (candidates.length === 0) return null;
+    return candidates[0];
   }
 
   private createAddNatspecAction(uri: string, line: number, declaration: string): CodeAction {

@@ -228,5 +228,52 @@ describe("CallHierarchyProvider", () => {
         `expected useB's outgoing calls to include transfer, got [${calleeNames.join(", ")}]`,
       );
     });
+
+    it("uses semantic targets for outgoing calls when SolcBridge resolves the callee", async () => {
+      const exact = setupFixture({
+        "Exact.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract A {
+    function transfer() external {}
+}
+
+contract B {
+    function transfer() external {}
+    function use(A a) external {
+        a.transfer();
+    }
+}
+`,
+      });
+      try {
+        const exactPath = path.join(exact.tmpDir, "Exact.sol");
+        const exactUri = URI.file(exactPath).toString();
+        const text = fs.readFileSync(exactPath, "utf-8");
+        const targetStart = text.indexOf("function transfer() external {}") + "function ".length;
+        exact.provider.setSolcBridge({
+          resolveReference: () => ({
+            filePath: exactPath,
+            offset: targetStart,
+            length: "transfer".length,
+          }),
+        } as any);
+
+        const calls = await exact.provider.getOutgoingCalls({
+          name: "use",
+          kind: SymbolKind.Function,
+          uri: exactUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "B",
+        });
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].to.name, "transfer");
+        assert.equal(calls[0].to.detail, "A");
+      } finally {
+        teardownFixture(exact);
+      }
+    });
   });
 });

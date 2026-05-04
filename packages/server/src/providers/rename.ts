@@ -6,9 +6,10 @@ import type {
   TextDocuments,
 } from "vscode-languageserver/node.js";
 import { TextEdit, ResponseError, ErrorCodes } from "vscode-languageserver/node.js";
-import type { TextDocument } from "vscode-languageserver-textdocument";
+import { TextDocument } from "vscode-languageserver-textdocument";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { URI } from "vscode-uri";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
@@ -151,6 +152,9 @@ export class RenameProvider {
       return this.provideLocalRename(document, position, newName);
     }
 
+    const semantic = this.provideSemanticRename(document, position, oldName, newName);
+    if (semantic) return semantic;
+
     const libDirs = this.workspace.libDirs;
     const isInLibDir = (uri: string): boolean => {
       const filePath = this.workspace.uriToPath(uri);
@@ -193,6 +197,95 @@ export class RenameProvider {
     if (Object.keys(changes).length === 0) return null;
 
     return { changes };
+  }
+
+  /**
+   * Workspace rename through solc declaration IDs. When available, this
+   * avoids rewriting unrelated same-named symbols, overloads, shadowed
+   * locals, strings, and comments. Falls back to the text-scan path when
+   * the rich AST cache is cold or cannot map the declaration back to a
+   * symbol-index name range.
+   */
+  private provideSemanticRename(
+    document: TextDocument,
+    position: Position,
+    oldName: string,
+    newName: string,
+  ): WorkspaceEdit | null {
+    if (!this.solcBridge) return null;
+
+    const fsPath = this.workspace.uriToPath(document.uri);
+    const refs = this.solcBridge.findReferencesAt(fsPath, document.offsetAt(position));
+    if (!refs) return null;
+
+    const declarationEdit = refs.declaration
+      ? this.semanticDeclarationEdit(refs.declaration, oldName, newName)
+      : null;
+
+    const changes: Record<string, TextEdit[]> = {};
+    const push = (uri: string, edit: TextEdit): void => {
+      changes[uri] = [...(changes[uri] ?? []), edit];
+    };
+
+    if (declarationEdit) push(declarationEdit.uri, declarationEdit.edit);
+
+    for (const ref of refs.references) {
+      const uri = this.uriForPath(ref.filePath);
+      const doc = this.documents.get(uri);
+      const text = doc?.getText() ?? this.readFile(ref.filePath);
+      if (text === null) continue;
+      const lspDoc = doc ?? TextDocument.create(uri, "solidity", 1, text);
+      const start = lspDoc.positionAt(ref.offset);
+      const end = lspDoc.positionAt(ref.offset + ref.length);
+      push(uri, TextEdit.replace({ start, end }, newName));
+    }
+
+    for (const [uri, edits] of Object.entries(changes)) {
+      const seen = new Set<string>();
+      changes[uri] = edits.filter((edit) => {
+        const key = `${edit.range.start.line}:${edit.range.start.character}:${edit.range.end.line}:${edit.range.end.character}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    return Object.keys(changes).length > 0 ? { changes } : null;
+  }
+
+  private semanticDeclarationEdit(
+    declaration: { filePath: string; offset: number; length: number },
+    oldName: string,
+    newName: string,
+  ): { uri: string; edit: TextEdit } | null {
+    const uri = this.uriForPath(declaration.filePath);
+    const symbols = this.symbolIndex.findSymbols(oldName).filter((sym) => sym.filePath === uri);
+    const symbol = symbols.find((sym) => {
+      const doc = this.documents.get(uri);
+      const text = doc?.getText() ?? this.readFile(declaration.filePath);
+      if (text === null) return false;
+      const lspDoc = doc ?? TextDocument.create(uri, "solidity", 1, text);
+      const start = lspDoc.offsetAt(sym.nameRange.start);
+      const end = lspDoc.offsetAt(sym.nameRange.end);
+      return start >= declaration.offset && end <= declaration.offset + declaration.length;
+    });
+    if (!symbol) return null;
+    return { uri, edit: TextEdit.replace(symbol.nameRange, newName) };
+  }
+
+  private uriForPath(filePath: string): string {
+    return URI.file(path.isAbsolute(filePath) ? filePath : path.join(this.workspace.root, filePath)).toString();
+  }
+
+  private readFile(filePath: string): string | null {
+    try {
+      return fs.readFileSync(
+        path.isAbsolute(filePath) ? filePath : path.join(this.workspace.root, filePath),
+        "utf-8",
+      );
+    } catch {
+      return null;
+    }
   }
 
   /**

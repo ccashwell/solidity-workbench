@@ -5,11 +5,14 @@ import type {
   TextDocuments,
 } from "vscode-languageserver/node.js";
 import { Location } from "vscode-languageserver/node.js";
-import type { TextDocument } from "vscode-languageserver-textdocument";
+import { TextDocument } from "vscode-languageserver-textdocument";
 import * as fs from "node:fs";
+import * as path from "node:path";
+import { URI } from "vscode-uri";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
+import type { SolcBridge } from "../compiler/solc-bridge.js";
 import { getWordAtPosition, isInsideString, findLineCommentStart } from "../utils/text.js";
 
 /**
@@ -31,12 +34,18 @@ import { getWordAtPosition, isInsideString, findLineCommentStart } from "../util
  * `ReferenceContext.includeDeclaration`.
  */
 export class ReferencesProvider {
+  private solcBridge: SolcBridge | null = null;
+
   constructor(
     private symbolIndex: SymbolIndex,
     private workspace: WorkspaceManager,
     private parser: SolidityParser,
     private documents: TextDocuments<TextDocument>,
   ) {}
+
+  setSolcBridge(bridge: SolcBridge): void {
+    this.solcBridge = bridge;
+  }
 
   provideReferences(
     document: TextDocument,
@@ -57,6 +66,12 @@ export class ReferencesProvider {
       seen.add(key);
       results.push(Location.create(uri, range));
     };
+
+    // Prefer solc's declaration-ID graph when the rich AST cache is
+    // available. This filters out unrelated same-named symbols and
+    // overloads before falling back to the text/reference index.
+    const semantic = this.provideSemanticReferences(document, position, context);
+    if (semantic) return semantic;
 
     // 1. Fast path: inverted index
     if (this.symbolIndex.hasReferences(word)) {
@@ -117,6 +132,72 @@ export class ReferencesProvider {
     }
 
     return results;
+  }
+
+  private provideSemanticReferences(
+    document: TextDocument,
+    position: Position,
+    context: ReferenceContext,
+  ): Location[] | null {
+    if (!this.solcBridge) return null;
+    const fsPath = this.workspace.uriToPath(document.uri);
+    const offset = document.offsetAt(position);
+    const refs = this.solcBridge.findReferencesAt(fsPath, offset);
+    if (!refs) return null;
+
+    const out: Location[] = [];
+    const seen = new Set<string>();
+    const push = (filePath: string, startOffset: number, length: number): void => {
+      const absolute = this.absolutePath(filePath);
+      const uri = URI.file(absolute).toString();
+      const text =
+        uri === document.uri ? document.getText() : this.documents.get(uri)?.getText() ?? this.read(absolute);
+      if (text === null) return;
+      const doc =
+        uri === document.uri
+          ? document
+          : TextDocument.create(uri, "solidity", 1, text);
+      const range = {
+        start: doc.positionAt(startOffset),
+        end: doc.positionAt(startOffset + length),
+      };
+      const key = `${uri}:${range.start.line}:${range.start.character}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(Location.create(uri, range));
+    };
+
+    for (const ref of refs.references) {
+      push(ref.filePath, ref.offset, ref.length);
+    }
+
+    if (context.includeDeclaration) {
+      const word = getWordAtPosition(document.getText(), position)?.text ?? null;
+      if (word) {
+        for (const sym of this.symbolIndex.findSymbols(word)) {
+          const key = `${sym.filePath}:${sym.nameRange.start.line}:${sym.nameRange.start.character}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push(Location.create(sym.filePath, sym.nameRange));
+        }
+      } else if (refs.declaration) {
+        push(refs.declaration.filePath, refs.declaration.offset, refs.declaration.length);
+      }
+    }
+
+    return out;
+  }
+
+  private absolutePath(filePath: string): string {
+    return path.isAbsolute(filePath) ? filePath : path.join(this.workspace.root, filePath);
+  }
+
+  private read(filePath: string): string | null {
+    try {
+      return fs.readFileSync(filePath, "utf-8");
+    } catch {
+      return null;
+    }
   }
 
   /**

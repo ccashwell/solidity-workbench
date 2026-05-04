@@ -141,11 +141,14 @@ export class CompletionProvider {
   ): CompletionItem[] {
     const items: CompletionItem[] = [];
 
-    // Extract the expression before the dot
+    // Extract the expression before the dot. The simple identifier path
+    // handles `token.` and `Contract.`; the cast path handles common
+    // Solidity completions like `IERC20(token).`.
     const dotMatch = textBefore.match(/(\w+)\.\s*$/);
-    if (!dotMatch) return items;
+    const castMatch = textBefore.match(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\.\s*$/);
+    if (!dotMatch && !castMatch) return items;
 
-    const target = dotMatch[1];
+    const target = dotMatch?.[1] ?? castMatch?.[1] ?? "";
 
     // 1. Known contract / interface / library name (static member access)
     const contract = this.symbolIndex.getContract(target);
@@ -160,6 +163,8 @@ export class CompletionProvider {
       if (viaType) {
         return this.contractMemberCompletions(resolvedType);
       }
+      const structItems = this.structMemberCompletions(resolvedType);
+      if (structItems.length > 0) return structItems;
     }
 
     // 3. Address member completions (heuristic + name hint)
@@ -269,6 +274,29 @@ export class CompletionProvider {
         });
       }
     }
+    return items;
+  }
+
+  private structMemberCompletions(structName: string): CompletionItem[] {
+    const items: CompletionItem[] = [];
+    const structSymbols = this.symbolIndex.findSymbols(structName).filter((s) => s.kind === "struct");
+
+    for (const sym of structSymbols) {
+      if (!sym.containerName) continue;
+      const entry = this.symbolIndex.getContract(sym.containerName);
+      const struct = entry?.contract.structs.find((s) => s.name === structName);
+      if (!struct) continue;
+
+      for (const member of struct.members) {
+        if (!member.name) continue;
+        items.push({
+          label: member.name,
+          kind: CompletionItemKind.Field,
+          detail: member.typeName,
+        });
+      }
+    }
+
     return items;
   }
 
