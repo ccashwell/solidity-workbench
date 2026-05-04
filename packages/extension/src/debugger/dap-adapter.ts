@@ -366,7 +366,7 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     // `jump: "i"` / `jump: "o"` markers on every step up to and
     // including the cursor. The DAP convention is topmost-first —
     // so the current frame is index 0.
-    const internalFrames = this.buildInternalCallStack();
+    const internalFrames = this.buildCallStack();
     if (internalFrames.length > 0) {
       const dapFrames = internalFrames.map((f, i) => ({
         id: i,
@@ -711,77 +711,84 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
   // ── Call stack & scopes ──────────────────────────────────────────
 
   /**
-   * Walk the trace from index 0 through the cursor's current step,
-   * pushing on `jump: "i"` and popping on `jump: "o"`, to construct
-   * the Solidity internal call stack at the current position.
+   * Walk the trace from index 0 through the cursor's current step
+   * to build a full multi-depth call stack. For each EVM call
+   * depth, an independent internal-frame stack is tracked: pushed
+   * on `jump: "i"`, popped on `jump: "o"`. When the trace crosses
+   * an EVM CALL / STATICCALL / DELEGATECALL / CREATE boundary, the
+   * outer depth's frame stack is "paused" and a fresh stack starts
+   * at the inner depth, using the inner contract's
+   * `ContractContext` if loaded.
    *
-   * The bottom-most frame represents the function the trace
-   * started in (the test function, typically); each subsequent
-   * frame is one level deeper. The DAP convention is
-   * topmost-first, so the returned array is reversed before
-   * delivery — index 0 is the innermost function.
+   * The flattened result is ordered topmost-first per the DAP
+   * convention — index 0 is the innermost function at the deepest
+   * active depth, then walking up through internal frames at the
+   * same depth, then over to the outer depth's topmost-internal
+   * frame, and so on. Each frame additionally carries the trace
+   * step index and stack length at function entry, which the
+   * Source-level locals scope uses to read live parameter values.
    *
-   * Inner external CALLs (depth > entry depth) are skipped here:
-   * their bytecode isn't ours, so we can't track their internal
-   * stack. They contribute as a single label frame in the trace
-   * but don't unwind our internal stack.
-   *
-   * Defensive: refuses to pop the bottom frame so an unbalanced
-   * `jump: "o"` (which can happen when an exception unwinds) leaves
-   * a sensible stack rather than emptying it.
+   * Defensive against unbalanced `jump: "o"` (which an exception
+   * unwind can produce): the bottom frame of each depth's stack
+   * is never popped.
    */
-  private buildInternalCallStack(): InternalFrame[] {
+  private buildCallStack(): CallStackFrame[] {
     if (!this.cursor) return [];
     const cur = this.cursor.current;
     if (!cur) return [];
-
-    // Multi-contract awareness (stretch 3): when the cursor is in
-    // a deeper call frame and we have a context for that frame's
-    // contract, surface a single label-frame at the inner contract's
-    // source position. The full internal-stack walk is restricted
-    // to the entry contract — extending it to per-depth internal
-    // stacks would require tracking i/o jumps separately per
-    // depth, a notable refactor we leave for follow-up.
-    if (cur.depth !== 1) {
-      const innerCtx = this.activeContext();
-      if (!innerCtx) return [];
-      const innerEntry = resolveSourcePosition(cur.pc, innerCtx.pcMap, innerCtx.sourceMap);
-      if (!innerEntry) return [];
-      const innerSource = innerCtx.sources[innerEntry.fileIndex];
-      if (!innerSource?.lineIndex) return [];
-      const innerPos = innerSource.lineIndex.positionAt(innerEntry.start);
-      return [
-        {
-          name: `(depth ${cur.depth}) ${path.basename(innerSource.absolutePath)}`,
-          filePath: innerSource.absolutePath,
-          line: innerPos.line,
-          character: innerPos.character,
-        },
-      ];
-    }
-
-    if (!this.entryContext) return [];
-    const ctx = this.entryContext;
     const cursorIndex = this.cursor.index;
-    const stack: InternalFrame[] = [];
+
+    // depthStack[d-1] is the internal-frame stack at EVM depth d.
+    const depthStack: CallStackFrame[][] = [];
+    const ensureDepth = (depth: number, ctx: ContractContext | null, step: TraceStep): void => {
+      while (depthStack.length > depth) depthStack.pop();
+      while (depthStack.length < depth) {
+        // New depth: seed with a synthetic "(entry)" frame so the
+        // stack always has at least one item per active depth.
+        const seed: CallStackFrame = {
+          name: depthStack.length === 0 ? "(entry)" : `(depth ${depthStack.length + 1} entry)`,
+          filePath: "",
+          line: 0,
+          character: 0,
+          entryStepIdx: step ? this.cursor!.steps.indexOf(step) : -1,
+          entryStackLen: step?.stack.length ?? 0,
+          fn: null,
+          ctx,
+          localStackPositions: new Map(),
+        };
+        depthStack.push([seed]);
+      }
+    };
 
     for (let i = 0; i <= cursorIndex && i < this.cursor.length; i++) {
       const step = this.cursor.steps[i];
-      if (step.depth !== 1) continue; // skip inner-external opcodes
+      ensureDepth(step.depth, this.contextStream[i] ?? null, step);
+
+      const ctx = this.contextStream[i] ?? null;
+      const frames = depthStack[depthStack.length - 1];
+      if (!ctx) continue;
+
       const entry = resolveSourcePosition(step.pc, ctx.pcMap, ctx.sourceMap);
       if (!entry) continue;
       const source = ctx.sources[entry.fileIndex];
       if (!source?.lineIndex) continue;
       const pos = source.lineIndex.positionAt(entry.start);
 
-      if (stack.length === 0) {
-        stack.push({
-          name: "(entry)",
-          filePath: source.absolutePath,
-          line: pos.line,
-          character: pos.character,
-        });
-        continue;
+      if (frames.length === 1 && frames[0].filePath === "") {
+        // Seed the depth's first frame with the first resolvable
+        // source position. Gives the "(entry)" / "(depth N entry)"
+        // frame a real source pointer and — when the AST resolves
+        // the enclosing function — a real Solidity name to show
+        // in the Call Stack panel.
+        frames[0].filePath = source.absolutePath;
+        frames[0].line = pos.line;
+        frames[0].character = pos.character;
+        frames[0].fn = findEnclosingFunction(ctx.functions, entry.fileIndex, entry.start);
+        frames[0].entryStackLen = step.stack.length;
+        frames[0].entryStepIdx = i;
+        if (frames[0].fn?.name) {
+          frames[0].name = frames[0].fn.name;
+        }
       }
 
       if (entry.jump === "i") {
@@ -789,26 +796,35 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
         const frameName = enclosing?.name
           ? enclosing.name
           : `function@${path.basename(source.absolutePath)}:${pos.line + 1}`;
-        stack.push({
+        frames.push({
           name: frameName,
           filePath: source.absolutePath,
           line: pos.line,
           character: pos.character,
+          entryStepIdx: i,
+          entryStackLen: step.stack.length,
+          fn: enclosing,
+          ctx,
+          localStackPositions: new Map(),
         });
-      } else if (entry.jump === "o" && stack.length > 1) {
-        stack.pop();
+      } else if (entry.jump === "o" && frames.length > 1) {
+        frames.pop();
       }
 
-      // The topmost frame's source position tracks the *current*
-      // step (so the user sees where execution is right now, not
-      // where the JUMP-in landed).
-      const top = stack[stack.length - 1];
+      // The topmost frame's source position tracks the current
+      // step so the user sees where execution is right now, not
+      // where the function was entered.
+      const top = frames[frames.length - 1];
       top.filePath = source.absolutePath;
       top.line = pos.line;
       top.character = pos.character;
     }
 
-    return stack.reverse();
+    // Flatten outermost-first internally, then reverse so the
+    // returned array is topmost-first per the DAP convention.
+    const flat: CallStackFrame[] = [];
+    for (const d of depthStack) flat.push(...d);
+    return flat.reverse();
   }
 
   private allocateVariableRef(getter: () => DapVariable[]): number {
@@ -1290,16 +1306,38 @@ interface DapRequest {
 
 /**
  * One Solidity-level call frame, computed by walking the trace's
- * source-map `i` / `o` jump markers. The topmost (innermost) frame
- * is the function the cursor is currently executing in.
+ * source-map `i` / `o` jump markers and EVM depth transitions.
+ *
+ * `entryStackLen` and `localStackPositions` exist so the
+ * Source-level locals scope can read live parameter / local values
+ * out of the current step's EVM stack — a function's parameters
+ * are at indices `[entryStackLen - paramCount, entryStackLen)` in
+ * the trace's bottom-first stack array, and locals occupy slots
+ * tracked incrementally as their declarations execute.
  */
-interface InternalFrame {
+interface CallStackFrame {
   name: string;
   filePath: string;
   /** 0-based line number; `+1`'d before sending over DAP. */
   line: number;
   /** 0-based character offset; `+1`'d before sending over DAP. */
   character: number;
+  /** Trace step index where this frame was entered (synthetic "(entry)" frame at depth 1 uses `0`). */
+  entryStepIdx: number;
+  /** EVM stack length at function entry — bottom of this frame. */
+  entryStackLen: number;
+  /** AST function record this frame represents, when resolvable. */
+  fn: AstFunction | null;
+  /** ContractContext active for this frame's depth (may be `null` for unknown inner contracts). */
+  ctx: ContractContext | null;
+  /**
+   * Map from local-variable name to its absolute index in the
+   * trace's stack array (bottom-first). Populated incrementally
+   * as the trace passes each `VariableDeclarationStatement`'s
+   * declaration byte range. Used by the Source-level locals
+   * scope to read the local's current value.
+   */
+  localStackPositions: Map<string, number>;
 }
 
 /**
