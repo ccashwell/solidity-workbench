@@ -35,6 +35,24 @@ export interface AstLocal {
    * declaration statement.
    */
   declaredAtByte: number;
+  /**
+   * Byte offset of the enclosing `VariableDeclarationStatement`
+   * (the start of the whole `<type> <name> [= <expr>];` statement).
+   * Populated alongside `statementEndByte` so the debug adapter
+   * can detect when execution has finished evaluating the
+   * initializer expression and recorded the local on the EVM
+   * stack.
+   */
+  statementStartByte: number;
+  /**
+   * Byte offset of the position just after the statement (start +
+   * length) — i.e. the position of the closing semicolon plus
+   * one. The debug adapter uses this to detect when the source
+   * position has fully exited the declaration, which marks the
+   * point at which the initializer's result is on the stack and
+   * the local can be tracked.
+   */
+  statementEndByte: number;
 }
 
 export interface AstFunction {
@@ -100,6 +118,8 @@ function extractLocals(body: AstNode): AstLocal[] {
   const out: AstLocal[] = [];
   visit(body, (node) => {
     if (node?.nodeType !== "VariableDeclarationStatement") return;
+    const stmtSrc = parseSrc(node.src);
+    if (!stmtSrc) return;
     const decls = node.declarations;
     if (!Array.isArray(decls)) return;
     for (const d of decls) {
@@ -113,6 +133,8 @@ function extractLocals(body: AstNode): AstLocal[] {
         name,
         type: readTypeString(v),
         declaredAtByte: src.start,
+        statementStartByte: stmtSrc.start,
+        statementEndByte: stmtSrc.start + stmtSrc.length,
       });
     }
   });

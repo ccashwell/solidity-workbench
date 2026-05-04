@@ -64,22 +64,24 @@ describe("extractFunctions", () => {
                 statements: [
                   {
                     nodeType: "VariableDeclarationStatement",
+                    src: "10:18:0", // covers `uint256 a = expr;`
                     declarations: [
                       {
                         nodeType: "VariableDeclaration",
                         name: "a",
-                        src: "10:6:0",
+                        src: "10:9:0", // covers `uint256 a`
                         typeDescriptions: { typeString: "uint256" },
                       },
                     ],
                   },
                   {
                     nodeType: "VariableDeclarationStatement",
+                    src: "30:19:0",
                     declarations: [
                       {
                         nodeType: "VariableDeclaration",
                         name: "b",
-                        src: "30:7:0",
+                        src: "30:9:0",
                         typeDescriptions: { typeString: "address" },
                       },
                     ],
@@ -93,13 +95,20 @@ describe("extractFunctions", () => {
     };
     const fn = extractFunctions(ast)[0];
     assert.equal(fn.locals.length, 2);
-    assert.deepEqual(
-      fn.locals.map((l) => ({ name: l.name, type: l.type, declaredAtByte: l.declaredAtByte })),
-      [
-        { name: "a", type: "uint256", declaredAtByte: 10 },
-        { name: "b", type: "address", declaredAtByte: 30 },
-      ],
-    );
+    assert.deepEqual(fn.locals[0], {
+      name: "a",
+      type: "uint256",
+      declaredAtByte: 10,
+      statementStartByte: 10,
+      statementEndByte: 28,
+    });
+    assert.deepEqual(fn.locals[1], {
+      name: "b",
+      type: "address",
+      declaredAtByte: 30,
+      statementStartByte: 30,
+      statementEndByte: 49,
+    });
   });
 
   it("returns [] for non-object input or trees without functions", () => {

@@ -420,8 +420,13 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     // can map the current step back to a function in the AST.
     const enclosing = this.currentEnclosingFunction(step);
     if (enclosing) {
+      // Find the topmost call-stack frame that matches this
+      // function so the locals scope can read live values from
+      // its `entryStackLen` and `localStackPositions`.
+      const callStack = this.buildCallStack();
+      const frame = callStack.find((f) => f.fn === enclosing.fn) ?? null;
       const localsRef = this.allocateVariableRef(() =>
-        this.sourceLocalsVariables(enclosing.fn, enclosing.byteOffset),
+        this.sourceLocalsVariables(enclosing.fn, enclosing.byteOffset, step, frame),
       );
       scopes.push({
         name: `Source-level locals (${enclosing.fn.name || "<anonymous>"})`,
@@ -652,16 +657,39 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       const value = step.storage[slotKey] ?? step.storage[`0x${idx.toString(16)}`];
       return value ? prefixHex(value) : null;
     }
-    // Bare identifier — look up via the active contract's storage layout.
-    const ctx = this.activeContext();
-    if (/^[A-Za-z_]\w*$/.test(expression) && ctx?.storageLayout) {
-      const match = ctx.storageLayout.entries.find((e) => e.label === expression);
-      if (match) {
-        const slotKey = match.slot.toString();
-        const value =
-          step.storage[slotKey] ?? step.storage[`0x${match.slot.toString(16)}`];
-        if (value !== undefined) return prefixHex(value);
-        return "(slot has no observed write — value unchanged from before this trace)";
+    // Bare identifier: try the in-scope locals / parameters first,
+    // then the active contract's storage layout. This ordering
+    // matches Solidity's lexical resolution — a parameter named
+    // `count` shadows a state variable of the same name.
+    if (/^[A-Za-z_]\w*$/.test(expression)) {
+      // 1. In-scope parameter or local on the topmost call frame.
+      const frame = this.buildCallStack().find((f) => !!f.fn) ?? null;
+      if (frame?.fn) {
+        const paramIdx = frame.fn.parameters.findIndex((p) => p.name === expression);
+        if (paramIdx >= 0) {
+          const slot = frame.entryStackLen - frame.fn.parameters.length + paramIdx;
+          if (slot >= 0 && slot < step.stack.length) {
+            return prefixHex(step.stack[slot]);
+          }
+          return "(parameter consumed by callee)";
+        }
+        const localSlot = frame.localStackPositions.get(expression);
+        if (localSlot !== undefined) {
+          if (localSlot < step.stack.length) return prefixHex(step.stack[localSlot]);
+          return "(local consumed)";
+        }
+      }
+      // 2. State variable via the active contract's storage layout.
+      const ctx = this.activeContext();
+      if (ctx?.storageLayout) {
+        const match = ctx.storageLayout.entries.find((e) => e.label === expression);
+        if (match) {
+          const slotKey = match.slot.toString();
+          const value =
+            step.storage[slotKey] ?? step.storage[`0x${match.slot.toString(16)}`];
+          if (value !== undefined) return prefixHex(value);
+          return "(slot has no observed write — value unchanged from before this trace)";
+        }
       }
     }
     return null;
@@ -818,6 +846,32 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       top.filePath = source.absolutePath;
       top.line = pos.line;
       top.character = pos.character;
+
+      // Live-local tracking: walk this frame's function locals and,
+      // for each one we haven't recorded yet, check whether the
+      // current step's source position has moved PAST the
+      // declaration statement's end. If so, the initializer's
+      // result is on the stack and the local sits at
+      // `step.stack.length - 1`. Doesn't fire for tuple
+      // destructuring (multiple decls per statement) or for
+      // declarations skipped by control flow — left as known
+      // limitations rather than wrong values.
+      if (top.fn) {
+        for (const local of top.fn.locals) {
+          if (top.localStackPositions.has(local.name)) continue;
+          if (entry.start < local.statementEndByte) continue;
+          if (entry.start === local.declaredAtByte) continue;
+          // Heuristic: only record when the source position is now
+          // past the declaration's full statement range AND the
+          // stack has grown beyond entry. We additionally require
+          // entry.fileIndex matches (declaration is in the same
+          // source as the function) so a different file's source
+          // map entry doesn't incorrectly trigger.
+          if (entry.fileIndex !== this.localFileIndexFor(top.fn, ctx)) continue;
+          if (step.stack.length <= top.entryStackLen) continue;
+          top.localStackPositions.set(local.name, step.stack.length - 1);
+        }
+      }
     }
 
     // Flatten outermost-first internally, then reverse so the
@@ -825,6 +879,17 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     const flat: CallStackFrame[] = [];
     for (const d of depthStack) flat.push(...d);
     return flat.reverse();
+  }
+
+  /**
+   * Determine the source-map fileIndex the function lives in by
+   * scanning the contract's sources for a path match. Used by
+   * local-tracking so that source-map entries from imported files
+   * can't accidentally trigger a "this local is now declared"
+   * recording inside an outer function.
+   */
+  private localFileIndexFor(fn: AstFunction, _ctx: ContractContext): number {
+    return fn.fileIndex;
   }
 
   private allocateVariableRef(getter: () => DapVariable[]): number {
@@ -867,39 +932,81 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
   }
 
   /**
-   * Source-level locals scope (stretch 2). Lists the parameters
-   * and the in-scope `let` declarations of the function that
-   * encloses the cursor's current source position. Values are
-   * rendered as `(value: stack-slot mapping pending)` because
-   * mapping a Solidity identifier to its EVM stack slot requires
-   * walking the compiled bytecode alongside the source map — the
-   * "next stretch goal beyond stretch goals". The names + types
-   * are still useful as a navigation aid: the user can confirm
-   * "yes I'm inside `swap(...)` with these parameters in scope"
-   * at a glance.
+   * Source-level locals scope. Lists the parameters and the
+   * in-scope local variables of the function that encloses the
+   * cursor's current source position, with **live values** read
+   * out of the trace's EVM stack:
+   *
+   *   - Parameters live at `[entryStackLen - paramCount,
+   *     entryStackLen)` of the trace's bottom-first stack array
+   *     (Solidity calling convention pushes them in declaration
+   *     order). Values are read from those slots at every step.
+   *   - Locals are tracked incrementally by the call-stack
+   *     walker: as the trace's source position passes each
+   *     `VariableDeclarationStatement`'s end byte, the slot at
+   *     the top of the EVM stack is recorded. Values are read
+   *     from that slot at every subsequent step.
+   *
+   * Both render `(consumed)` when the EVM stack has shrunk
+   * below the recorded position — the compiler popped the value
+   * before this point. Tuple destructuring (`(a, b) = foo()`)
+   * is not yet supported and lands as a name-only entry; ditto
+   * locals skipped by control flow (declared but never reached).
    */
-  private sourceLocalsVariables(fn: AstFunction, byteOffset: number): DapVariable[] {
+  private sourceLocalsVariables(
+    fn: AstFunction,
+    byteOffset: number,
+    step: TraceStep,
+    frame: CallStackFrame | null,
+  ): DapVariable[] {
     const out: DapVariable[] = [];
-    for (const p of fn.parameters) {
+    const stackLen = step.stack.length;
+    const paramCount = fn.parameters.length;
+
+    for (let i = 0; i < fn.parameters.length; i++) {
+      const p = fn.parameters[i];
+      let value = "(value not available — no active frame)";
+      if (frame && frame.fn === fn) {
+        const slot = frame.entryStackLen - paramCount + i;
+        if (slot >= 0 && slot < stackLen) {
+          value = prefixHex(step.stack[slot]);
+        } else {
+          value = "(consumed by callee)";
+        }
+      }
       out.push({
         name: p.name,
-        value: "(parameter — stack-slot mapping pending)",
+        value,
         variablesReference: 0,
         type: p.type,
       });
     }
+
     for (const local of fn.locals) {
-      // Scope visibility — locals are only "visible" after their
-      // declaration statement. Skip ones that haven't been
-      // declared yet at the cursor's current source position.
       if (local.declaredAtByte > byteOffset) continue;
+      let value = "(local — stack-slot mapping pending)";
+      if (frame && frame.fn === fn) {
+        const slot = frame.localStackPositions.get(local.name);
+        if (slot !== undefined) {
+          if (slot < stackLen) {
+            value = prefixHex(step.stack[slot]);
+          } else {
+            value = "(consumed)";
+          }
+        } else if (byteOffset < local.statementEndByte) {
+          value = "(initializer running)";
+        } else {
+          value = "(unsupported declaration form)";
+        }
+      }
       out.push({
         name: local.name,
-        value: "(local — stack-slot mapping pending)",
+        value,
         variablesReference: 0,
         type: local.type,
       });
     }
+
     if (out.length === 0) {
       return [{ name: "(no parameters / locals in scope)", value: "", variablesReference: 0 }];
     }
