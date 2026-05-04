@@ -14,3 +14,4 @@ export * from "./yul-outline.js";
 export * from "./wake-report.js";
 export * from "./mythril-report.js";
 export * from "./source-map.js";
+export * from "./trace.js";
