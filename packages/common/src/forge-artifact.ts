@@ -41,6 +41,14 @@ export interface ForgeArtifact {
    * the metadata didn't disclose every source.
    */
   sources: string[];
+  /**
+   * The parsed JSON object the artifact was decoded from. Kept for
+   * downstream consumers (e.g. the DAP adapter's stage-5 storage
+   * pretty-print) that need to read additional artifact fields
+   * (`storageLayout`, `methodIdentifiers`, `ast`, ...) without
+   * re-parsing the JSON.
+   */
+  raw: Record<string, unknown>;
 }
 
 /**
@@ -68,6 +76,7 @@ export function parseForgeArtifact(json: string): ForgeArtifact | null {
     bytecode: creation?.object ?? "",
     bytecodeSourceMap: creation?.sourceMap ?? "",
     sources: extractSources(obj),
+    raw: obj,
   };
 }
 

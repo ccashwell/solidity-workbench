@@ -12,6 +12,12 @@ import {
   parseForgeArtifact,
   type ForgeArtifact,
   LineIndex,
+  parseStorageLayout,
+  lookupSlot,
+  type StorageLayout,
+  disassemble,
+  opcodeMnemonic,
+  type Instruction,
 } from "@solidity-workbench/common";
 
 /**
@@ -42,15 +48,22 @@ import {
  * - Stage 2 — trace ingestion (DONE).
  * - Stage 3 — source-position resolution + step semantics +
  *   setBreakpoints (DONE).
- * - Stage 4 — internal call stack + Stack / Memory / Storage scopes
- *   (THIS REVISION). `stackTrace` returns a multi-frame stack built
- *   by walking the trace's source-map `jump: "i"` / `jump: "o"`
- *   markers; each internal Solidity function call shows up as its
- *   own frame with its own source position. `scopes` exposes the
- *   EVM stack, memory, and storage at the current step; `variables`
- *   resolves the references to lists of raw hex entries — local
- *   variable decoding from the AST is stretch goal stage 5.
- * - Stage 5 — see PRODUCTION_GAPS.md.
+ * - Stage 4 — internal call stack + Stack / Memory / Storage scopes (DONE).
+ * - Stage 5 — disassembly + storage pretty-print + evaluate
+ *   (THIS REVISION). The adapter now:
+ *     * Loads the artifact's `storageLayout` and pretty-prints
+ *       storage entries with their declared names (`count` instead
+ *       of just `slot 0x00`), respecting packed-slot offsets.
+ *     * Disassembles the deployed bytecode at load time and
+ *       answers DAP `disassemble` requests by slicing windows out
+ *       of the linear listing.
+ *     * Evaluates simple expressions on hover: `stack[N]`,
+ *       `memory[0xN]`, `storage[0xN]`, and bare state-variable
+ *       names that resolve through the storage layout.
+ *
+ * Local variable decoding (mapping AST identifiers to stack
+ * positions) requires the solc AST and is intentionally left for
+ * a follow-up — the present adapter is functional without it.
  */
 export class SolidityDapAdapter implements vscode.DebugAdapter {
   private readonly _onDidSendMessage = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
@@ -111,6 +124,10 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
         return this.handleStepOut(msg);
       case "pause":
         return this.respond(msg, true);
+      case "evaluate":
+        return this.handleEvaluate(msg);
+      case "disassemble":
+        return this.handleDisassemble(msg);
       case "disconnect":
       case "terminate":
         return this.handleTerminate(msg);
@@ -130,7 +147,7 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       supportsBreakpointLocationsRequest: false,
       supportsConditionalBreakpoints: false,
       supportsHitConditionalBreakpoints: false,
-      supportsEvaluateForHovers: false,
+      supportsEvaluateForHovers: true,
       supportsSetVariable: false,
       supportsExceptionInfoRequest: false,
       supportsValueFormattingOptions: false,
@@ -144,7 +161,7 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       supportsDataBreakpoints: false,
       supportsReadMemoryRequest: false,
       supportsWriteMemoryRequest: false,
-      supportsDisassembleRequest: false,
+      supportsDisassembleRequest: true,
       supportsCancelRequest: false,
       supportsSteppingGranularity: false,
       supportsInstructionBreakpoints: false,
@@ -426,6 +443,111 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     this.fireEvent("terminated");
   }
 
+  private handleEvaluate(msg: DapRequest): void {
+    const args = msg.arguments as EvaluateArgs | undefined;
+    const expression = args?.expression?.trim();
+    if (!expression) {
+      this.respond(msg, false, undefined, "Empty expression");
+      return;
+    }
+    const step = this.cursor?.current;
+    if (!step) {
+      this.respond(msg, false, undefined, "No active trace step");
+      return;
+    }
+    const result = this.evaluateExpression(expression, step);
+    if (result === null) {
+      this.respond(msg, false, undefined, `Cannot evaluate '${expression}'`);
+      return;
+    }
+    this.respond(msg, true, { result, variablesReference: 0 });
+  }
+
+  /**
+   * Resolve a tiny expression language used by hover / Watch:
+   *
+   *   - `stack[N]`            — Nth entry from the top of the EVM stack
+   *   - `memory[0xN]`         — 32-byte word starting at byte offset N
+   *   - `storage[<slot>]`     — value at the given storage slot
+   *   - `<identifier>`        — bare state-variable name resolved
+   *                             through the contract's storage layout
+   *
+   * Returns the formatted value as a hex string, or `null` when the
+   * expression doesn't match any supported form. We intentionally
+   * keep this narrow — broader expression evaluation needs a
+   * Solidity expression parser, which is out of scope for the DAP.
+   */
+  private evaluateExpression(expression: string, step: TraceStep): string | null {
+    const indexMatch = /^(stack|memory|storage)\[\s*(.+?)\s*\]$/.exec(expression);
+    if (indexMatch) {
+      const kind = indexMatch[1] as "stack" | "memory" | "storage";
+      const indexExpr = indexMatch[2];
+      const idx = parseExpressionNumber(indexExpr);
+      if (idx === null) return null;
+      if (kind === "stack") {
+        const reversed = [...step.stack].reverse();
+        return reversed[Number(idx)] ? prefixHex(reversed[Number(idx)]) : null;
+      }
+      if (kind === "memory") {
+        const wordIdx = Number(idx) >> 5; // / 32
+        const word = step.memory[wordIdx];
+        return word ? prefixHex(word) : null;
+      }
+      // storage
+      const slotKey = idx.toString();
+      const value = step.storage[slotKey] ?? step.storage[`0x${idx.toString(16)}`];
+      return value ? prefixHex(value) : null;
+    }
+    // Bare identifier — look up via the storage layout.
+    if (/^[A-Za-z_]\w*$/.test(expression) && this.contractContext?.storageLayout) {
+      const match = this.contractContext.storageLayout.entries.find(
+        (e) => e.label === expression,
+      );
+      if (match) {
+        const slotKey = match.slot.toString();
+        const value =
+          step.storage[slotKey] ?? step.storage[`0x${match.slot.toString(16)}`];
+        if (value !== undefined) return prefixHex(value);
+        return "(slot has no observed write — value unchanged from before this trace)";
+      }
+    }
+    return null;
+  }
+
+  private handleDisassemble(msg: DapRequest): void {
+    const args = msg.arguments as DisassembleArgs | undefined;
+    if (!args || !this.contractContext) {
+      this.respond(msg, false, undefined, "No contract loaded — supply `artifact` in launch.json");
+      return;
+    }
+    const all = this.contractContext.disassembly;
+    if (all.length === 0) {
+      this.respond(msg, true, { instructions: [] });
+      return;
+    }
+    // VSCode hands us `memoryReference` (typically the deployed
+    // bytecode origin "0x" or a section anchor we never set) plus
+    // an `offset` byte count and a target instructionCount. The
+    // simplest correct mapping for an inline EVM is "treat
+    // memoryReference as the deployed bytecode and offset as PC".
+    const startPc = (args.offset ?? 0) + parseAddress(args.memoryReference ?? "0x0");
+    const want = args.instructionCount ?? 16;
+
+    let startIdx = all.findIndex((i) => i.pc >= startPc);
+    if (startIdx < 0) startIdx = all.length;
+    let endIdx = startIdx + want;
+    if (endIdx > all.length) endIdx = all.length;
+
+    const window = all.slice(startIdx, endIdx);
+    this.respond(msg, true, {
+      instructions: window.map((inst) => ({
+        address: `0x${inst.pc.toString(16).padStart(4, "0")}`,
+        instruction: formatInstruction(inst),
+        instructionBytes: instructionBytes(inst),
+      })),
+    });
+  }
+
   private handleTerminate(msg: DapRequest): void {
     this.respond(msg, true);
     this.fireEvent("terminated");
@@ -544,20 +666,37 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
   /**
    * Storage diff for the active contract. structLogs only show
    * storage *changes* observed during execution — not the entire
-   * storage tree — so this list is small. Stage 5 will pretty-print
-   * each entry against the contract's storage layout.
+   * storage tree — so this list is small. When the artifact's
+   * `storageLayout` is loaded, each slot is pretty-printed with
+   * its declared variable name(s) and Solidity type instead of
+   * the raw hex slot. Packed slots surface every entry that
+   * occupies them.
    */
   private evmStorageVariables(step: TraceStep): DapVariable[] {
     const entries = Object.entries(step.storage);
     if (entries.length === 0) {
       return [{ name: "(no observed writes)", value: "", variablesReference: 0 }];
     }
-    return entries.map(([slot, value]) => ({
-      name: prefixHex(slot),
-      value: prefixHex(value),
-      variablesReference: 0,
-      type: "bytes32",
-    }));
+    const layout = this.contractContext?.storageLayout;
+    return entries.flatMap(([slot, value]) => {
+      const named = layout ? lookupSlot(layout, slot) : [];
+      if (named.length === 0) {
+        return [
+          {
+            name: prefixHex(slot),
+            value: prefixHex(value),
+            variablesReference: 0,
+            type: "bytes32",
+          },
+        ];
+      }
+      return named.map((entry) => ({
+        name: `${entry.label} (slot ${prefixHex(slot)}${entry.offset > 0 ? ` +${entry.offset}` : ""})`,
+        value: prefixHex(value),
+        variablesReference: 0,
+        type: entry.type,
+      }));
+    });
   }
 
   // ── Source resolution ────────────────────────────────────────────
@@ -664,7 +803,28 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       }
       return { absolutePath, lineIndex };
     });
-    return { sourceMap, pcMap, sources, depth: 1 };
+    // Storage layout is optional — older / minimal artifacts may
+    // omit it and the adapter degrades to "raw hex slots" naming.
+    // We re-parse the artifact JSON since `parseForgeArtifact`
+    // doesn't currently surface this block; doing it here keeps
+    // the common helper's surface narrow.
+    const storageLayout = parseStorageLayout(artifact.raw);
+    // Disassembly is computed once at load and reused for every
+    // `disassemble` request via array slicing.
+    let disassembly: Instruction[] = [];
+    try {
+      disassembly = artifact.deployedBytecode ? disassemble(artifact.deployedBytecode) : [];
+    } catch {
+      disassembly = [];
+    }
+    return {
+      sourceMap,
+      pcMap,
+      sources,
+      depth: 1,
+      storageLayout,
+      disassembly,
+    };
   }
 
   // ── Wire helpers ─────────────────────────────────────────────────
@@ -772,6 +932,10 @@ interface ContractContext {
   pcMap: number[];
   sources: { absolutePath: string; lineIndex: LineIndex | null }[];
   depth: number;
+  /** Storage layout from the artifact, or `null` when unavailable. */
+  storageLayout: StorageLayout | null;
+  /** Pre-disassembled deployed bytecode, computed at load time. */
+  disassembly: Instruction[];
 }
 
 interface DapRequest {
@@ -813,6 +977,68 @@ function prefixHex(value: string): string {
   if (value.startsWith("0x") || value.startsWith("0X")) return value;
   return `0x${value}`;
 }
+
+interface EvaluateArgs {
+  expression?: string;
+  context?: string;
+  frameId?: number;
+}
+
+interface DisassembleArgs {
+  memoryReference?: string;
+  offset?: number;
+  instructionOffset?: number;
+  instructionCount?: number;
+}
+
+/**
+ * Decode a numeric literal in either decimal or hex form. Returns
+ * a `bigint` so storage slots beyond 2^53 round-trip safely.
+ * Returns `null` for anything we can't parse.
+ */
+function parseExpressionNumber(raw: string): bigint | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    if (trimmed.startsWith("0x") || trimmed.startsWith("0X")) {
+      return BigInt(trimmed);
+    }
+    if (/^\d+$/.test(trimmed)) {
+      return BigInt(trimmed);
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/** Parse a `0x...` address-style memoryReference; falls back to 0. */
+function parseAddress(raw: string): number {
+  const n = parseExpressionNumber(raw);
+  return n === null ? 0 : Number(n);
+}
+
+/** `PUSH2 0xCAFE` / `STOP` — the human-readable line shown in the disassembly panel. */
+function formatInstruction(inst: Instruction): string {
+  if (inst.immediate !== null && inst.immediate.length > 0) {
+    return `${inst.mnemonic} 0x${inst.immediate}`;
+  }
+  if (inst.immediate === "") {
+    return inst.mnemonic;
+  }
+  return inst.mnemonic;
+}
+
+/** Hex bytes of the encoding (opcode + immediate), space-separated for the gutter. */
+function instructionBytes(inst: Instruction): string {
+  const opcodeByte = inst.opcode.toString(16).padStart(2, "0");
+  if (inst.immediate && inst.immediate.length > 0) {
+    return `${opcodeByte} ${inst.immediate.match(/.{1,2}/g)?.join(" ") ?? ""}`.trim();
+  }
+  return opcodeByte;
+}
+
+void opcodeMnemonic; // re-exported for downstream consumers; keeps the import in scope.
 
 interface SetBreakpointsArgs {
   source: { path?: string; name?: string };
