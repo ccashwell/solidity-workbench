@@ -19,3 +19,4 @@ export * from "./line-index.js";
 export * from "./forge-artifact.js";
 export * from "./storage-layout.js";
 export * from "./evm-opcodes.js";
+export * from "./solc-ast.js";

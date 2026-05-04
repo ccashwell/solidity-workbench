@@ -22,6 +22,9 @@ import {
   disassemble,
   opcodeMnemonic,
   type Instruction,
+  extractFunctions,
+  findEnclosingFunction,
+  type AstFunction,
 } from "@solidity-workbench/common";
 
 /**
@@ -307,26 +310,44 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     const stackRef = this.allocateVariableRef(() => this.evmStackVariables(step));
     const memoryRef = this.allocateVariableRef(() => this.evmMemoryVariables(step));
     const storageRef = this.allocateVariableRef(() => this.evmStorageVariables(step));
-    this.respond(msg, true, {
-      scopes: [
-        {
-          name: `Stack (${step.stack.length} item${step.stack.length === 1 ? "" : "s"})`,
-          variablesReference: stackRef,
-          expensive: false,
-          presentationHint: "registers",
-        },
-        {
-          name: `Memory (${step.memory.length} word${step.memory.length === 1 ? "" : "s"})`,
-          variablesReference: memoryRef,
-          expensive: false,
-        },
-        {
-          name: `Storage (${Object.keys(step.storage).length} entries)`,
-          variablesReference: storageRef,
-          expensive: false,
-        },
-      ],
-    });
+
+    const scopes: Record<string, unknown>[] = [];
+
+    // Source-level locals scope (stretch-2). Only emitted when we
+    // can map the current step back to a function in the AST.
+    const enclosing = this.currentEnclosingFunction(step);
+    if (enclosing) {
+      const localsRef = this.allocateVariableRef(() =>
+        this.sourceLocalsVariables(enclosing.fn, enclosing.byteOffset),
+      );
+      scopes.push({
+        name: `Source-level locals (${enclosing.fn.name || "<anonymous>"})`,
+        variablesReference: localsRef,
+        expensive: false,
+        presentationHint: "locals",
+      });
+    }
+
+    scopes.push(
+      {
+        name: `Stack (${step.stack.length} item${step.stack.length === 1 ? "" : "s"})`,
+        variablesReference: stackRef,
+        expensive: false,
+        presentationHint: "registers",
+      },
+      {
+        name: `Memory (${step.memory.length} word${step.memory.length === 1 ? "" : "s"})`,
+        variablesReference: memoryRef,
+        expensive: false,
+      },
+      {
+        name: `Storage (${Object.keys(step.storage).length} entries)`,
+        variablesReference: storageRef,
+        expensive: false,
+      },
+    );
+
+    this.respond(msg, true, { scopes });
   }
 
   private handleVariables(msg: DapRequest): void {
@@ -622,8 +643,12 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       }
 
       if (entry.jump === "i") {
+        const enclosing = findEnclosingFunction(ctx.functions, entry.fileIndex, entry.start);
+        const frameName = enclosing?.name
+          ? enclosing.name
+          : `function@${path.basename(source.absolutePath)}:${pos.line + 1}`;
         stack.push({
-          name: `function@${path.basename(source.absolutePath)}:${pos.line + 1}`,
+          name: frameName,
           filePath: source.absolutePath,
           line: pos.line,
           character: pos.character,
@@ -681,6 +706,46 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       variablesReference: 0,
       type: "bytes32",
     }));
+  }
+
+  /**
+   * Source-level locals scope (stretch 2). Lists the parameters
+   * and the in-scope `let` declarations of the function that
+   * encloses the cursor's current source position. Values are
+   * rendered as `(value: stack-slot mapping pending)` because
+   * mapping a Solidity identifier to its EVM stack slot requires
+   * walking the compiled bytecode alongside the source map — the
+   * "next stretch goal beyond stretch goals". The names + types
+   * are still useful as a navigation aid: the user can confirm
+   * "yes I'm inside `swap(...)` with these parameters in scope"
+   * at a glance.
+   */
+  private sourceLocalsVariables(fn: AstFunction, byteOffset: number): DapVariable[] {
+    const out: DapVariable[] = [];
+    for (const p of fn.parameters) {
+      out.push({
+        name: p.name,
+        value: "(parameter — stack-slot mapping pending)",
+        variablesReference: 0,
+        type: p.type,
+      });
+    }
+    for (const local of fn.locals) {
+      // Scope visibility — locals are only "visible" after their
+      // declaration statement. Skip ones that haven't been
+      // declared yet at the cursor's current source position.
+      if (local.declaredAtByte > byteOffset) continue;
+      out.push({
+        name: local.name,
+        value: "(local — stack-slot mapping pending)",
+        variablesReference: 0,
+        type: local.type,
+      });
+    }
+    if (out.length === 0) {
+      return [{ name: "(no parameters / locals in scope)", value: "", variablesReference: 0 }];
+    }
+    return out;
   }
 
   /**
@@ -746,6 +811,34 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     if (!source || !source.lineIndex) return null;
     const pos = source.lineIndex.positionAt(entry.start);
     return { filePath: source.absolutePath, line: pos.line, character: pos.character };
+  }
+
+  /**
+   * Map the cursor's current step back to its enclosing AST
+   * function (if any). Combines source-position resolution
+   * (PC → source byte offset) with the AST walker's
+   * `findEnclosingFunction`. Returns `null` for generated
+   * opcodes, inner-call frames, or contracts whose AST we don't
+   * have loaded.
+   */
+  private currentEnclosingFunction(
+    step: TraceStep,
+  ): { fn: AstFunction; byteOffset: number } | null {
+    if (!this.contractContext || this.contractContext.functions.length === 0) return null;
+    if (step.depth !== this.contractContext.depth) return null;
+    const entry = resolveSourcePosition(
+      step.pc,
+      this.contractContext.pcMap,
+      this.contractContext.sourceMap,
+    );
+    if (!entry) return null;
+    const fn = findEnclosingFunction(
+      this.contractContext.functions,
+      entry.fileIndex,
+      entry.start,
+    );
+    if (!fn) return null;
+    return { fn, byteOffset: entry.start };
   }
 
   /** Convenience for the step / continue loops. */
@@ -889,6 +982,7 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     } catch {
       disassembly = [];
     }
+    const functions = extractFunctions(artifact.raw.ast);
     return {
       sourceMap,
       pcMap,
@@ -896,6 +990,7 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       depth: 1,
       storageLayout,
       disassembly,
+      functions,
     };
   }
 
@@ -1008,6 +1103,13 @@ interface ContractContext {
   storageLayout: StorageLayout | null;
   /** Pre-disassembled deployed bytecode, computed at load time. */
   disassembly: Instruction[];
+  /**
+   * Solc AST function definitions. Used to surface in-scope
+   * parameters and locals as a "Source-level locals" scope.
+   * Empty when the artifact lacked an `ast` block (older
+   * compilers or stripped builds).
+   */
+  functions: AstFunction[];
 }
 
 interface DapRequest {
