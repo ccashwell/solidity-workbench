@@ -164,7 +164,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // ── Inheritance Graph ──────────────────────────────────────────────
 
-  const inheritanceGraph = new InheritanceGraphPanel();
+  const inheritanceGraph = new InheritanceGraphPanel(client);
   inheritanceGraph.activate(context);
 
   // ── ABI Explorer ─────────────────────────────────────────────────

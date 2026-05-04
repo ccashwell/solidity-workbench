@@ -1,19 +1,19 @@
 import * as vscode from "vscode";
-import * as fs from "node:fs";
+import type { LanguageClient } from "vscode-languageclient/node";
+import {
+  GetInheritanceGraph,
+  type GetInheritanceGraphParams,
+  type InheritanceGraphResult,
+} from "@solidity-workbench/common";
 
 /**
  * Inheritance Graph — interactive webview visualizing the contract
- * inheritance hierarchy as a directed acyclic graph.
- *
- * Features:
- * - Parses all .sol files in the workspace to build the full graph
- * - Renders an interactive HTML/CSS graph (no external deps)
- * - Color-codes by kind: contract, interface, library, abstract
- * - Click a node to navigate to the contract definition
- * - Shows the full hierarchy for a selected contract
+ * inheritance hierarchy as a directed graph.
  */
 export class InheritanceGraphPanel {
   private panel: vscode.WebviewPanel | undefined;
+
+  constructor(private client: LanguageClient) {}
 
   activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
@@ -30,7 +30,16 @@ export class InheritanceGraphPanel {
       return;
     }
 
-    const graph = await this.buildGraph(workspaceFolder.uri.fsPath);
+    const focus = this.findActiveContract();
+    const params: GetInheritanceGraphParams = {
+      contractPath: focus?.filePath,
+      contractName: focus?.name,
+    };
+
+    const graph = await this.client.sendRequest<InheritanceGraphResult>(
+      GetInheritanceGraph,
+      params,
+    );
     if (graph.nodes.length === 0) {
       vscode.window.showInformationMessage("No contracts found in the workspace.");
       return;
@@ -48,270 +57,386 @@ export class InheritanceGraphPanel {
       this.panel.onDidDispose(() => {
         this.panel = undefined;
       });
+
+      this.panel.webview.onDidReceiveMessage(async (msg) => {
+        if (msg.type === "navigate" && typeof msg.uri === "string") {
+          const uri = vscode.Uri.parse(msg.uri);
+          const doc = await vscode.workspace.openTextDocument(uri);
+          const selection =
+            msg.selectionRange && typeof msg.selectionRange.start?.line === "number"
+              ? new vscode.Selection(
+                  msg.selectionRange.start.line,
+                  msg.selectionRange.start.character,
+                  msg.selectionRange.end.line,
+                  msg.selectionRange.end.character,
+                )
+              : undefined;
+          await vscode.window.showTextDocument(doc, { preview: true, selection });
+        }
+      });
     }
 
     this.panel.webview.html = this.buildHtml(graph);
-
-    this.panel.webview.onDidReceiveMessage(async (msg) => {
-      if (msg.type === "navigate" && msg.filePath) {
-        const uri = vscode.Uri.file(msg.filePath);
-        const doc = await vscode.workspace.openTextDocument(uri);
-        await vscode.window.showTextDocument(doc, { preview: true });
-      }
-    });
   }
 
-  private async buildGraph(_rootPath: string): Promise<ContractGraph> {
-    const nodes: GraphNode[] = [];
-    const edges: GraphEdge[] = [];
-    const nodeMap = new Map<string, GraphNode>();
+  private findActiveContract(): { name: string; filePath: string } | undefined {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || editor.document.languageId !== "solidity") return undefined;
 
-    const solFiles = await vscode.workspace.findFiles("**/*.sol", "**/node_modules/**");
-
-    for (const fileUri of solFiles) {
-      try {
-        const content = fs.readFileSync(fileUri.fsPath, "utf-8");
-        this.extractContracts(content, fileUri.fsPath, nodeMap, edges);
-      } catch {
-        // Skip unreadable files
-      }
-    }
-
-    nodes.push(...nodeMap.values());
-    return { nodes, edges };
+    const text = editor.document.getText();
+    const cursorOffset = editor.document.offsetAt(editor.selection.active);
+    const contracts = this.extractContractRanges(text);
+    const active =
+      contracts.find((c) => c.start <= cursorOffset && cursorOffset <= c.end) ?? contracts[0];
+    if (!active) return undefined;
+    return { name: active.name, filePath: editor.document.uri.fsPath };
   }
 
-  private extractContracts(
-    content: string,
-    filePath: string,
-    nodeMap: Map<string, GraphNode>,
-    edges: GraphEdge[],
-  ): void {
-    const contractRe =
-      /(?:abstract\s+)?(contract|interface|library)\s+(\w+)(?:\s+is\s+([^{]+))?/g;
+  private extractContractRanges(text: string): { name: string; start: number; end: number }[] {
+    const contracts: { name: string; start: number; end: number }[] = [];
+    const re = /(?:abstract\s+)?(?:contract|interface|library)\s+([A-Za-z_$][\w$]*)\b/g;
     let match: RegExpExecArray | null;
-
-    while ((match = contractRe.exec(content)) !== null) {
-      const kind = content.slice(match.index).startsWith("abstract") ? "abstract" : match[1];
-      const name = match[2];
-      const bases = match[3];
-
-      if (!nodeMap.has(name)) {
-        nodeMap.set(name, {
-          name,
-          kind: kind as GraphNode["kind"],
-          filePath,
-          line: content.slice(0, match.index).split("\n").length - 1,
-        });
-      }
-
-      if (bases) {
-        const baseNames = bases
-          .split(",")
-          .map((b) => b.trim().split("(")[0].trim())
-          .filter(Boolean);
-        for (const baseName of baseNames) {
-          edges.push({ from: name, to: baseName });
-          if (!nodeMap.has(baseName)) {
-            nodeMap.set(baseName, {
-              name: baseName,
-              kind: "contract",
-              filePath: "",
-              line: 0,
-            });
-          }
-        }
-      }
+    while ((match = re.exec(text)) !== null) {
+      const bodyStart = text.indexOf("{", re.lastIndex);
+      contracts.push({
+        name: match[1],
+        start: match.index,
+        end: bodyStart >= 0 ? this.findMatchingBrace(text, bodyStart) : re.lastIndex,
+      });
     }
+    return contracts;
   }
 
-  private buildHtml(graph: ContractGraph): string {
-    const levels = this.computeLevels(graph);
-    const maxLevel = Math.max(...Array.from(levels.values()), 0);
-
-    const levelGroups = new Map<number, GraphNode[]>();
-    for (const node of graph.nodes) {
-      const level = levels.get(node.name) ?? 0;
-      const group = levelGroups.get(level) ?? [];
-      group.push(node);
-      levelGroups.set(level, group);
-    }
-
-    const nodePositions = new Map<string, { x: number; y: number }>();
-    const nodeWidth = 180;
-    const nodeHeight = 44;
-    const levelGap = 100;
-    const nodeGap = 30;
-
-    for (let level = 0; level <= maxLevel; level++) {
-      const nodes = levelGroups.get(level) ?? [];
-      const totalWidth = nodes.length * nodeWidth + (nodes.length - 1) * nodeGap;
-      let startX = -totalWidth / 2;
-
-      for (const node of nodes) {
-        nodePositions.set(node.name, {
-          x: startX + nodeWidth / 2,
-          y: level * (nodeHeight + levelGap),
-        });
-        startX += nodeWidth + nodeGap;
+  private findMatchingBrace(text: string, start: number): number {
+    let depth = 0;
+    for (let i = start; i < text.length; i++) {
+      if (text[i] === "{") depth++;
+      else if (text[i] === "}") {
+        depth--;
+        if (depth === 0) return i;
       }
     }
+    return text.length;
+  }
 
-    const svgWidth = Math.max(
-      800,
-      ...Array.from(nodePositions.values()).map((p) => Math.abs(p.x) * 2 + nodeWidth + 100),
-    );
-    const svgHeight = (maxLevel + 1) * (nodeHeight + levelGap) + 100;
-    const offsetX = svgWidth / 2;
-    const offsetY = 50;
-
-    const edgesSvg = graph.edges
-      .map((edge) => {
-        const from = nodePositions.get(edge.from);
-        const to = nodePositions.get(edge.to);
-        if (!from || !to) return "";
-        const x1 = from.x + offsetX;
-        const y1 = from.y + nodeHeight + offsetY;
-        const x2 = to.x + offsetX;
-        const y2 = to.y + offsetY;
-        const midY = (y1 + y2) / 2;
-        return `<path d="M${x1},${y1} C${x1},${midY} ${x2},${midY} ${x2},${y2}" class="edge" marker-end="url(#arrow)"/>`;
-      })
-      .join("\n");
-
-    const nodesSvg = graph.nodes
-      .map((node) => {
-        const pos = nodePositions.get(node.name);
-        if (!pos) return "";
-        const x = pos.x + offsetX - nodeWidth / 2;
-        const y = pos.y + offsetY;
-        const colorClass = `node-${node.kind}`;
-        const clickData = node.filePath
-          ? `onclick="navigate('${this.escapeJs(node.filePath)}')" style="cursor:pointer"`
-          : "";
-        return `<g ${clickData}>
-          <rect x="${x}" y="${y}" width="${nodeWidth}" height="${nodeHeight}" rx="6" class="node-rect ${colorClass}"/>
-          <text x="${x + nodeWidth / 2}" y="${y + 18}" class="node-name">${this.escapeHtml(node.name)}</text>
-          <text x="${x + nodeWidth / 2}" y="${y + 34}" class="node-kind">${node.kind}</text>
-        </g>`;
-      })
-      .join("\n");
+  private buildHtml(graph: InheritanceGraphResult): string {
+    const graphJson = JSON.stringify(graph).replace(/</g, "\\u003c");
 
     return `<!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+<meta charset="UTF-8">
 <style>
-  body { margin: 0; padding: 0; overflow: auto; background: var(--vscode-editor-background); color: var(--vscode-foreground); font-family: var(--vscode-font-family); }
-  .toolbar { padding: 8px 16px; border-bottom: 1px solid var(--vscode-panel-border); display: flex; align-items: center; gap: 12px; }
-  .toolbar h3 { margin: 0; }
-  .stats { opacity: 0.7; font-size: 0.9em; }
-  svg { display: block; margin: 16px auto; }
-  .edge { fill: none; stroke: var(--vscode-foreground); stroke-width: 1.5; opacity: 0.4; }
-  .node-rect { stroke-width: 2; }
-  .node-contract { fill: #2d5aa0; stroke: #4a9eff; }
-  .node-interface { fill: #1a6e3a; stroke: #4ec96e; }
-  .node-library { fill: #7a4a8e; stroke: #c678dd; }
-  .node-abstract { fill: #6e5c1a; stroke: #e5c07b; }
-  .node-name { fill: #fff; font-size: 13px; font-weight: bold; text-anchor: middle; }
-  .node-kind { fill: #fff; font-size: 10px; text-anchor: middle; opacity: 0.7; }
-  .legend { display: flex; gap: 16px; padding: 8px 16px; font-size: 0.85em; opacity: 0.8; }
-  .legend-item { display: flex; align-items: center; gap: 4px; }
-  .legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+  :root {
+    --bg: var(--vscode-editor-background);
+    --fg: var(--vscode-foreground);
+    --muted: var(--vscode-descriptionForeground);
+    --border: var(--vscode-panel-border);
+    --button: var(--vscode-button-secondaryBackground);
+    --button-fg: var(--vscode-button-secondaryForeground);
+    --input: var(--vscode-input-background);
+    --accent: var(--vscode-focusBorder);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+  }
+  .shell { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    min-width: 0;
+  }
+  .title { font-weight: 600; white-space: nowrap; }
+  .stats { color: var(--muted); white-space: nowrap; }
+  .spacer { flex: 1; }
+  input[type="search"] {
+    width: min(320px, 25vw);
+    background: var(--input);
+    color: var(--fg);
+    border: 1px solid var(--border);
+    padding: 5px 8px;
+    outline: none;
+  }
+  input[type="search"]:focus { border-color: var(--accent); }
+  label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  button {
+    border: 1px solid var(--border);
+    background: var(--button);
+    color: var(--button-fg);
+    padding: 5px 9px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  .canvas {
+    position: relative;
+    overflow: auto;
+    height: 100%;
+  }
+  svg { display: block; min-width: 100%; min-height: 100%; }
+  .lane-label {
+    fill: var(--muted);
+    font-size: 11px;
+    text-anchor: middle;
+  }
+  .edge {
+    fill: none;
+    stroke: var(--muted);
+    stroke-width: 1.4;
+    opacity: 0.55;
+  }
+  .edge.highlight { stroke: var(--accent); opacity: 0.95; stroke-width: 2.2; }
+  .node { cursor: pointer; }
+  .node rect {
+    stroke-width: 1.5;
+    filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.25));
+  }
+  .node .name {
+    fill: white;
+    font-size: 13px;
+    font-weight: 600;
+    text-anchor: middle;
+    pointer-events: none;
+  }
+  .node .meta {
+    fill: rgba(255,255,255,0.72);
+    font-size: 10px;
+    text-anchor: middle;
+    pointer-events: none;
+  }
+  .contract { fill: #2563eb; stroke: #60a5fa; }
+  .interface { fill: #0f766e; stroke: #5eead4; }
+  .library { fill: #7c3aed; stroke: #c4b5fd; }
+  .abstract { fill: #a16207; stroke: #fde68a; }
+  .unknown { fill: #4b5563; stroke: #9ca3af; stroke-dasharray: 4 3; }
+  .focus rect { stroke: #ffffff; stroke-width: 3; }
+  .dim { opacity: 0.23; }
+  .empty {
+    padding: 28px;
+    color: var(--muted);
+  }
 </style>
 </head>
 <body>
-  <div class="toolbar">
-    <h3>Inheritance Graph</h3>
-    <span class="stats">${graph.nodes.length} contracts, ${graph.edges.length} inheritance edges</span>
+  <div class="shell">
+    <div class="toolbar">
+      <span class="title">Inheritance Graph</span>
+      <span class="stats" id="stats"></span>
+      <input id="search" type="search" placeholder="Filter contracts">
+      <label><input id="focused" type="checkbox" checked> Focus</label>
+      <label><input id="tests" type="checkbox"> Tests</label>
+      <label><input id="deps" type="checkbox"> Deps</label>
+      <div class="spacer"></div>
+      <button id="fit" title="Fit graph">Fit</button>
+    </div>
+    <div class="canvas" id="canvas"></div>
   </div>
-  <div class="legend">
-    <div class="legend-item"><div class="legend-swatch" style="background:#2d5aa0;border:2px solid #4a9eff"></div>contract</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#1a6e3a;border:2px solid #4ec96e"></div>interface</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#7a4a8e;border:2px solid #c678dd"></div>library</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#6e5c1a;border:2px solid #e5c07b"></div>abstract</div>
-  </div>
-  <svg width="${svgWidth}" height="${svgHeight}">
-    <defs>
-      <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-        <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--vscode-foreground)" opacity="0.4"/>
-      </marker>
-    </defs>
-    ${edgesSvg}
-    ${nodesSvg}
-  </svg>
   <script>
     const vscode = acquireVsCodeApi();
-    function navigate(filePath) {
-      vscode.postMessage({ type: 'navigate', filePath });
+    const graph = ${graphJson};
+    const state = {
+      search: "",
+      focused: Boolean(graph.focusId),
+      tests: false,
+      deps: false,
+    };
+
+    const els = {
+      canvas: document.getElementById("canvas"),
+      stats: document.getElementById("stats"),
+      search: document.getElementById("search"),
+      focused: document.getElementById("focused"),
+      tests: document.getElementById("tests"),
+      deps: document.getElementById("deps"),
+      fit: document.getElementById("fit"),
+    };
+    els.focused.checked = state.focused;
+    els.focused.disabled = !graph.focusId;
+
+    const nodesById = new Map(graph.nodes.map((n) => [n.id, n]));
+    const ancestors = new Set();
+    const descendants = new Set();
+    if (graph.focusId) {
+      walk(graph.focusId, "up", ancestors);
+      walk(graph.focusId, "down", descendants);
     }
+
+    function walk(id, direction, out) {
+      for (const edge of graph.edges) {
+        const next = direction === "up" && edge.from === id
+          ? edge.to
+          : direction === "down" && edge.to === id
+            ? edge.from
+            : null;
+        if (!next || out.has(next)) continue;
+        out.add(next);
+        walk(next, direction, out);
+      }
+    }
+
+    function visibleNode(node) {
+      if (!state.tests && node.tier === "tests") return false;
+      if (!state.deps && node.tier === "deps") return false;
+      if (state.focused && graph.focusId) {
+        if (node.id !== graph.focusId && !ancestors.has(node.id) && !descendants.has(node.id)) {
+          return false;
+        }
+      }
+      if (state.search) {
+        return node.name.toLowerCase().includes(state.search);
+      }
+      return true;
+    }
+
+    function render() {
+      const visibleNodes = graph.nodes.filter(visibleNode);
+      const visibleIds = new Set(visibleNodes.map((n) => n.id));
+      const visibleEdges = graph.edges.filter((e) => visibleIds.has(e.from) && visibleIds.has(e.to));
+      els.stats.textContent = visibleNodes.length + " nodes, " + visibleEdges.length + " edges";
+
+      if (visibleNodes.length === 0) {
+        els.canvas.innerHTML = '<div class="empty">No matching contracts.</div>';
+        return;
+      }
+
+      const levels = computeLevels(visibleNodes, visibleEdges);
+      const groups = new Map();
+      for (const node of visibleNodes) {
+        const level = levels.get(node.id) ?? 0;
+        const list = groups.get(level) ?? [];
+        list.push(node);
+        groups.set(level, list);
+      }
+      for (const list of groups.values()) {
+        list.sort((a, b) => a.name.localeCompare(b.name));
+      }
+
+      const nodeWidth = 190;
+      const nodeHeight = 50;
+      const xGap = 38;
+      const yGap = 96;
+      const pad = 48;
+      const maxLevel = Math.max(...groups.keys());
+      const maxCount = Math.max(...Array.from(groups.values()).map((g) => g.length));
+      const width = Math.max(920, pad * 2 + maxCount * nodeWidth + (maxCount - 1) * xGap);
+      const height = Math.max(520, pad * 2 + (maxLevel + 1) * nodeHeight + maxLevel * yGap);
+      const positions = new Map();
+
+      for (const [level, list] of groups) {
+        const rowWidth = list.length * nodeWidth + Math.max(0, list.length - 1) * xGap;
+        let x = (width - rowWidth) / 2;
+        const y = pad + level * (nodeHeight + yGap);
+        for (const node of list) {
+          positions.set(node.id, { x, y });
+          x += nodeWidth + xGap;
+        }
+      }
+
+      const highlighted = new Set([graph.focusId, ...ancestors, ...descendants]);
+      const edges = visibleEdges.map((edge) => {
+        const from = positions.get(edge.to);
+        const to = positions.get(edge.from);
+        if (!from || !to) return "";
+        const x1 = from.x + nodeWidth / 2;
+        const y1 = from.y + nodeHeight;
+        const x2 = to.x + nodeWidth / 2;
+        const y2 = to.y;
+        const midY = (y1 + y2) / 2;
+        const cls = highlighted.has(edge.from) && highlighted.has(edge.to) ? "edge highlight" : "edge";
+        return '<path class="' + cls + '" d="M' + x1 + ',' + y1 + ' C' + x1 + ',' + midY + ' ' + x2 + ',' + midY + ' ' + x2 + ',' + y2 + '" marker-end="url(#arrow)"></path>';
+      }).join("");
+
+      const lanes = Array.from(groups.keys()).map((level) => {
+        const y = pad + level * (nodeHeight + yGap) - 18;
+        return '<text class="lane-label" x="' + width / 2 + '" y="' + y + '">' + laneLabel(level, maxLevel) + '</text>';
+      }).join("");
+
+      const nodes = visibleNodes.map((node) => {
+        const p = positions.get(node.id);
+        const cls = ["node", node.kind, node.id === graph.focusId ? "focus" : "", graph.focusId && !highlighted.has(node.id) ? "dim" : ""].filter(Boolean).join(" ");
+        const meta = (node.missing ? "unresolved" : node.kind) + " - " + node.tier;
+        return '<g class="' + cls + '" data-id="' + escAttr(node.id) + '">' +
+          '<title>' + esc(node.name) + (node.filePath ? "\\n" + esc(node.filePath) : "") + '</title>' +
+          '<rect x="' + p.x + '" y="' + p.y + '" width="' + nodeWidth + '" height="' + nodeHeight + '" rx="6"></rect>' +
+          '<text class="name" x="' + (p.x + nodeWidth / 2) + '" y="' + (p.y + 21) + '">' + esc(trimLabel(node.name, 22)) + '</text>' +
+          '<text class="meta" x="' + (p.x + nodeWidth / 2) + '" y="' + (p.y + 38) + '">' + esc(meta) + '</text>' +
+          '</g>';
+      }).join("");
+
+      els.canvas.innerHTML = '<svg width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '">' +
+        '<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="var(--muted)"></path></marker></defs>' +
+        lanes + edges + nodes + '</svg>';
+
+      for (const el of els.canvas.querySelectorAll(".node")) {
+        el.addEventListener("click", () => {
+          const node = nodesById.get(el.dataset.id);
+          if (!node || !node.uri) return;
+          vscode.postMessage({ type: "navigate", uri: node.uri, selectionRange: node.selectionRange });
+        });
+      }
+    }
+
+    function computeLevels(nodes, edges) {
+      const levels = new Map();
+      const parents = new Map(nodes.map((n) => [n.id, []]));
+      for (const edge of edges) {
+        if (parents.has(edge.from)) parents.get(edge.from).push(edge.to);
+      }
+      function level(id, stack = new Set()) {
+        if (levels.has(id)) return levels.get(id);
+        if (stack.has(id)) return 0;
+        stack.add(id);
+        const ps = parents.get(id) ?? [];
+        const value = ps.length === 0 ? 0 : Math.max(...ps.map((p) => level(p, stack))) + 1;
+        stack.delete(id);
+        levels.set(id, value);
+        return value;
+      }
+      for (const node of nodes) level(node.id);
+      return levels;
+    }
+
+    function laneLabel(level, maxLevel) {
+      if (level === 0) return "Base contracts";
+      if (level === maxLevel) return "Most-derived contracts";
+      return "Level " + level;
+    }
+    function trimLabel(value, max) {
+      return value.length <= max ? value : value.slice(0, max - 1) + "...";
+    }
+    function esc(value) {
+      return String(value).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]));
+    }
+    function escAttr(value) {
+      return esc(value).replace(/'/g, "&#39;");
+    }
+
+    els.search.addEventListener("input", () => {
+      state.search = els.search.value.trim().toLowerCase();
+      render();
+    });
+    els.focused.addEventListener("change", () => { state.focused = els.focused.checked; render(); });
+    els.tests.addEventListener("change", () => { state.tests = els.tests.checked; render(); });
+    els.deps.addEventListener("change", () => { state.deps = els.deps.checked; render(); });
+    els.fit.addEventListener("click", () => { els.canvas.scrollTo({ left: 0, top: 0, behavior: "smooth" }); });
+
+    render();
   </script>
 </body>
 </html>`;
   }
-
-  private computeLevels(graph: ContractGraph): Map<string, number> {
-    const levels = new Map<string, number>();
-
-    // inheritsFrom[X] = the contracts X inherits from
-    const inheritsFrom = new Map<string, string[]>();
-    for (const node of graph.nodes) {
-      inheritsFrom.set(node.name, []);
-    }
-    for (const edge of graph.edges) {
-      const parents = inheritsFrom.get(edge.from) ?? [];
-      parents.push(edge.to);
-      inheritsFrom.set(edge.from, parents);
-    }
-
-    // Topological sort: base contracts (no inheritance) at level 0
-    const visited = new Set<string>();
-
-    const computeLevel = (name: string): number => {
-      if (levels.has(name)) return levels.get(name)!;
-      if (visited.has(name)) return 0;
-      visited.add(name);
-
-      const parents = inheritsFrom.get(name) ?? [];
-      if (parents.length === 0) {
-        levels.set(name, 0);
-        return 0;
-      }
-
-      const maxParent = Math.max(...parents.map((p) => computeLevel(p)));
-      const level = maxParent + 1;
-      levels.set(name, level);
-      return level;
-    };
-
-    for (const node of graph.nodes) {
-      computeLevel(node.name);
-    }
-
-    return levels;
-  }
-
-  private escapeHtml(text: string): string {
-    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  }
-
-  private escapeJs(text: string): string {
-    return text.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
-  }
-}
-
-interface GraphNode {
-  name: string;
-  kind: "contract" | "interface" | "library" | "abstract";
-  filePath: string;
-  line: number;
-}
-
-interface GraphEdge {
-  from: string;
-  to: string;
-}
-
-interface ContractGraph {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
 }

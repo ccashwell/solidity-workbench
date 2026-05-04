@@ -42,13 +42,17 @@ import { FoldingRangesProvider } from "./providers/folding-ranges.js";
 import { SelectionRangesProvider } from "./providers/selection-ranges.js";
 import { DocumentLinksProvider } from "./providers/document-links.js";
 import { ImplementationProvider } from "./providers/implementation.js";
+import { InheritanceGraphProvider } from "./providers/inheritance-graph.js";
 import { SolcBridge } from "./compiler/solc-bridge.js";
 import { listTests } from "./providers/list-tests.js";
 import {
+  GetInheritanceGraph,
   SolSemanticTokenTypes,
   SolSemanticTokenModifiers,
   ServerStateNotification,
   ListTests,
+  type GetInheritanceGraphParams,
+  type InheritanceGraphResult,
   type ListTestsParams,
   type ListTestsResult,
   type ServerStateParams,
@@ -85,6 +89,7 @@ let foldingRangesProvider: FoldingRangesProvider;
 let selectionRangesProvider: SelectionRangesProvider;
 let documentLinksProvider: DocumentLinksProvider;
 let implementationProvider: ImplementationProvider;
+let inheritanceGraphProvider: InheritanceGraphProvider;
 let solcBridge: SolcBridge;
 
 /**
@@ -163,6 +168,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   selectionRangesProvider = new SelectionRangesProvider(parser);
   documentLinksProvider = new DocumentLinksProvider(parser, workspaceManager);
   implementationProvider = new ImplementationProvider(symbolIndex);
+  inheritanceGraphProvider = new InheritanceGraphProvider(parser, workspaceManager);
   solcBridge = new SolcBridge(workspaceManager);
 
   // Make the type-resolved AST cache available to providers that want it
@@ -626,6 +632,13 @@ connection.onDocumentLinks(async (params, token) => {
 connection.onRequest(ListTests, async (params: ListTestsParams): Promise<ListTestsResult> => {
   return listTests(workspaceManager, parser, params);
 });
+
+connection.onRequest(
+  GetInheritanceGraph,
+  async (params: GetInheritanceGraphParams): Promise<InheritanceGraphResult> => {
+    return inheritanceGraphProvider.provideInheritanceGraph(params);
+  },
+);
 
 // ── Shutdown ────────────────────────────────────────────────────────
 

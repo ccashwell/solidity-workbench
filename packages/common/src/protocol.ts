@@ -150,13 +150,27 @@ export interface StorageLayoutResult {
 export const GetInheritanceGraph = "solidity-workbench/getInheritanceGraph";
 
 export interface GetInheritanceGraphParams {
-  contractPath: string;
-  contractName: string;
+  contractPath?: string;
+  contractName?: string;
 }
 
 export interface InheritanceGraphResult {
-  nodes: { name: string; filePath: string; kind: string }[];
-  edges: { from: string; to: string }[];
+  focusId?: string;
+  nodes: {
+    id: string;
+    name: string;
+    filePath: string;
+    uri: string;
+    kind: string;
+    tier: "project" | "tests" | "deps" | "unknown";
+    range: { start: { line: number; character: number }; end: { line: number; character: number } };
+    selectionRange: {
+      start: { line: number; character: number };
+      end: { line: number; character: number };
+    };
+    missing?: boolean;
+  }[];
+  edges: { from: string; to: string; baseName: string }[];
 }
 
 // ── Semantic Token Types ─────────────────────────────────────────────
