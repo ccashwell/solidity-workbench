@@ -334,18 +334,24 @@ Two paths:
       `storage[<slot>]`, and bare state-variable identifiers.
     - **Disassembly view** of the deployed bytecode through
       Cancun + post-Cancun opcodes.
-    - **Source-level locals** listing the enclosing function's
-      parameters and in-scope locals (names + types), surfaced
-      via the artifact's solc AST.
-    - **Multi-contract** source resolution: list deployed
-      contracts under `contracts: [{ address, artifact }]` in
-      launch.json and the adapter switches the active source
-      map / storage layout when a CALL crosses a boundary.
+    - **Source-level locals with live values** for the enclosing
+      function's parameters and in-scope locals. Parameters
+      resolve via Solidity's standard calling convention (slots
+      `[entryStackLen − paramCount, entryStackLen)`); locals
+      are tracked incrementally as their declarations execute.
+      Hover-evaluate uses the same lookup so an in-scope
+      identifier resolves to a live value, with locals/params
+      shadowing state-variable names per Solidity's lexical
+      rules.
+    - **Multi-contract** source resolution and per-depth
+      internal call stacks: list deployed contracts under
+      `contracts: [{ address, artifact }]` in launch.json and
+      the adapter tracks an independent internal-frame stack
+      per EVM call depth — each Solidity function call appears
+      as its own DAP frame whether it's an internal jump or a
+      cross-contract CALL.
   See the launch.json snippet (Cmd+Shift+P → "Debug: Add
   Configuration..." → "Solidity Workbench: Debug Foundry Test").
-  The remaining nice-to-have, runtime-value resolution for
-  source-level locals (mapping Solidity identifiers to live EVM
-  stack slots), is tracked in [PRODUCTION_GAPS.md](PRODUCTION_GAPS.md).
 
 ### IR inspection
 

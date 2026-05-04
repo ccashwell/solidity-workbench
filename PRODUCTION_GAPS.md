@@ -396,13 +396,10 @@ May 2026 sweep:
   `@solidity-workbench/common` walk the artifact's compactAST
   (and legacyAST) for FunctionDefinition nodes with their
   parameters and locally-declared `VariableDeclaration`s.
-  Internal call-stack frames now use the actual Solidity
-  function name; a "Source-level locals" scope lists the
-  enclosing function's parameters and in-scope locals (out-of-
-  scope ones are filtered via the AST node's `src` byte
-  range). Stack-slot mapping (which EVM stack position each
-  identifier lives at) remains a placeholder — values render
-  as `(parameter — stack-slot mapping pending)`. 8 unit tests
+  Internal call-stack frames use the actual Solidity function
+  name; the "Source-level locals" scope lists the enclosing
+  function's parameters and in-scope locals (out-of-scope ones
+  filtered via the AST node's `src` byte range). 8 unit tests
   on the AST walker.
 - **Multi-contract source maps.** Launch config gains a
   `contracts: [{ address, artifact, projectRoot? }]` array.
@@ -415,12 +412,48 @@ May 2026 sweep:
   fixed entry contract. `loadedSources` unions every loaded
   contract's source list so VSCode's panel shows them all.
 
-The remaining nice-to-have, *not* blocking anything: full
-EVM-stack tracking that maps live Solidity identifiers to their
-runtime stack slots so the Source-level locals scope shows
-actual values. Doing that properly needs a parallel stack
-simulator that walks the disassembled bytecode alongside the
-trace; left for a future iteration.
+**Follow-on items shipped (May 2026 sweep continued).**
+
+- **Per-depth internal call stacks.** The call-stack walker
+  (`buildCallStack` in the adapter) maintains an independent
+  internal-frame stack per EVM call depth. Each `jump: "i"`
+  pushes within the active depth; each `jump: "o"` pops. EVM
+  CALL / STATICCALL / DELEGATECALL / CREATE boundaries pause
+  the outer depth's stack and start a fresh one at the inner
+  depth, seeded with a frame anchored to the inner contract's
+  first source-resolvable step (named after the enclosing
+  function via the AST when resolvable). The flattened result
+  is topmost-first per the DAP convention. The walker also
+  computes per-frame `entryStepIdx`, `entryStackLen`, the
+  resolved `AstFunction`, the active `ContractContext`, and a
+  `localStackPositions: Map<string, number>` — foundation for
+  live local resolution.
+- **Live parameter and local values.** The Source-level
+  locals scope reads live values from the trace's EVM stack:
+    * Parameters at `[entryStackLen - paramCount,
+      entryStackLen)` per Solidity's standard calling
+      convention. Stack-shrunk-below-slot renders as
+      `(consumed by callee)`.
+    * Locals tracked incrementally by the walker — when the
+      trace's source position passes a
+      `VariableDeclarationStatement`'s end byte and the EVM
+      stack has grown beyond `entryStackLen`, the slot at
+      the top of the stack is recorded into the frame's
+      `localStackPositions` map. Subsequent reads pull from
+      `step.stack[recordedSlot]`. Edge cases surface as
+      informative placeholders rather than wrong values:
+      `(initializer running)`, `(unsupported declaration form)`,
+      `(consumed)`. The `evaluate` request gains the same
+      lookup so hovering over an in-scope identifier resolves
+      live values, matching Solidity's lexical resolution
+      order (local/param shadows state).
+
+Caveats remaining: tuple destructuring (`(a, b) = foo()`)
+locals fall through to the `(unsupported declaration form)`
+placeholder; legacy-codegen mode (no via-IR) can consume
+parameters early so values display as `(consumed)` faster than
+expected. Both are surfaced as informative messages rather
+than wrong values.
 
 ### 2. Migrate parsing hot path to Solar when it stabilizes
 
