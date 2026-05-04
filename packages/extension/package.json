@@ -426,6 +426,10 @@
                 "type": "boolean",
                 "description": "Stop at the first opcode of the transaction.",
                 "default": true
+              },
+              "traceFile": {
+                "type": "string",
+                "description": "Optional path to a pre-saved EVM trace JSON (e.g. `cast run --json <txhash> > trace.json`). When supplied, the adapter steps through this trace instead of launching a live execution. Useful while the live-launch path matures."
               }
             }
           }
