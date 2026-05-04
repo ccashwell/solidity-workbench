@@ -79,8 +79,27 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
   private seq = 0;
   /** Loaded once during `launch` when the config supplies a `traceFile`. */
   private cursor: TraceCursor | null = null;
-  /** Loaded once during `launch` when the config supplies an `artifact`. */
-  private contractContext: ContractContext | null = null;
+  /**
+   * The entry contract — the one the user is debugging directly,
+   * whose deployment runs at trace depth 1. Loaded from the
+   * launch config's `artifact` field.
+   */
+  private entryContext: ContractContext | null = null;
+  /**
+   * Auxiliary contracts loaded from the launch config's `contracts`
+   * array. Keyed by lowercased 0x-prefixed address so trace CALL
+   * targets (which solc / Anvil emit as 32-byte zero-padded hex)
+   * can be matched after a `lower()`.
+   */
+  private auxContexts = new Map<string, ContractContext>();
+  /**
+   * Per-step active context, indexed by cursor step index. Entry
+   * `[i]` is the contract whose bytecode is executing at step `i`,
+   * or `null` when the inner-call address didn't match any loaded
+   * contract. Computed once after both `cursor` and contract
+   * contexts are loaded.
+   */
+  private contextStream: (ContractContext | null)[] = [];
   /**
    * Active breakpoints, keyed by normalised absolute file path. The
    * inner `Set<number>` holds 0-based line indexes (DAP's 1-based
@@ -199,6 +218,21 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       }
     }
 
+    if (Array.isArray(args.contracts)) {
+      for (const entry of args.contracts) {
+        const error = this.loadAuxContract(entry, args.projectRoot);
+        if (error) {
+          // Aux contract failures are non-fatal — the entry contract
+          // alone still gives a useful debug session. Surface the
+          // error in the output channel so the user knows.
+          this.fireEvent("output", {
+            category: "stderr",
+            output: `Failed to load aux contract '${entry.address}': ${error}\n`,
+          });
+        }
+      }
+    }
+
     // Trace source: prefer `traceFile` when set; otherwise fetch live
     // via `cast run --json` if `txHash` (+ optional `rpcUrl`) is set.
     if (args.traceFile) {
@@ -225,6 +259,11 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       }
     }
 
+    // Now that both trace + contracts are settled, precompute the
+    // per-step active context so subsequent `stackTrace` /
+    // `scopes` requests are O(1) lookups.
+    this.rebuildContextStream();
+
     this.respond(msg, true);
     this.fireEvent("stopped", {
       reason: "entry",
@@ -232,6 +271,70 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       allThreadsStopped: true,
       description: this.summariseLoadState(),
     });
+  }
+
+  /**
+   * Walk the trace once, tracking call depth and the contract
+   * address active at each depth, to produce a per-step
+   * `(ContractContext | null)[]`. Caller-side details:
+   *
+   * - The entry contract is always at depth 1 (treated as `null`
+   *   address since we don't know what the test deployed it as).
+   * - On CALL / STATICCALL / DELEGATECALL we capture the target
+   *   address from the stack just before the opcode runs (the
+   *   step's `stack` is the EVM stack BEFORE `op` executes). The
+   *   address is at `stack[length - 2]` per the EVM convention
+   *   that operands are popped from the top.
+   * - On CREATE / CREATE2, the new contract's address isn't
+   *   known until after deployment; we record `null` for that
+   *   depth (frame falls back to label-only).
+   * - On RETURN / REVERT / STOP at a deeper depth, the stack
+   *   snaps back to the caller's depth — the per-depth
+   *   ContractContext is dropped naturally.
+   */
+  private rebuildContextStream(): void {
+    if (!this.cursor) {
+      this.contextStream = [];
+      return;
+    }
+    const steps = this.cursor.steps;
+    const result: (ContractContext | null)[] = new Array(steps.length).fill(null);
+    const stack: (ContractContext | null)[] = [this.entryContext];
+    let pendingCallContext: ContractContext | null = null;
+
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      while (stack.length > step.depth) stack.pop();
+      while (stack.length < step.depth) {
+        stack.push(pendingCallContext);
+        pendingCallContext = null;
+      }
+      result[i] = stack[stack.length - 1];
+
+      if (
+        step.op === "CALL" ||
+        step.op === "STATICCALL" ||
+        step.op === "DELEGATECALL" ||
+        step.op === "CALLCODE"
+      ) {
+        const addr = readAddressFromStack(step);
+        pendingCallContext = addr ? this.auxContexts.get(addr) ?? null : null;
+      } else if (step.op === "CREATE" || step.op === "CREATE2") {
+        // Address not known yet; the next depth gets null.
+        pendingCallContext = null;
+      }
+    }
+    this.contextStream = result;
+  }
+
+  /** Active contract for the cursor's current step (or the entry contract as fallback). */
+  private activeContext(): ContractContext | null {
+    if (!this.cursor) return this.entryContext;
+    const idx = this.cursor.index;
+    if (idx >= 0 && idx < this.contextStream.length) {
+      return this.contextStream[idx] ?? null;
+    }
+    return this.entryContext;
   }
 
   private handleThreads(msg: DapRequest): void {
@@ -290,7 +393,7 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       stackFrames: [
         {
           id: cursor.index,
-          name: frameLabel + (this.contractContext ? " — no source for this depth/opcode" : ""),
+          name: frameLabel + (this.entryContext ? " — no source for this depth/opcode" : ""),
           line: 0,
           column: 0,
           presentationHint: "label",
@@ -384,10 +487,20 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
   }
 
   private handleLoadedSources(msg: DapRequest): void {
-    const sources = this.contractContext?.sources.map((s) => ({
-      name: path.basename(s.absolutePath),
-      path: s.absolutePath,
-    })) ?? [];
+    // Union the entry contract's sources with all aux contracts'
+    // so the user sees every loaded contract's source files.
+    const seen = new Set<string>();
+    const sources: { name: string; path: string }[] = [];
+    const collect = (ctx: ContractContext | null): void => {
+      if (!ctx) return;
+      for (const s of ctx.sources) {
+        if (seen.has(s.absolutePath)) continue;
+        seen.add(s.absolutePath);
+        sources.push({ name: path.basename(s.absolutePath), path: s.absolutePath });
+      }
+    };
+    collect(this.entryContext);
+    for (const ctx of this.auxContexts.values()) collect(ctx);
     this.respond(msg, true, { sources });
   }
 
@@ -423,9 +536,9 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     }
     // Source-aware step: advance until the source position changes
     // OR we hit a breakpoint OR the trace ends. When no contract
-    // context is loaded, fall back to single-step behaviour from
-    // stage 2 so the user can still walk opcode-by-opcode.
-    if (!this.contractContext) {
+    // context is loaded at all, fall back to single-step behaviour
+    // from stage 2 so the user can still walk opcode-by-opcode.
+    if (!this.entryContext && this.auxContexts.size === 0) {
       if (!this.cursor.next() || this.cursor.isAtEnd) {
         this.respond(msg, true);
         this.fireEvent("terminated");
@@ -539,11 +652,10 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       const value = step.storage[slotKey] ?? step.storage[`0x${idx.toString(16)}`];
       return value ? prefixHex(value) : null;
     }
-    // Bare identifier — look up via the storage layout.
-    if (/^[A-Za-z_]\w*$/.test(expression) && this.contractContext?.storageLayout) {
-      const match = this.contractContext.storageLayout.entries.find(
-        (e) => e.label === expression,
-      );
+    // Bare identifier — look up via the active contract's storage layout.
+    const ctx = this.activeContext();
+    if (/^[A-Za-z_]\w*$/.test(expression) && ctx?.storageLayout) {
+      const match = ctx.storageLayout.entries.find((e) => e.label === expression);
       if (match) {
         const slotKey = match.slot.toString();
         const value =
@@ -557,11 +669,12 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
 
   private handleDisassemble(msg: DapRequest): void {
     const args = msg.arguments as DisassembleArgs | undefined;
-    if (!args || !this.contractContext) {
+    const ctx = this.activeContext();
+    if (!args || !ctx) {
       this.respond(msg, false, undefined, "No contract loaded — supply `artifact` in launch.json");
       return;
     }
-    const all = this.contractContext.disassembly;
+    const all = ctx.disassembly;
     if (all.length === 0) {
       this.respond(msg, true, { instructions: [] });
       return;
@@ -618,14 +731,43 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
    * a sensible stack rather than emptying it.
    */
   private buildInternalCallStack(): InternalFrame[] {
-    if (!this.cursor || !this.contractContext) return [];
-    const ctx = this.contractContext;
+    if (!this.cursor) return [];
+    const cur = this.cursor.current;
+    if (!cur) return [];
+
+    // Multi-contract awareness (stretch 3): when the cursor is in
+    // a deeper call frame and we have a context for that frame's
+    // contract, surface a single label-frame at the inner contract's
+    // source position. The full internal-stack walk is restricted
+    // to the entry contract — extending it to per-depth internal
+    // stacks would require tracking i/o jumps separately per
+    // depth, a notable refactor we leave for follow-up.
+    if (cur.depth !== 1) {
+      const innerCtx = this.activeContext();
+      if (!innerCtx) return [];
+      const innerEntry = resolveSourcePosition(cur.pc, innerCtx.pcMap, innerCtx.sourceMap);
+      if (!innerEntry) return [];
+      const innerSource = innerCtx.sources[innerEntry.fileIndex];
+      if (!innerSource?.lineIndex) return [];
+      const innerPos = innerSource.lineIndex.positionAt(innerEntry.start);
+      return [
+        {
+          name: `(depth ${cur.depth}) ${path.basename(innerSource.absolutePath)}`,
+          filePath: innerSource.absolutePath,
+          line: innerPos.line,
+          character: innerPos.character,
+        },
+      ];
+    }
+
+    if (!this.entryContext) return [];
+    const ctx = this.entryContext;
     const cursorIndex = this.cursor.index;
     const stack: InternalFrame[] = [];
 
     for (let i = 0; i <= cursorIndex && i < this.cursor.length; i++) {
       const step = this.cursor.steps[i];
-      if (step.depth !== ctx.depth) continue; // skip inner-external opcodes
+      if (step.depth !== 1) continue; // skip inner-external opcodes
       const entry = resolveSourcePosition(step.pc, ctx.pcMap, ctx.sourceMap);
       if (!entry) continue;
       const source = ctx.sources[entry.fileIndex];
@@ -762,7 +904,7 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     if (entries.length === 0) {
       return [{ name: "(no observed writes)", value: "", variablesReference: 0 }];
     }
-    const layout = this.contractContext?.storageLayout;
+    const layout = this.activeContext()?.storageLayout;
     return entries.flatMap(([slot, value]) => {
       const named = layout ? lookupSlot(layout, slot) : [];
       if (named.length === 0) {
@@ -795,19 +937,16 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
   private resolveStepSource(
     step: TraceStep,
   ): { filePath: string; line: number; character: number } | null {
-    if (!this.contractContext) return null;
-    if (step.depth !== this.contractContext.depth) {
-      // Inner call frames: their bytecode isn't ours. Multi-frame
-      // resolution lands in stage 4.
-      return null;
-    }
-    const entry = resolveSourcePosition(
-      step.pc,
-      this.contractContext.pcMap,
-      this.contractContext.sourceMap,
-    );
+    // Use the active context for this step (entry contract at
+    // depth 1, or one of the aux contracts when a CALL crossed a
+    // boundary into known territory). When no context applies
+    // (inner call into an unknown address, or the cursor is on a
+    // generated helper opcode), bail with `null`.
+    const ctx = this.activeContext();
+    if (!ctx) return null;
+    const entry = resolveSourcePosition(step.pc, ctx.pcMap, ctx.sourceMap);
     if (!entry) return null;
-    const source = this.contractContext.sources[entry.fileIndex];
+    const source = ctx.sources[entry.fileIndex];
     if (!source || !source.lineIndex) return null;
     const pos = source.lineIndex.positionAt(entry.start);
     return { filePath: source.absolutePath, line: pos.line, character: pos.character };
@@ -824,19 +963,12 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
   private currentEnclosingFunction(
     step: TraceStep,
   ): { fn: AstFunction; byteOffset: number } | null {
-    if (!this.contractContext || this.contractContext.functions.length === 0) return null;
-    if (step.depth !== this.contractContext.depth) return null;
-    const entry = resolveSourcePosition(
-      step.pc,
-      this.contractContext.pcMap,
-      this.contractContext.sourceMap,
-    );
+    const ctx = this.activeContext();
+    if (!ctx || ctx.functions.length === 0) return null;
+    void step;
+    const entry = resolveSourcePosition(step.pc, ctx.pcMap, ctx.sourceMap);
     if (!entry) return null;
-    const fn = findEnclosingFunction(
-      this.contractContext.functions,
-      entry.fileIndex,
-      entry.start,
-    );
+    const fn = findEnclosingFunction(ctx.functions, entry.fileIndex, entry.start);
     if (!fn) return null;
     return { fn, byteOffset: entry.start };
   }
@@ -949,7 +1081,43 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     }
     const root =
       projectRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? path.dirname(artifactPath);
-    this.contractContext = this.buildContractContext(artifact, root);
+    this.entryContext = this.buildContractContext(artifact, root);
+    return null;
+  }
+
+  /**
+   * Load one entry from the launch config's `contracts` array — a
+   * `{ address, artifact }` pairing — into the auxContexts map.
+   * Returns a human-readable error string on failure (file
+   * unreadable, JSON unparseable, missing deployedBytecode).
+   *
+   * Address normalisation: stored lowercased + `0x`-prefixed so
+   * lookups against trace stack reads match without extra work.
+   */
+  private loadAuxContract(
+    entry: { address?: string; artifact?: string; projectRoot?: string },
+    fallbackRoot: string | undefined,
+  ): string | null {
+    if (!entry.address || !entry.artifact) {
+      return "`contracts[]` entries require both `address` and `artifact`";
+    }
+    let raw: string;
+    try {
+      raw = readFileSync(entry.artifact, "utf-8");
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    const artifact = parseForgeArtifact(raw);
+    if (!artifact) {
+      return `Artifact '${entry.artifact}' did not match an expected forge / solc shape.`;
+    }
+    const root =
+      entry.projectRoot ??
+      fallbackRoot ??
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
+      path.dirname(entry.artifact);
+    const ctx = this.buildContractContext(artifact, root);
+    this.auxContexts.set(normaliseAddress(entry.address), ctx);
     return null;
   }
 
@@ -987,7 +1155,6 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       sourceMap,
       pcMap,
       sources,
-      depth: 1,
       storageLayout,
       disassembly,
       functions,
@@ -999,9 +1166,12 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
   private summariseLoadState(): string {
     const parts: string[] = [];
     if (this.cursor) parts.push(`${this.cursor.length} trace steps`);
-    if (this.contractContext) {
-      const sourcesWithIndex = this.contractContext.sources.filter((s) => s.lineIndex).length;
+    if (this.entryContext) {
+      const sourcesWithIndex = this.entryContext.sources.filter((s) => s.lineIndex).length;
       parts.push(`${sourcesWithIndex} source file${sourcesWithIndex === 1 ? "" : "s"} indexed`);
+    }
+    if (this.auxContexts.size > 0) {
+      parts.push(`${this.auxContexts.size} aux contract${this.auxContexts.size === 1 ? "" : "s"} loaded`);
     }
     if (parts.length === 0) {
       return "Live execution path not yet wired (stage 4) — supply `traceFile` and `artifact` for stage-3 stepping.";
@@ -1098,7 +1268,6 @@ interface ContractContext {
   sourceMap: SourceMapEntry[];
   pcMap: number[];
   sources: { absolutePath: string; lineIndex: LineIndex | null }[];
-  depth: number;
   /** Storage layout from the artifact, or `null` when unavailable. */
   storageLayout: StorageLayout | null;
   /** Pre-disassembled deployed bytecode, computed at load time. */
@@ -1214,6 +1383,47 @@ function instructionBytes(inst: Instruction): string {
 
 void opcodeMnemonic; // re-exported for downstream consumers; keeps the import in scope.
 
+/**
+ * Read the target address from a CALL-like step's stack snapshot.
+ *
+ * The geth structLogs convention is bottom-first: `stack[0]` is
+ * the EVM stack bottom, `stack[length - 1]` is the top. CALL pops
+ * its operands in this order from the top:
+ *
+ *   gas, addr, value, argsOffset, argsLength, retOffset, retLength
+ *
+ * STATICCALL / DELEGATECALL drop `value`, but the address is still
+ * the second item from the top — we just need `stack[length - 2]`.
+ *
+ * The result is right-padded inside a 32-byte word; we take the
+ * trailing 40 hex chars (= 20 bytes) and lowercase it for the
+ * canonical form `auxContexts` is keyed on.
+ */
+function readAddressFromStack(step: { stack: string[] }): string | null {
+  const arr = step.stack;
+  if (arr.length < 2) return null;
+  const raw = arr[arr.length - 2];
+  return normaliseAddress(raw);
+}
+
+/**
+ * Normalise an address string for use as the `auxContexts` map
+ * key. Accepts both `0x`-prefixed and bare hex, padded or unpadded
+ * to 32 bytes; returns the lowercased `0x`-prefixed 20-byte form.
+ * Returns `null` for malformed input.
+ */
+function normaliseAddress(input: string): string {
+  let hex = input.trim();
+  if (hex.startsWith("0x") || hex.startsWith("0X")) hex = hex.slice(2);
+  if (!/^[0-9a-fA-F]*$/.test(hex)) return null as unknown as string;
+  if (hex.length === 0) return "0x" + "0".repeat(40);
+  // Pad to at least 40 hex chars so we can take the trailing 40
+  // (right-padded 32-byte words are common in trace stacks).
+  if (hex.length > 40) hex = hex.slice(-40);
+  hex = hex.padStart(40, "0");
+  return ("0x" + hex).toLowerCase();
+}
+
 interface SetBreakpointsArgs {
   source: { path?: string; name?: string };
   breakpoints?: { line: number; column?: number; condition?: string }[];
@@ -1244,6 +1454,16 @@ interface LaunchArguments {
    * 127.0.0.1:8545).
    */
   rpcUrl?: string;
+  /**
+   * Auxiliary contracts that may be CALLed during the trace. Each
+   * `{ address, artifact }` pair is loaded at startup and keyed by
+   * the lowercase 0x-prefixed address. When the trace's CALL /
+   * DELEGATECALL / STATICCALL targets a known address, the adapter
+   * switches the active `ContractContext` so source positions,
+   * storage pretty-print, and disassembly all resolve against the
+   * inner contract instead of falling back to "no source".
+   */
+  contracts?: { address: string; artifact: string; projectRoot?: string }[];
   /**
    * Path to a forge artifact JSON (`out/<file>.sol/<Contract>.json`).
    * Stage 3 reads this for the deployed bytecode + sourceMap +

@@ -453,6 +453,19 @@
                 "type": "string",
                 "description": "Project root used to resolve the artifact's relative source paths. Defaults to the workspace folder.",
                 "default": "${workspaceFolder}"
+              },
+              "contracts": {
+                "type": "array",
+                "description": "Auxiliary contracts that may be CALLed during the trace. Each entry pairs a deployed `address` with the path to its forge `artifact`. The adapter switches the active source map / storage layout / disassembly when the trace enters a CALL whose target matches a listed address — without these, deeper frames render as label-only frames.",
+                "items": {
+                  "type": "object",
+                  "required": ["address", "artifact"],
+                  "properties": {
+                    "address": { "type": "string", "description": "0x-prefixed deployed address (any case)." },
+                    "artifact": { "type": "string", "description": "Path to the contract's forge artifact JSON." },
+                    "projectRoot": { "type": "string", "description": "Optional override for resolving the artifact's relative source paths." }
+                  }
+                }
               }
             }
           }
