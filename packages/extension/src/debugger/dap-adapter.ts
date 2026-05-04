@@ -41,22 +41,16 @@ import {
  * - Stage 1 — scaffold (DONE).
  * - Stage 2 — trace ingestion (DONE).
  * - Stage 3 — source-position resolution + step semantics +
- *   setBreakpoints (THIS REVISION). When the launch config supplies
- *   `artifact` (path to a forge artifact JSON), the adapter loads the
- *   deployed bytecode + sourceMap, builds a `ContractContext`, and:
- *     * `stackTrace` reports the actual source file + line for the
- *       cursor's current step.
- *     * `next` advances until the source line changes (skipping
- *       generated helpers and inner-call opcodes naturally).
- *     * `stepIn` is identical to `next` in single-contract mode —
- *       multi-contract source resolution lands in stage 4.
- *     * `stepOut` advances until the call depth drops below the
- *       current frame.
- *     * `continue` advances to the next breakpoint or end-of-trace.
- *     * `setBreakpoints` accepts source-line breakpoints and
- *       reports them all verified.
- *     * `loadedSources` enumerates the artifact's source list.
- * - Stages 4-5 — see PRODUCTION_GAPS.md.
+ *   setBreakpoints (DONE).
+ * - Stage 4 — internal call stack + Stack / Memory / Storage scopes
+ *   (THIS REVISION). `stackTrace` returns a multi-frame stack built
+ *   by walking the trace's source-map `jump: "i"` / `jump: "o"`
+ *   markers; each internal Solidity function call shows up as its
+ *   own frame with its own source position. `scopes` exposes the
+ *   EVM stack, memory, and storage at the current step; `variables`
+ *   resolves the references to lists of raw hex entries — local
+ *   variable decoding from the AST is stretch goal stage 5.
+ * - Stage 5 — see PRODUCTION_GAPS.md.
  */
 export class SolidityDapAdapter implements vscode.DebugAdapter {
   private readonly _onDidSendMessage = new vscode.EventEmitter<vscode.DebugProtocolMessage>();
@@ -73,8 +67,17 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
    * lines are converted at the request boundary).
    */
   private breakpoints = new Map<string, Set<number>>();
-  /** Cached so `next` knows when the source line has actually changed. */
-  private lastReportedLine: { filePath: string; line: number } | null = null;
+  /**
+   * Variables-reference allocation table. Each scope (and any nested
+   * structured variable) is assigned an integer ID via
+   * `allocateVariableRef`; VSCode echoes that ID back in subsequent
+   * `variables` requests, which we resolve through this map. Cleared
+   * on every step so stale references can't leak across cursor
+   * positions (the data they describe — stack / memory / storage —
+   * has changed).
+   */
+  private variableRefs = new Map<number, () => DapVariable[]>();
+  private nextVariableRef = 1000;
 
   handleMessage(message: vscode.DebugProtocolMessage): void {
     const msg = message as DapRequest;
@@ -213,46 +216,94 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       return;
     }
 
-    const source = this.resolveStepSource(step);
     const cursor = this.cursor!;
     const frameLabel = `${step.op} @ pc=${step.pc} (depth ${step.depth}, gas ${step.gas})`;
-    if (source) {
+
+    // Stage 4: build the internal Solidity call stack from
+    // `jump: "i"` / `jump: "o"` markers on every step up to and
+    // including the cursor. The DAP convention is topmost-first —
+    // so the current frame is index 0.
+    const internalFrames = this.buildInternalCallStack();
+    if (internalFrames.length > 0) {
+      const dapFrames = internalFrames.map((f, i) => ({
+        id: i,
+        name: f.name,
+        line: f.line + 1,
+        column: f.character + 1,
+        source: { path: f.filePath, name: path.basename(f.filePath) },
+      }));
+      // Top frame's label gets the opcode context appended so the
+      // user can read PC + opcode without leaving the panel.
+      dapFrames[0].name += `  [${frameLabel}]`;
       this.respond(msg, true, {
-        stackFrames: [
-          {
-            id: cursor.index,
-            name: frameLabel,
-            // DAP lines / columns are 1-based.
-            line: source.line + 1,
-            column: source.character + 1,
-            source: { path: source.filePath, name: path.basename(source.filePath) },
-          },
-        ],
-        totalFrames: 1,
+        stackFrames: dapFrames,
+        totalFrames: dapFrames.length,
       });
-      this.lastReportedLine = { filePath: source.filePath, line: source.line };
-    } else {
-      this.respond(msg, true, {
-        stackFrames: [
-          {
-            id: cursor.index,
-            name: frameLabel + (this.contractContext ? " — generated/no source" : ""),
-            line: 0,
-            column: 0,
-            presentationHint: "label",
-          },
-        ],
-        totalFrames: 1,
-      });
+      void internalFrames[0];
+      return;
     }
+
+    // No source frames — either no contract context loaded, or the
+    // current step is at depth > 1 / on a generated opcode. Return
+    // a label-only frame so the panel isn't blank.
+    this.respond(msg, true, {
+      stackFrames: [
+        {
+          id: cursor.index,
+          name: frameLabel + (this.contractContext ? " — no source for this depth/opcode" : ""),
+          line: 0,
+          column: 0,
+          presentationHint: "label",
+        },
+      ],
+      totalFrames: 1,
+    });
   }
 
   private handleScopes(msg: DapRequest): void {
-    this.respond(msg, true, { scopes: [] });
+    this.variableRefs.clear();
+    const step = this.cursor?.current;
+    if (!step) {
+      this.respond(msg, true, { scopes: [] });
+      return;
+    }
+    const stackRef = this.allocateVariableRef(() => this.evmStackVariables(step));
+    const memoryRef = this.allocateVariableRef(() => this.evmMemoryVariables(step));
+    const storageRef = this.allocateVariableRef(() => this.evmStorageVariables(step));
+    this.respond(msg, true, {
+      scopes: [
+        {
+          name: `Stack (${step.stack.length} item${step.stack.length === 1 ? "" : "s"})`,
+          variablesReference: stackRef,
+          expensive: false,
+          presentationHint: "registers",
+        },
+        {
+          name: `Memory (${step.memory.length} word${step.memory.length === 1 ? "" : "s"})`,
+          variablesReference: memoryRef,
+          expensive: false,
+        },
+        {
+          name: `Storage (${Object.keys(step.storage).length} entries)`,
+          variablesReference: storageRef,
+          expensive: false,
+        },
+      ],
+    });
   }
 
   private handleVariables(msg: DapRequest): void {
-    this.respond(msg, true, { variables: [] });
+    const args = msg.arguments as { variablesReference?: number } | undefined;
+    if (!args || typeof args.variablesReference !== "number") {
+      this.respond(msg, true, { variables: [] });
+      return;
+    }
+    const getter = this.variableRefs.get(args.variablesReference);
+    if (!getter) {
+      this.respond(msg, true, { variables: [] });
+      return;
+    }
+    this.respond(msg, true, { variables: getter() });
   }
 
   private handleSetBreakpoints(msg: DapRequest): void {
@@ -379,6 +430,134 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     this.respond(msg, true);
     this.fireEvent("terminated");
     this.fireEvent("exited", { exitCode: 0 });
+  }
+
+  // ── Call stack & scopes ──────────────────────────────────────────
+
+  /**
+   * Walk the trace from index 0 through the cursor's current step,
+   * pushing on `jump: "i"` and popping on `jump: "o"`, to construct
+   * the Solidity internal call stack at the current position.
+   *
+   * The bottom-most frame represents the function the trace
+   * started in (the test function, typically); each subsequent
+   * frame is one level deeper. The DAP convention is
+   * topmost-first, so the returned array is reversed before
+   * delivery — index 0 is the innermost function.
+   *
+   * Inner external CALLs (depth > entry depth) are skipped here:
+   * their bytecode isn't ours, so we can't track their internal
+   * stack. They contribute as a single label frame in the trace
+   * but don't unwind our internal stack.
+   *
+   * Defensive: refuses to pop the bottom frame so an unbalanced
+   * `jump: "o"` (which can happen when an exception unwinds) leaves
+   * a sensible stack rather than emptying it.
+   */
+  private buildInternalCallStack(): InternalFrame[] {
+    if (!this.cursor || !this.contractContext) return [];
+    const ctx = this.contractContext;
+    const cursorIndex = this.cursor.index;
+    const stack: InternalFrame[] = [];
+
+    for (let i = 0; i <= cursorIndex && i < this.cursor.length; i++) {
+      const step = this.cursor.steps[i];
+      if (step.depth !== ctx.depth) continue; // skip inner-external opcodes
+      const entry = resolveSourcePosition(step.pc, ctx.pcMap, ctx.sourceMap);
+      if (!entry) continue;
+      const source = ctx.sources[entry.fileIndex];
+      if (!source?.lineIndex) continue;
+      const pos = source.lineIndex.positionAt(entry.start);
+
+      if (stack.length === 0) {
+        stack.push({
+          name: "(entry)",
+          filePath: source.absolutePath,
+          line: pos.line,
+          character: pos.character,
+        });
+        continue;
+      }
+
+      if (entry.jump === "i") {
+        stack.push({
+          name: `function@${path.basename(source.absolutePath)}:${pos.line + 1}`,
+          filePath: source.absolutePath,
+          line: pos.line,
+          character: pos.character,
+        });
+      } else if (entry.jump === "o" && stack.length > 1) {
+        stack.pop();
+      }
+
+      // The topmost frame's source position tracks the *current*
+      // step (so the user sees where execution is right now, not
+      // where the JUMP-in landed).
+      const top = stack[stack.length - 1];
+      top.filePath = source.absolutePath;
+      top.line = pos.line;
+      top.character = pos.character;
+    }
+
+    return stack.reverse();
+  }
+
+  private allocateVariableRef(getter: () => DapVariable[]): number {
+    const ref = ++this.nextVariableRef;
+    this.variableRefs.set(ref, getter);
+    return ref;
+  }
+
+  /** EVM stack contents at the current step, top-of-stack first. */
+  private evmStackVariables(step: TraceStep): DapVariable[] {
+    if (step.stack.length === 0) {
+      return [{ name: "(empty)", value: "", variablesReference: 0 }];
+    }
+    // EVM convention is top-of-stack last in the structLogs output
+    // (some emitters use first; we display in canonical "top first"
+    // order with index 0 = top).
+    const total = step.stack.length;
+    return step.stack
+      .slice()
+      .reverse()
+      .map((value, idx) => ({
+        name: `[${idx}]${idx === 0 ? " (top)" : idx === total - 1 ? " (bottom)" : ""}`,
+        value: prefixHex(value),
+        variablesReference: 0,
+        type: "uint256",
+      }));
+  }
+
+  /** EVM memory laid out as 32-byte words, addressed by their start offset. */
+  private evmMemoryVariables(step: TraceStep): DapVariable[] {
+    if (step.memory.length === 0) {
+      return [{ name: "(empty)", value: "", variablesReference: 0 }];
+    }
+    return step.memory.map((value, idx) => ({
+      name: `0x${(idx * 32).toString(16).padStart(4, "0")}`,
+      value: prefixHex(value),
+      variablesReference: 0,
+      type: "bytes32",
+    }));
+  }
+
+  /**
+   * Storage diff for the active contract. structLogs only show
+   * storage *changes* observed during execution — not the entire
+   * storage tree — so this list is small. Stage 5 will pretty-print
+   * each entry against the contract's storage layout.
+   */
+  private evmStorageVariables(step: TraceStep): DapVariable[] {
+    const entries = Object.entries(step.storage);
+    if (entries.length === 0) {
+      return [{ name: "(no observed writes)", value: "", variablesReference: 0 }];
+    }
+    return entries.map(([slot, value]) => ({
+      name: prefixHex(slot),
+      value: prefixHex(value),
+      variablesReference: 0,
+      type: "bytes32",
+    }));
   }
 
   // ── Source resolution ────────────────────────────────────────────
@@ -600,6 +779,39 @@ interface DapRequest {
   type: "request";
   command: string;
   arguments?: unknown;
+}
+
+/**
+ * One Solidity-level call frame, computed by walking the trace's
+ * source-map `i` / `o` jump markers. The topmost (innermost) frame
+ * is the function the cursor is currently executing in.
+ */
+interface InternalFrame {
+  name: string;
+  filePath: string;
+  /** 0-based line number; `+1`'d before sending over DAP. */
+  line: number;
+  /** 0-based character offset; `+1`'d before sending over DAP. */
+  character: number;
+}
+
+/**
+ * A single entry in a `variables` response. Keeps the surface narrow
+ * — fields beyond `name` / `value` / `variablesReference` are added
+ * as the adapter learns to decode richer types in stage 5.
+ */
+interface DapVariable {
+  name: string;
+  value: string;
+  variablesReference: number;
+  type?: string;
+}
+
+/** Prefix `value` with `0x` if it isn't already. Used uniformly across the variables panel. */
+function prefixHex(value: string): string {
+  if (value.length === 0) return "0x";
+  if (value.startsWith("0x") || value.startsWith("0X")) return value;
+  return `0x${value}`;
 }
 
 interface SetBreakpointsArgs {
