@@ -294,12 +294,29 @@ May 2026 sweep; the remaining stages are tracked below.
   auto-completer snippet. `SolidityDapConfigurationProvider` fills
   in defaults for F5-without-launch.json.
 
-**Stage 2 — trace ingestion.** Run
-`forge test --match-test ... --debug --json`, parse the resulting
-JSON trace into a structured stream of `{ pc, opcode, depth, gas,
-stack, memory, storage }` steps. Pure helper in `common`, plus a
-`TraceCursor` for the adapter to navigate (next, previous, by
-source position).
+**Stage 2 — trace ingestion (DONE).** May 2026 sweep:
+
+- `parseTraceJson` accepts the de-facto `debug_traceTransaction`
+  JSON shape (geth, anvil, `cast run --json`) plus two defensive
+  variants (`{ steps: [...] }` and a bare array). Tolerant of the
+  field-name drift Foundry emitters exhibit (`pc`/`programCounter`,
+  `op`/`opName`/`opcode`, `gas`/`gasLeft`, `gasCost`/`cost`) and
+  gas values serialised as either decimal numbers or `0x` hex.
+- `TraceCursor` is the navigator the DAP adapter holds for the
+  session: `current` / `index` / `length` / `next` / `previous` /
+  `seek` / `findNext` / `findPrevious`. Cheap index moves;
+  source-position-aware semantics compose `findNext` with a
+  predicate built from the source-map module so the cursor itself
+  stays source-map-agnostic.
+- 16 unit tests cover the three top-level shapes, field aliases,
+  gas-as-hex-or-decimal, optional-field defaults, error capture,
+  and every cursor method's edge cases.
+- The DAP adapter's launch config gained a `traceFile` escape
+  hatch. When set, the adapter parses the JSON, builds a
+  `TraceCursor`, and `stackTrace` / `next` / `stepIn` / `continue`
+  /`terminated` all flow through real cursor state. Until the
+  live execution path lands in stage 3, users can hand-feed
+  `cast run --json` output and step opcode-by-opcode.
 
 **Stage 3 — source-position-driven step semantics.** Wire `next`
 (step over), `stepIn`, `stepOut`, `continue` to the trace cursor.
@@ -321,7 +338,7 @@ print storage entries by attaching the contract's storage layout
 JSON. Add `restart` and `setVariable` for the canonical
 inspect-and-tweak workflow.
 
-**Effort remaining (stages 2–5)**: ~3 weeks. Simbolik is the
+**Effort remaining (stages 3–5)**: ~2–2.5 weeks. Simbolik is the
 commercial gold standard here; we explicitly aren't trying to
 match its symbolic reasoning, just give the user a reliable
 step-through.
