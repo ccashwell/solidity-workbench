@@ -5,6 +5,13 @@ import { findForgeRoot } from "@solidity-workbench/common";
 
 const execFileAsync = promisify(execFile);
 
+interface ForgeStorageEntry {
+  label?: unknown;
+  type?: unknown;
+  slot?: unknown;
+  offset?: unknown;
+}
+
 /**
  * Storage Layout Visualization — interactive webview panel showing
  * the storage slot layout of a contract.
@@ -139,7 +146,10 @@ export class StorageLayoutPanel {
           timeout: 60_000,
         },
       );
-      const data = JSON.parse(result.stdout);
+      const data = JSON.parse(result.stdout) as {
+        storage?: ForgeStorageEntry[];
+        types?: Record<string, { label?: string; numberOfBytes?: string }>;
+      };
       // Forge emits two parallel structures:
       //   - `data.storage[]` — one entry per state variable, with the
       //     declared name, slot, offset, and a *type id* (e.g.
@@ -153,11 +163,8 @@ export class StorageLayoutPanel {
       // (`startsWith("address")` etc. never matched the `t_…` ids)
       // and every slot bar drew at the default 32-byte width
       // regardless of actual packing.
-      const types = (data.types ?? {}) as Record<
-        string,
-        { label?: string; numberOfBytes?: string }
-      >;
-      const layout: StorageEntry[] = (data.storage ?? []).map((e: any) => {
+      const types = data.types ?? {};
+      const layout: StorageEntry[] = (data.storage ?? []).map((e) => {
         const typeId = String(e.type ?? "");
         const meta = types[typeId] ?? {};
         const typeLabel = meta.label ?? typeId.replace(/^t_/, "");
@@ -171,10 +178,11 @@ export class StorageLayoutPanel {
         };
       });
       return { layout };
-    } catch (err: any) {
-      const stderr = (err.stderr ?? "").toString().trim();
-      const stdout = (err.stdout ?? "").toString().trim();
-      const message = stderr || stdout || err.message || String(err);
+    } catch (err: unknown) {
+      const execErr = err as { stderr?: unknown; stdout?: unknown; message?: string };
+      const stderr = (execErr.stderr ?? "").toString().trim();
+      const stdout = (execErr.stdout ?? "").toString().trim();
+      const message = stderr || stdout || execErr.message || String(err);
       return { layout: null, error: message };
     }
   }

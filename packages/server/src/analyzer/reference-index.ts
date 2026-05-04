@@ -1,4 +1,4 @@
-import type { Location, Range } from "vscode-languageserver/node.js";
+import type { Range } from "vscode-languageserver/node.js";
 
 /**
  * Inverted index for fast reference lookups.

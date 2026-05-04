@@ -116,7 +116,7 @@ export class AutoImportProvider {
     for (const sym of symbols) {
       if (existingImports.has(sym.filePath)) continue;
 
-      const importPath = this.computeImportPath(currentUri, sym.filePath, symbolName);
+      const importPath = this.computeImportPath(currentUri, sym.filePath);
       if (importPath) {
         candidates.push({
           symbolName,
@@ -139,7 +139,7 @@ export class AutoImportProvider {
    * Compute the shortest correct import path from one file to another.
    * Prefers remapped paths over relative paths.
    */
-  private computeImportPath(fromUri: string, toUri: string, symbolName: string): string | null {
+  private computeImportPath(fromUri: string, toUri: string): string | null {
     const fromPath = URI.parse(fromUri).fsPath;
     const toPath = URI.parse(toUri).fsPath;
 

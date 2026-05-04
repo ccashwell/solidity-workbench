@@ -1,17 +1,8 @@
 import type { DocumentSymbol } from "vscode-languageserver/node.js";
-import { SymbolKind, Range } from "vscode-languageserver/node.js";
+import { SymbolKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SolidityParser } from "../parser/solidity-parser.js";
-import type {
-  ContractDefinition,
-  FunctionDefinition,
-  EventDefinition,
-  ErrorDefinition,
-  StructDefinition,
-  EnumDefinition,
-  ModifierDefinition,
-  StateVariableDeclaration,
-} from "@solidity-workbench/common";
+import type { ContractDefinition, FunctionDefinition } from "@solidity-workbench/common";
 
 /**
  * Provides the document symbol outline (breadcrumbs, outline panel).

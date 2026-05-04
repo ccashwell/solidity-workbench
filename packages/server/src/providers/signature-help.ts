@@ -40,7 +40,7 @@ export class SignatureHelpProvider {
     const { functionName, activeParameter, containerName } = callContext;
 
     // Look up function definitions
-    const signatures = this.findSignatures(functionName, containerName, document.uri);
+    const signatures = this.findSignatures(functionName, containerName);
     if (signatures.length === 0) {
       // Try built-in functions
       const builtinSig = this.getBuiltinSignature(functionName);
@@ -89,7 +89,6 @@ export class SignatureHelpProvider {
     if (i < 0 || text[i] !== "(") return null;
 
     // Walk backward past whitespace to find the function name
-    const nameEnd = i;
     i--;
     while (i >= 0 && /\s/.test(text[i])) i--;
     if (i < 0) return null;
@@ -118,7 +117,6 @@ export class SignatureHelpProvider {
   private findSignatures(
     funcName: string,
     containerName: string | undefined,
-    uri: string,
   ): SignatureInformation[] {
     const signatures: SignatureInformation[] = [];
 
@@ -151,13 +149,13 @@ export class SignatureHelpProvider {
             // Check events
             const event = entry.contract.events.find((e) => e.name === funcName);
             if (event) {
-              signatures.push(this.buildEventSignature(event, sym.containerName));
+              signatures.push(this.buildEventSignature(event));
               continue;
             }
             // Check errors
             const error = entry.contract.errors.find((e) => e.name === funcName);
             if (error) {
-              signatures.push(this.buildErrorSignature(error, sym.containerName));
+              signatures.push(this.buildErrorSignature(error));
             }
           }
         }
@@ -198,7 +196,7 @@ export class SignatureHelpProvider {
     };
   }
 
-  private buildEventSignature(event: EventDefinition, containerName: string): SignatureInformation {
+  private buildEventSignature(event: EventDefinition): SignatureInformation {
     const params = event.parameters.map((p) => {
       const label = `${p.typeName}${p.indexed ? " indexed" : ""}${p.name ? " " + p.name : ""}`;
       return ParameterInformation.create(label);
@@ -213,7 +211,7 @@ export class SignatureHelpProvider {
     };
   }
 
-  private buildErrorSignature(error: ErrorDefinition, containerName: string): SignatureInformation {
+  private buildErrorSignature(error: ErrorDefinition): SignatureInformation {
     const params = error.parameters.map((p) => {
       const label = `${p.typeName}${p.name ? " " + p.name : ""}`;
       return ParameterInformation.create(label);

@@ -64,7 +64,7 @@ export class TypeHierarchyProvider {
   getSubtypes(item: TypeHierarchyItem): TypeHierarchyItem[] {
     const subtypes: TypeHierarchyItem[] = [];
 
-    for (const [name, entry] of this.symbolIndex.getAllContracts()) {
+    for (const [, entry] of this.symbolIndex.getAllContracts()) {
       for (const base of entry.contract.baseContracts) {
         if (base.baseName === item.name) {
           subtypes.push(this.contractToItem(entry.contract, entry.uri));

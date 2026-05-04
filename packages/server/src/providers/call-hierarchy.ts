@@ -18,6 +18,8 @@ import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
 import { getWordAtPosition, CALL_LIKE_KEYWORDS, isSolidityBuiltinType } from "../utils/text.js";
 
+const CALL_HIERARCHY_INDEX_BATCH_SIZE = 24;
+
 /**
  * Call Hierarchy provider — traces call chains through the codebase.
  *
@@ -56,6 +58,10 @@ export class CallHierarchyProvider {
 
   private indexedFiles: Set<string> = new Set();
   private solcBridge: SolcBridge | null = null;
+  private workspaceIndexPromise: Promise<void> | null = null;
+  private reachableCache: Map<string, Set<string>> = new Map();
+  private qualifierCache: Map<string, Set<string>> = new Map();
+  private fileTextCache: Map<string, string | null> = new Map();
 
   constructor(
     private symbolIndex: SymbolIndex,
@@ -111,7 +117,7 @@ export class CallHierarchyProvider {
     item: CallHierarchyItem,
     token?: CancellationToken,
   ): Promise<CallHierarchyIncomingCall[]> {
-    await this.ensureIndexed(token);
+    await this.ensureIndexedForItem(item, "incoming", token);
     if (token?.isCancellationRequested) return [];
 
     const sites = this.incomingCalls.get(item.name) ?? [];
@@ -171,7 +177,7 @@ export class CallHierarchyProvider {
     item: CallHierarchyItem,
     token?: CancellationToken,
   ): Promise<CallHierarchyOutgoingCall[]> {
-    await this.ensureIndexed(token);
+    await this.ensureIndexedForItem(item, "outgoing", token);
     if (token?.isCancellationRequested) return [];
 
     const key = this.makeKey(item.uri, item.name, item.detail);
@@ -228,22 +234,78 @@ export class CallHierarchyProvider {
       if (key.startsWith(uri + "#")) this.outgoingCalls.delete(key);
     }
     this.indexedFiles.delete(uri);
+    this.reachableCache.clear();
+    this.qualifierCache.clear();
+    this.fileTextCache.delete(uri);
   }
 
-  private async ensureIndexed(token?: CancellationToken): Promise<void> {
-    const allUris = this.workspace.getAllFileUris();
-    for (const uri of allUris) {
+  private async ensureIndexedForItem(
+    item: CallHierarchyItem,
+    mode: "incoming" | "outgoing",
+    token?: CancellationToken,
+  ): Promise<void> {
+    await this.ensureIndexedUris(this.priorityUrisFor(item.uri, mode === "incoming"), token);
+    if (token?.isCancellationRequested) return;
+
+    if (mode === "outgoing") {
+      this.queueWorkspaceIndex();
+      return;
+    }
+
+    await this.ensureWorkspaceIndexed(token);
+  }
+
+  private queueWorkspaceIndex(): void {
+    if (this.workspaceIndexPromise) return;
+    this.workspaceIndexPromise = new Promise<void>((resolve) => setImmediate(resolve))
+      .then(() => this.ensureIndexedUris(this.workspace.getAllFileUris()))
+      .finally(() => {
+        this.workspaceIndexPromise = null;
+      });
+  }
+
+  private async ensureWorkspaceIndexed(token?: CancellationToken): Promise<void> {
+    if (!this.workspaceIndexPromise) {
+      this.workspaceIndexPromise = this.ensureIndexedUris(
+        this.workspace.getAllFileUris(),
+        token,
+      ).finally(() => {
+        this.workspaceIndexPromise = null;
+      });
+    }
+    await this.workspaceIndexPromise;
+  }
+
+  private async ensureIndexedUris(uris: string[], token?: CancellationToken): Promise<void> {
+    let indexedInBatch = 0;
+    for (const uri of uris) {
       if (token?.isCancellationRequested) return;
       if (this.indexedFiles.has(uri)) continue;
-      try {
-        const filePath = this.workspace.uriToPath(uri);
-        const text = fs.readFileSync(filePath, "utf-8");
-        this.indexCallsInFile(uri, text);
+      const text = this.getTextForUri(uri);
+      if (text === null) {
         this.indexedFiles.add(uri);
-      } catch {
-        // skip unreadable files
+        continue;
+      }
+      this.indexCallsInFile(uri, text);
+      this.indexedFiles.add(uri);
+
+      indexedInBatch++;
+      if (indexedInBatch >= CALL_HIERARCHY_INDEX_BATCH_SIZE) {
+        indexedInBatch = 0;
+        await new Promise<void>((resolve) => setImmediate(resolve));
       }
     }
+  }
+
+  private priorityUrisFor(uri: string, includeRest: boolean): string[] {
+    const reachable = this.collectReachableUris(uri);
+    const allUris = this.workspace.getAllFileUris();
+    const ordered = [uri, ...reachable].filter((u, i, arr) => arr.indexOf(u) === i);
+    if (!includeRest) return ordered;
+    for (const candidate of allUris) {
+      if (!reachable.has(candidate) && candidate !== uri) ordered.push(candidate);
+    }
+    return ordered;
   }
 
   /**
@@ -254,6 +316,9 @@ export class CallHierarchyProvider {
    * `MyToken is IERC20`.
    */
   private computeAllowedQualifiers(containerName: string | undefined): Set<string> {
+    if (containerName && this.qualifierCache.has(containerName)) {
+      return this.qualifierCache.get(containerName)!;
+    }
     const allowed = new Set<string>();
     if (!containerName) return allowed;
     allowed.add(containerName);
@@ -261,6 +326,7 @@ export class CallHierarchyProvider {
     for (const base of chain) {
       if (base.name) allowed.add(base.name);
     }
+    this.qualifierCache.set(containerName, allowed);
     return allowed;
   }
 
@@ -363,7 +429,7 @@ export class CallHierarchyProvider {
     if (!ref) return undefined;
 
     const targetUri = this.uriForPath(ref.filePath);
-    const targetText = targetUri === uri ? text : this.readFile(ref.filePath);
+    const targetText = targetUri === uri ? text : this.getTextForPath(ref.filePath);
     if (targetText === null) return undefined;
     const targetDoc =
       targetUri === uri ? doc : TextDocument.create(targetUri, "solidity", 1, targetText);
@@ -501,14 +567,25 @@ export class CallHierarchyProvider {
     };
   }
 
-  private filterVisibleSymbols<T extends { filePath: string }>(callerUri: string, symbols: T[]): T[] {
+  private filterVisibleSymbols<T extends { filePath: string }>(
+    callerUri: string,
+    symbols: T[],
+  ): T[] {
     const resolveImport = (this.workspace as Partial<WorkspaceManager>).resolveImport;
     if (!resolveImport) return symbols;
     const reachable = this.collectReachableUris(callerUri);
     return symbols.filter((sym) => reachable.has(sym.filePath));
   }
 
-  private collectReachableUris(uri: string, visited: Set<string> = new Set()): Set<string> {
+  private collectReachableUris(
+    uri: string,
+    visited: Set<string> = new Set(),
+    rootUri: string = uri,
+  ): Set<string> {
+    if (uri === rootUri && visited.size === 0) {
+      const cached = this.reachableCache.get(uri);
+      if (cached) return cached;
+    }
     if (visited.has(uri)) return visited;
     visited.add(uri);
 
@@ -528,9 +605,12 @@ export class CallHierarchyProvider {
     for (const imp of result.sourceUnit.imports) {
       const targetPath = resolveImport.call(this.workspace, imp.path, fsPath);
       if (!targetPath) continue;
-      this.collectReachableUris(URI.file(targetPath).toString(), visited);
+      this.collectReachableUris(URI.file(targetPath).toString(), visited, rootUri);
     }
 
+    if (uri === rootUri) {
+      this.reachableCache.set(rootUri, new Set(visited));
+    }
     return visited;
   }
 
@@ -564,12 +644,35 @@ export class CallHierarchyProvider {
       start.line < position.line ||
       (start.line === position.line && start.character <= position.character);
     const endsAfter =
-      end.line > position.line || (end.line === position.line && end.character >= position.character);
+      end.line > position.line ||
+      (end.line === position.line && end.character >= position.character);
     return startsBefore && endsAfter;
   }
 
   private uriForPath(filePath: string): string {
     return URI.file(this.absolutePath(filePath)).toString();
+  }
+
+  private getTextForUri(uri: string): string | null {
+    const cachedText = this.parser.getText(uri);
+    if (cachedText !== undefined) return cachedText;
+    const cached = this.fileTextCache.get(uri);
+    if (cached !== undefined) return cached;
+    let filePath: string;
+    try {
+      filePath = this.workspace.uriToPath(uri);
+    } catch {
+      this.fileTextCache.set(uri, null);
+      return null;
+    }
+    const text = this.readFile(filePath);
+    this.fileTextCache.set(uri, text);
+    return text;
+  }
+
+  private getTextForPath(filePath: string): string | null {
+    const uri = this.uriForPath(filePath);
+    return this.getTextForUri(uri);
   }
 
   private readFile(filePath: string): string | null {

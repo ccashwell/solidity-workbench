@@ -236,21 +236,18 @@ export class IrViewerPanel {
     const forgePath = config.get<string>("foundryPath") || "forge";
     const field = state.variant; // forge inspect accepts these field names verbatim
     try {
-      const { stdout } = await execFileAsync(
-        forgePath,
-        ["inspect", state.contractName, field],
-        {
-          cwd: forgeRoot,
-          maxBuffer: 64 * 1024 * 1024,
-          timeout: 120_000,
-        },
-      );
+      const { stdout } = await execFileAsync(forgePath, ["inspect", state.contractName, field], {
+        cwd: forgeRoot,
+        maxBuffer: 64 * 1024 * 1024,
+        timeout: 120_000,
+      });
       return { output: stdout };
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const execErr = err as { stderr?: unknown; stdout?: unknown; message?: string };
       const message =
-        (err.stderr ?? "").toString().trim() ||
-        (err.stdout ?? "").toString().trim() ||
-        err.message ||
+        (execErr.stderr ?? "").toString().trim() ||
+        (execErr.stdout ?? "").toString().trim() ||
+        execErr.message ||
         String(err);
       return { error: message };
     }
@@ -410,10 +407,7 @@ ${this.baselineBannerHtml(state, deltas)}
 </div>`;
   }
 
-  private baselineBannerHtml(
-    state: PanelState,
-    deltas: Map<string, FunctionDelta> | null,
-  ): string {
+  private baselineBannerHtml(state: PanelState, deltas: Map<string, FunctionDelta> | null): string {
     if (!state.baseline || state.baseline.variant !== state.variant) return "";
     const captured = new Date(state.baseline.capturedAt);
     const time = captured.toLocaleTimeString();
@@ -445,10 +439,7 @@ ${this.baselineBannerHtml(state, deltas)}
 </div>`;
   }
 
-  private buildTocHtml(
-    outline: YulOutline,
-    deltas: Map<string, FunctionDelta> | null,
-  ): string {
+  private buildTocHtml(outline: YulOutline, deltas: Map<string, FunctionDelta> | null): string {
     return outline.objects
       .map((obj) => {
         const groups = groupFunctions(obj.functions);
@@ -490,9 +481,7 @@ ${this.baselineBannerHtml(state, deltas)}
   }
 
   private removedEntriesHtml(objectName: string, deltas: Map<string, FunctionDelta>): string {
-    const removed = [...deltas]
-      .filter(([, d]) => d.state === "removed")
-      .map(([name]) => name);
+    const removed = [...deltas].filter(([, d]) => d.state === "removed").map(([name]) => name);
     if (removed.length === 0) return "";
     void objectName; // baseline outline is per-object too; for MVP we list all removed under their object.
     const items = removed

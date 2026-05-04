@@ -444,11 +444,17 @@ export class WorkspaceManager {
         timeout: 120_000,
       });
       return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const execErr = err as {
+        stdout?: string;
+        stderr?: string;
+        message?: string;
+        code?: number;
+      };
       return {
-        stdout: err.stdout ?? "",
-        stderr: err.stderr ?? err.message,
-        exitCode: err.code ?? 1,
+        stdout: execErr.stdout ?? "",
+        stderr: execErr.stderr ?? execErr.message ?? "",
+        exitCode: execErr.code ?? 1,
       };
     }
   }

@@ -4,6 +4,26 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+interface ExecError {
+  stdout?: unknown;
+  message?: string;
+}
+
+interface SlitherElement {
+  name?: string;
+  source_mapping?: {
+    filename_relative?: string;
+    lines?: number[];
+  };
+}
+
+interface SlitherDetector {
+  impact?: string;
+  check?: string;
+  description?: string;
+  elements?: SlitherElement[];
+}
+
 /**
  * Slither static analysis integration.
  *
@@ -64,20 +84,22 @@ export class SlitherIntegration {
       );
 
       this.processResults(result.stdout, workspaceFolder.uri);
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const execErr = err as ExecError;
       // Slither exits non-zero when it finds issues
-      if (err.stdout) {
-        this.processResults(err.stdout, workspaceFolder.uri);
+      if (typeof execErr.stdout === "string") {
+        this.processResults(execErr.stdout, workspaceFolder.uri);
       } else {
-        this.outputChannel.appendLine(`Slither error: ${err.message}`);
-        vscode.window.showErrorMessage(`Slither analysis failed: ${err.message}`);
+        const message = execErr.message ?? String(err);
+        this.outputChannel.appendLine(`Slither error: ${message}`);
+        vscode.window.showErrorMessage(`Slither analysis failed: ${message}`);
       }
     }
   }
 
   private processResults(jsonOutput: string, workspaceUri: vscode.Uri): void {
     try {
-      const data = JSON.parse(jsonOutput);
+      const data = JSON.parse(jsonOutput) as { results?: { detectors?: SlitherDetector[] } };
       if (!data.results?.detectors) {
         this.outputChannel.appendLine("No issues found.");
         return;
@@ -89,7 +111,7 @@ export class SlitherIntegration {
       for (const detector of data.results.detectors) {
         totalFindings++;
 
-        const severity = this.mapSeverity(detector.impact);
+        const severity = this.mapSeverity(detector.impact ?? "");
         const message = `[${detector.check}] ${detector.description}`;
 
         // Map source elements to file locations
@@ -116,9 +138,9 @@ export class SlitherIntegration {
           // Add related information if there are multiple elements
           if (detector.elements.length > 1) {
             diagnostic.relatedInformation = detector.elements
-              .filter((e: any) => e !== element && e.source_mapping?.filename_relative)
+              .filter((e) => e !== element && e.source_mapping?.filename_relative)
               .slice(0, 5)
-              .map((e: any) => {
+              .map((e) => {
                 const relUri = vscode.Uri.joinPath(
                   workspaceUri,
                   e.source_mapping.filename_relative,

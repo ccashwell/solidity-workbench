@@ -149,8 +149,10 @@ export class CoverageProvider {
           vscode.window.showInformationMessage(
             `Coverage loaded: ${this.coverageData.size} files. Open .sol files to see per-line highlights.`,
           );
-        } catch (err: any) {
-          vscode.window.showErrorMessage(`forge coverage failed: ${err.stderr || err.message}`);
+        } catch (err: unknown) {
+          const execErr = err as { stderr?: unknown; message?: string };
+          const message = execErr.stderr || execErr.message || String(err);
+          vscode.window.showErrorMessage(`forge coverage failed: ${message}`);
         } finally {
           try {
             fs.unlinkSync(lcovPath);

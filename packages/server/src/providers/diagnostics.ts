@@ -345,7 +345,13 @@ export class DiagnosticsProvider {
   }
 
   private parseSolcError(
-    error: any,
+    error: {
+      sourceLocation?: { file?: string; start?: number; end?: number };
+      errorCode?: string;
+      severity?: string;
+      message?: string;
+      formattedMessage?: string;
+    },
     diagnosticsByFile: Map<string, Diagnostic[]>,
     lineIndex: LineIndex | null,
   ): void {

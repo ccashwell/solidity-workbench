@@ -1,5 +1,4 @@
 import * as parser from "@solidity-parser/parser";
-import type { ASTNode } from "@solidity-parser/parser/src/ast-types";
 import { getWordTextAtPosition } from "../utils/text.js";
 import type { ParserPool } from "./parser-pool.js";
 import type {

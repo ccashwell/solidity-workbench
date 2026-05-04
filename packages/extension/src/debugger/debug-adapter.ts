@@ -143,8 +143,9 @@ export class SolidityDebugProvider {
       );
 
       return this.parseTraceOutput(result.stdout);
-    } catch (err: any) {
-      if (err.stdout) return this.parseTraceOutput(err.stdout);
+    } catch (err: unknown) {
+      const execErr = err as { stdout?: unknown };
+      if (typeof execErr.stdout === "string") return this.parseTraceOutput(execErr.stdout);
       return null;
     }
   }

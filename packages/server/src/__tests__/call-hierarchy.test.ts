@@ -10,6 +10,7 @@ import { SolidityParser } from "../parser/solidity-parser.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
 import { CallHierarchyProvider } from "../providers/call-hierarchy.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { SolcBridge } from "../compiler/solc-bridge.js";
 
 /**
  * The fixture is intentionally minimal: two contracts `A` and `B` each with
@@ -274,7 +275,7 @@ contract B {
             offset: targetStart,
             length: "transfer".length,
           }),
-        } as any);
+        } as unknown as SolcBridge);
 
         const calls = await exact.provider.getOutgoingCalls({
           name: "use",
@@ -349,6 +350,99 @@ contract MockERC4626 {
         assert.notEqual(convert.to.detail, "MockERC4626");
       } finally {
         teardownFixture(erc4626);
+      }
+    });
+
+    it("answers outgoing calls from the active import graph before reading unrelated files", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "call-hierarchy-scope-test-"));
+      try {
+        const files = {
+          "A.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract A {
+    function transfer() external {}
+}
+`,
+          "UseA.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "./A.sol";
+
+contract UseA {
+    function run(A a) external {
+        a.transfer();
+    }
+}
+`,
+          "Unrelated.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract Unrelated {
+    function transfer() external {}
+}
+`,
+        };
+
+        const uris: string[] = [];
+        for (const [name, contents] of Object.entries(files)) {
+          const filePath = path.join(tmpDir, name);
+          fs.writeFileSync(filePath, contents, "utf-8");
+          uris.push(URI.file(filePath).toString());
+        }
+
+        const unrelatedUri = URI.file(path.join(tmpDir, "Unrelated.sol")).toString();
+        const touched: string[] = [];
+        const workspace: Pick<WorkspaceManager, "getAllFileUris" | "uriToPath" | "resolveImport"> =
+          {
+            getAllFileUris: () => uris.slice(),
+            uriToPath: (uri: string) => {
+              touched.push(uri);
+              return URI.parse(uri).fsPath;
+            },
+            resolveImport: (importPath: string, fromFile: string) => {
+              if (!importPath.startsWith(".")) return null;
+              const target = path.resolve(path.dirname(fromFile), importPath);
+              return fs.existsSync(target) ? target : null;
+            },
+          };
+
+        const parser = new SolidityParser();
+        const symbolIndex = new SymbolIndex(parser, workspace as WorkspaceManager);
+        for (const name of ["A.sol", "UseA.sol"]) {
+          const filePath = path.join(tmpDir, name);
+          const uri = URI.file(filePath).toString();
+          parser.parse(uri, fs.readFileSync(filePath, "utf-8"));
+          symbolIndex.updateFile(uri);
+        }
+
+        const provider = new CallHierarchyProvider(
+          symbolIndex,
+          workspace as WorkspaceManager,
+          parser,
+        );
+        const useAUri = URI.file(path.join(tmpDir, "UseA.sol")).toString();
+        const calls = await provider.getOutgoingCalls({
+          name: "run",
+          kind: SymbolKind.Function,
+          uri: useAUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "UseA",
+        });
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].to.detail, "A");
+        assert.ok(
+          !touched.includes(unrelatedUri),
+          "outgoing calls should not synchronously read unrelated workspace files",
+        );
+
+        await provider.getIncomingCalls(
+          transferItem(URI.file(path.join(tmpDir, "A.sol")).toString(), "A"),
+        );
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
       }
     });
   });

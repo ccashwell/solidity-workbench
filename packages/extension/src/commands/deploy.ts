@@ -433,10 +433,10 @@ async function pickDeployNetwork(): Promise<string | undefined> {
   );
 
   if (!picked) return undefined;
-  if ((picked as any).rpc === "custom") {
+  if (picked.rpc === "custom") {
     return vscode.window.showInputBox({ title: "RPC URL", placeHolder: "https://..." });
   }
-  return (picked as any).rpc;
+  return picked.rpc;
 }
 
 async function pickSigningMethod(): Promise<string | undefined> {
@@ -454,7 +454,7 @@ async function pickSigningMethod(): Promise<string | undefined> {
 
   if (!picked) return undefined;
 
-  if ((picked as any).flag === "--keystore") {
+  if (picked.flag === "--keystore") {
     const file = await vscode.window.showOpenDialog({
       title: "Select keystore file",
       canSelectMany: false,
@@ -463,7 +463,7 @@ async function pickSigningMethod(): Promise<string | undefined> {
     return `--keystore ${file[0].fsPath}`;
   }
 
-  return (picked as any).flag;
+  return picked.flag;
 }
 
 async function getConstructorArgs(contractName: string): Promise<string | undefined> {

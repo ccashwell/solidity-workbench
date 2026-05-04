@@ -1,5 +1,5 @@
 import type { FormattingOptions, Range } from "vscode-languageserver/node.js";
-import { DocumentFormattingParams, TextEdit } from "vscode-languageserver/node.js";
+import { TextEdit } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import * as fs from "node:fs";
@@ -17,14 +17,14 @@ import * as crypto from "node:crypto";
 export class FormattingProvider {
   constructor(private workspace: WorkspaceManager) {}
 
-  async format(document: TextDocument, options: FormattingOptions): Promise<TextEdit[]> {
+  async format(document: TextDocument, _options: FormattingOptions): Promise<TextEdit[]> {
     return this.formatDocument(document);
   }
 
   async formatRange(
     document: TextDocument,
     range: Range,
-    options: FormattingOptions,
+    _options: FormattingOptions,
   ): Promise<TextEdit[]> {
     // forge fmt doesn't support range formatting natively,
     // so we format the whole document then filter edits to the requested range.

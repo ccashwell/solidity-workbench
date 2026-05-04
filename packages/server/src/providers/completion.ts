@@ -1,10 +1,5 @@
 import type { CompletionItem, Position } from "vscode-languageserver/node.js";
-import {
-  CompletionItemKind,
-  InsertTextFormat,
-  MarkupContent,
-  MarkupKind,
-} from "vscode-languageserver/node.js";
+import { CompletionItemKind, InsertTextFormat, MarkupKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolKind } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
@@ -44,7 +39,7 @@ export class CompletionProvider {
     const textBefore = lineText.slice(0, position.character);
 
     if (this.isInImportPath(textBefore)) {
-      return this.provideImportCompletions(textBefore);
+      return this.provideImportCompletions();
     }
 
     if (this.isInNatspecComment(text, offset)) {
@@ -96,7 +91,7 @@ export class CompletionProvider {
     return /^\s*\/\/\//.test(currentLine) || /\/\*\*/.test(currentLine);
   }
 
-  private provideImportCompletions(textBefore: string): CompletionItem[] {
+  private provideImportCompletions(): CompletionItem[] {
     const items: CompletionItem[] = [];
 
     // Suggest known contract/library names from the workspace
@@ -168,7 +163,7 @@ export class CompletionProvider {
     }
 
     // 3. Address member completions (heuristic + name hint)
-    if (this.isAddressLike(target, text)) {
+    if (this.isAddressLike(target)) {
       return this.provideAddressMembers();
     }
 
@@ -279,7 +274,9 @@ export class CompletionProvider {
 
   private structMemberCompletions(structName: string): CompletionItem[] {
     const items: CompletionItem[] = [];
-    const structSymbols = this.symbolIndex.findSymbols(structName).filter((s) => s.kind === "struct");
+    const structSymbols = this.symbolIndex
+      .findSymbols(structName)
+      .filter((s) => s.kind === "struct");
 
     for (const sym of structSymbols) {
       if (!sym.containerName) continue;
@@ -300,7 +297,7 @@ export class CompletionProvider {
     return items;
   }
 
-  private provideKeywordCompletions(textBefore: string): CompletionItem[] {
+  private provideKeywordCompletions(_textBefore: string): CompletionItem[] {
     const keywords = [
       "pragma",
       "import",
@@ -410,7 +407,7 @@ export class CompletionProvider {
     return items;
   }
 
-  private provideSymbolCompletions(uri: string, textBefore: string): CompletionItem[] {
+  private provideSymbolCompletions(uri: string, _textBefore: string): CompletionItem[] {
     const fileSymbols = this.symbolIndex.getFileSymbols(uri);
     return fileSymbols.map((sym) => ({
       label: sym.name,
@@ -420,7 +417,7 @@ export class CompletionProvider {
     }));
   }
 
-  private provideSnippetCompletions(textBefore: string): CompletionItem[] {
+  private provideSnippetCompletions(_textBefore: string): CompletionItem[] {
     return [
       {
         label: "function",
@@ -599,7 +596,7 @@ export class CompletionProvider {
     ];
   }
 
-  private isAddressLike(target: string, text: string): boolean {
+  private isAddressLike(target: string): boolean {
     // Check symbol index for the variable's type
     const symbols = this.symbolIndex.findSymbols(target);
     for (const sym of symbols) {

@@ -23,6 +23,7 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
  */
 export class SolcBridge {
   private cachedAst: Map<string, SolcSourceUnit> = new Map();
+  private declarationsById: Map<number, { filePath: string; node: unknown }> = new Map();
 
   /**
    * Canonical method identifiers keyed by bare contract name.
@@ -126,13 +127,11 @@ export class SolcBridge {
     const node = this.findNodeAtOffset(ast.ast, offset);
     if (!node?.referencedDeclaration) return null;
 
-    // Search all ASTs for the declaration with that ID
-    for (const [fp, su] of this.cachedAst) {
-      const decl = this.findNodeById(su.ast, node.referencedDeclaration);
-      if (decl) {
-        const [start, length] = this.parseSourceRange(decl.src);
-        return { filePath: fp, offset: start, length };
-      }
+    const cachedDecl = this.declarationsById.get(node.referencedDeclaration);
+    const cachedDeclSrc = this.nodeSrc(cachedDecl?.node);
+    if (cachedDecl && cachedDeclSrc) {
+      const [start, length] = this.parseSourceRange(cachedDeclSrc);
+      return { filePath: cachedDecl.filePath, offset: start, length };
     }
 
     return null;
@@ -167,6 +166,13 @@ export class SolcBridge {
 
     let declaration: { filePath: string; offset: number; length: number } | null = null;
     const references: { filePath: string; offset: number; length: number }[] = [];
+
+    const cachedDecl = this.declarationsById.get(declId);
+    const cachedDeclSrc = this.nodeSrc(cachedDecl?.node);
+    if (cachedDecl && cachedDeclSrc) {
+      const [declOffset, declLength] = this.parseSourceRange(cachedDeclSrc);
+      declaration = { filePath: cachedDecl.filePath, offset: declOffset, length: declLength };
+    }
 
     for (const [fp, su] of this.cachedAst) {
       if (!declaration) {
@@ -397,6 +403,9 @@ export class SolcBridge {
   private extractAsts(output: any): void {
     if (!output.sources) return;
 
+    this.cachedAst.clear();
+    this.declarationsById.clear();
+
     for (const [filePath, source] of Object.entries(output.sources) as [string, any][]) {
       if (source.ast) {
         const absolute = this.absolutePath(filePath);
@@ -405,6 +414,7 @@ export class SolcBridge {
           filePath: absolute,
           ast: source.ast,
         });
+        this.indexDeclarationsById(source.ast, absolute);
       }
     }
   }
@@ -526,6 +536,31 @@ export class SolcBridge {
     }
 
     return null;
+  }
+
+  private indexDeclarationsById(node: unknown, filePath: string): void {
+    if (!node || typeof node !== "object") return;
+    const record = node as Record<string, unknown>;
+
+    if (typeof record.id === "number" && this.isDeclarationNode(record)) {
+      this.declarationsById.set(record.id, { filePath, node });
+    }
+
+    for (const key of Object.keys(record)) {
+      if (key === "src" || key === "typeDescriptions") continue;
+      const child = record[key];
+      if (Array.isArray(child)) {
+        for (const item of child) this.indexDeclarationsById(item, filePath);
+      } else if (typeof child === "object" && child !== null) {
+        this.indexDeclarationsById(child, filePath);
+      }
+    }
+  }
+
+  private nodeSrc(node: unknown): string | null {
+    if (!node || typeof node !== "object") return null;
+    const src = (node as { src?: unknown }).src;
+    return typeof src === "string" ? src : null;
   }
 
   private parseSourceRange(src: string): [number, number] {

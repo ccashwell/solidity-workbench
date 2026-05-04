@@ -134,10 +134,11 @@ export class AbiPanel {
         timeout: 60_000,
       });
       return { abi: JSON.parse(result.stdout) };
-    } catch (err: any) {
-      const stderr = (err.stderr ?? "").toString().trim();
-      const stdout = (err.stdout ?? "").toString().trim();
-      const message = stderr || stdout || err.message || String(err);
+    } catch (err: unknown) {
+      const execErr = err as { stderr?: unknown; stdout?: unknown; message?: string };
+      const stderr = (execErr.stderr ?? "").toString().trim();
+      const stdout = (execErr.stdout ?? "").toString().trim();
+      const message = stderr || stdout || execErr.message || String(err);
       return { abi: null, error: message };
     }
   }

@@ -169,7 +169,7 @@ export class RenameProvider {
     for (const doc of this.documents.all()) {
       if (token?.isCancellationRequested) return null;
       if (isInLibDir(doc.uri)) continue;
-      const edits = this.findOccurrencesInText(doc.getText(), oldName, doc.uri);
+      const edits = this.findOccurrencesInText(doc.getText(), oldName);
       if (edits.length > 0) {
         changes[doc.uri] = edits.map((range) => TextEdit.replace(range, newName));
       }
@@ -185,7 +185,7 @@ export class RenameProvider {
       try {
         const filePath = this.workspace.uriToPath(uri);
         const fileText = fs.readFileSync(filePath, "utf-8");
-        const edits = this.findOccurrencesInText(fileText, oldName, uri);
+        const edits = this.findOccurrencesInText(fileText, oldName);
         if (edits.length > 0) {
           changes[uri] = edits.map((range) => TextEdit.replace(range, newName));
         }
@@ -274,7 +274,9 @@ export class RenameProvider {
   }
 
   private uriForPath(filePath: string): string {
-    return URI.file(path.isAbsolute(filePath) ? filePath : path.join(this.workspace.root, filePath)).toString();
+    return URI.file(
+      path.isAbsolute(filePath) ? filePath : path.join(this.workspace.root, filePath),
+    ).toString();
   }
 
   private readFile(filePath: string): string | null {
@@ -392,7 +394,7 @@ export class RenameProvider {
    * Find all occurrences of a symbol name in text, using word-boundary matching.
    * Returns ranges for each occurrence.
    */
-  private findOccurrencesInText(text: string, symbolName: string, uri: string): Range[] {
+  private findOccurrencesInText(text: string, symbolName: string): Range[] {
     const ranges: Range[] = [];
     const lines = text.split("\n");
 

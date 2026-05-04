@@ -50,7 +50,6 @@ export class CodeLensProvider {
     const result = this.parser.get(document.uri);
     if (!result) return lenses;
 
-    const text = document.getText();
     const isTestFile = document.uri.endsWith(".t.sol");
     const suppressGas = options.suppressGas === true;
 

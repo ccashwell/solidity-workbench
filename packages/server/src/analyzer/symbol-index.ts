@@ -1,10 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { CancellationToken, Range, WorkspaceSymbol } from "vscode-languageserver/node.js";
-import {
-  Location,
-  SymbolInformation,
-  SymbolKind as LSPSymbolKind,
-} from "vscode-languageserver/node.js";
+import { SymbolKind as LSPSymbolKind } from "vscode-languageserver/node.js";
 import { URI } from "vscode-uri";
 import type {
   SolSymbol,
