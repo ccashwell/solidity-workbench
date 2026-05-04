@@ -397,6 +397,64 @@
         }
       ]
     },
+    "breakpoints": [
+      {
+        "language": "solidity"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "solidity-workbench",
+        "label": "Solidity (Foundry)",
+        "languages": [
+          "solidity"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "required": [],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to the Solidity contract or test file to debug.",
+                "default": "${file}"
+              },
+              "test": {
+                "type": "string",
+                "description": "Test function name to debug (e.g. test_increment). When omitted, the active editor's test under the cursor is used."
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Stop at the first opcode of the transaction.",
+                "default": true
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "solidity-workbench",
+            "request": "launch",
+            "name": "Debug Solidity test",
+            "program": "${file}",
+            "stopOnEntry": true
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "Solidity Workbench: Debug Foundry Test",
+            "description": "Launch a Foundry test under the EVM debug adapter (step-through tracing).",
+            "body": {
+              "type": "solidity-workbench",
+              "request": "launch",
+              "name": "Debug ${1:test_name}",
+              "program": "^\"\\${file}\"",
+              "test": "${1:test_name}",
+              "stopOnEntry": true
+            }
+          }
+        ]
+      }
+    ],
     "taskDefinitions": [
       {
         "type": "forge",

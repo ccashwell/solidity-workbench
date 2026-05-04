@@ -17,6 +17,10 @@ import { AderynIntegration } from "./analysis/aderyn.js";
 import { WakeIntegration } from "./analysis/wake.js";
 import { MythrilIntegration } from "./analysis/mythril.js";
 import { SolidityDebugProvider } from "./debugger/debug-adapter.js";
+import {
+  SolidityDapAdapterFactory,
+  SolidityDapConfigurationProvider,
+} from "./debugger/dap-adapter.js";
 import { ChiselPanel } from "./views/chisel-panel.js";
 import { FoundryTomlProvider } from "./views/foundry-toml-schema.js";
 import { StatusBar } from "./views/status-bar.js";
@@ -133,6 +137,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const debugProvider = new SolidityDebugProvider();
   debugProvider.activate(context);
+
+  // DAP adapter scaffold — registers the `solidity-workbench` debug
+  // type so VSCode's "Run and Debug" panel can launch it. Stage 1
+  // is plumbing only; trace ingestion lands in subsequent commits.
+  context.subscriptions.push(
+    vscode.debug.registerDebugAdapterDescriptorFactory(
+      "solidity-workbench",
+      new SolidityDapAdapterFactory(),
+    ),
+    vscode.debug.registerDebugConfigurationProvider(
+      "solidity-workbench",
+      new SolidityDapConfigurationProvider(),
+    ),
+  );
 
   // ── Chisel REPL ───────────────────────────────────────────────────
 
