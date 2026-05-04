@@ -527,11 +527,13 @@ pnpm --filter solidity-workbench test:e2e
 
 ### Test suite
 
-~390 unit tests via Node's built-in test runner, plus 16 E2E tests via
-`@vscode/test-electron` (6 activation smoke tests + 10 LSP round-trip tests
-covering hover, workspace symbols including fuzzy subsequence, references,
-rename, code actions, and formatting). CI runs on Node 18, 20, and 22 with
-Foundry installed.
+~530 unit tests via Node's built-in test runner, plus ~30 E2E tests
+via `@vscode/test-electron` (activation smoke + LSP round-trip
+covering hover, workspace symbols including fuzzy subsequence,
+references, rename, code actions, and formatting + feature-coverage
+spanning LSP providers, webview command registration, the Test
+Explorer controller, and a synthetic-trace DAP launch round-trip).
+CI runs on Node 18, 20, and 22 with Foundry installed.
 
 Coverage spans: parser (35 tests), symbol/reference indexing, all major providers (completion,
 definition, hover, rename, references, code actions, auto-import, diagnostics, semantic tokens,
@@ -554,7 +556,7 @@ Remaining P3 enhancements — see
 | Item | Effort | Description |
 | --- | --- | --- |
 | Solar integration | 2–3 weeks | Swap parser hot path to Solar WASM for ~40× speed once Solar publishes a stable LSP |
-| More E2E coverage | Ongoing | Test-explorer discovery after `forge build`, coverage decoration rendering, storage-layout webview shape, Slither / Aderyn diagnostic round-trip |
+| More E2E coverage | Ongoing | Coverage decoration rendering, full-trace DAP source resolution against a real forge build, Slither / Aderyn diagnostic round-trip |
 
 ---
 

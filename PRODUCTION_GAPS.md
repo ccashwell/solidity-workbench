@@ -466,12 +466,19 @@ resolver hot path via WASM for ~40× speed and true type resolution.
 
 ### 8. More E2E coverage (ongoing)
 
-Third-sweep work added LSP round-trip tests for hover, workspace
-symbols (exact + fuzzy), references, rename, code actions, and
-formatting. Natural next additions: test-explorer discovery after a
-`forge build`, coverage decoration rendering, storage-layout webview
-HTML shape, Slither / Aderyn diagnostic round-trip with a fixture
-report.
+Third-sweep work added LSP round-trip tests (hover, workspace
+symbols + fuzzy, references, rename, code actions, formatting).
+The May 2026 sweep added a `feature-coverage.test.ts` suite — 13
+tests covering more LSP providers (diagnostics, code lens, inlay
+hints, document highlights, type definition), webview / static-
+analysis command registration, Test Explorer controller wiring,
+and a synthetic-trace DAP launch round-trip that exercises the
+adapter end-to-end via VSCode's debug API.
+
+Natural next additions: coverage decoration rendering, full-trace
+DAP source resolution against a real `forge build` (rather than
+the synthetic minimal artifact), Slither / Aderyn diagnostic
+round-trip with a fixture report.
 
 **Effort**: 1–2 days ongoing.
 
