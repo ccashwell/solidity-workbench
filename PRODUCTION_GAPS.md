@@ -267,13 +267,12 @@ None.
 
 ## P3 — Enhancement (remaining)
 
-### 1. Real DAP debugger
+### 1. Real DAP debugger (DONE — stretch goals at bottom)
 
-Today's "debugger" is three terminal-wrapped `forge debug` / `forge
-test --debug` invocations. A real DAP adapter means launching forge
-with trace output, parsing solc source maps, walking opcodes, and
-implementing the DAP request set. Stage 1 (scaffold) landed in the
-May 2026 sweep; the remaining stages are tracked below.
+A real DAP adapter that launches forge / cast with trace output,
+parses solc source maps, walks opcodes, and implements the DAP
+request set. All five originally-scoped stages landed in the May
+2026 sweep.
 
 **Stage 1 — scaffold (DONE).** May 2026 sweep:
 
@@ -318,30 +317,81 @@ May 2026 sweep; the remaining stages are tracked below.
   live execution path lands in stage 3, users can hand-feed
   `cast run --json` output and step opcode-by-opcode.
 
-**Stage 3 — source-position-driven step semantics.** Wire `next`
-(step over), `stepIn`, `stepOut`, `continue` to the trace cursor.
-"Step over" advances the cursor until the source position changes
-beyond the current statement; `stepIn` follows function-entry
-JUMPs (`jump: "i"` from the source map); `stepOut` walks until the
-matching function-exit (`jump: "o"`). Implement `setBreakpoints`
-keyed on source line.
+**Stage 3 — source-position resolution + step semantics +
+setBreakpoints (DONE).** May 2026 sweep:
 
-**Stage 4 — `stackTrace` / `scopes` / `variables`.** Build a call
-stack from the source-map's `jump: "i"` / `jump: "o"` markers and
-the current depth. Expose `stack`, `memory`, `storage`, and
-`calldata` as scopes. Decode local variables from the AST + a
-walk of the trace's stack snapshots.
+- New `parseForgeArtifact` in `@solidity-workbench/common` decodes
+  forge artifacts (`out/<File>.sol/<Contract>.json`) tolerating
+  the canonical / flat-string / `evm.<key>` shapes that Foundry
+  has emitted across versions. Source list extracted from
+  `metadata.sources` (canonical solc metadata key order =
+  fileIndex), with fallbacks to top-level `sources` /
+  `sourceList`. 11 unit tests.
+- `LineIndex` moved into common so the adapter shares one canonical
+  UTF-8-byte ↔ LSP-position implementation with the LSP server.
+- The adapter loads the artifact during `launch`, builds a
+  `ContractContext` (parsed sourceMap, pre-computed PC →
+  instruction-index table, absolute source paths each indexed
+  for byte-offset → line conversion), and:
+    * `stackTrace` reports actual file + line + column.
+    * `next` / `stepIn` advance until the source line changes.
+    * `stepOut` runs until call depth drops below the current
+      frame.
+    * `continue` advances to the next breakpoint or end.
+    * `setBreakpoints` records source-line breakpoints keyed on
+      normalised absolute path.
+    * `loadedSources` enumerates the artifact's source list.
+- Single-contract caveat: when a trace enters an external CALL /
+  CREATE the inner contract's bytecode + sourceMap aren't ours,
+  so stepping shows label-only frames at depth > 1 until the call
+  returns.
 
-**Stage 5 — `disassemble` request + storage/memory pretty-print.**
-Add the `evaluate` request for hover-over watch values. Pretty-
-print storage entries by attaching the contract's storage layout
-JSON. Add `restart` and `setVariable` for the canonical
-inspect-and-tweak workflow.
+**Stage 4 — internal call stack + Stack / Memory / Storage scopes
+(DONE).** May 2026 sweep:
 
-**Effort remaining (stages 3–5)**: ~2–2.5 weeks. Simbolik is the
-commercial gold standard here; we explicitly aren't trying to
-match its symbolic reasoning, just give the user a reliable
-step-through.
+- `stackTrace` walks `jump: "i"` / `jump: "o"` markers from index
+  0 through the cursor's current step to construct the Solidity
+  internal call stack. Each internal function call is its own
+  DAP frame with its own source position. The DAP convention is
+  topmost-first; the topmost frame's name carries the
+  PC/opcode/depth context. Defensive against unbalanced jumps
+  from exception unwinds.
+- `scopes` exposes Stack (uint256 entries, top-of-stack first),
+  Memory (32-byte words by start offset), and Storage (slot →
+  value entries from structLogs) at the current step. Each
+  scope name carries a count badge.
+- `variables` resolves the references through a per-step
+  allocation table cleared at every fresh `scopes` request, so
+  stale references can't survive a step transition.
+
+**Stage 5 — disassembly + storage pretty-print + evaluate (DONE).**
+May 2026 sweep:
+
+- `parseStorageLayout` in common reads the artifact's
+  `storageLayout` block and groups packed entries by slot.
+  Storage scope entries surface as
+  `<label> (slot 0xN [+offset]) = <value>` with the Solidity
+  type attached. 8 unit tests.
+- `disassemble` helper in common decodes EVM bytecode through
+  Cancun / post-Cancun (BLOBHASH, BLOBBASEFEE, MCOPY, TLOAD,
+  TSTORE, PUSH0). Unknown opcodes render as `INVALID(0xNN)`
+  rather than throwing. The deployed bytecode is disassembled
+  once at load and `disassemble` requests slice instruction
+  windows out of the cache. 7 unit tests.
+- `evaluate` request supports a small expression DSL:
+  `stack[N]`, `memory[0xN]`, `storage[<slot>]`, and bare
+  state-variable identifiers resolved through the storage
+  layout. `supportsEvaluateForHovers` flipped on so VSCode's
+  hover surfaces values inline.
+
+**Stretch goals (not blocking).** A live `forge test --debug
+--json` execution path (so users don't have to hand-feed a
+saved trace), AST-driven local-variable decoding (mapping
+Solidity identifiers to stack slots), and multi-contract source
+maps (loading the inner contract's artifact when a CALL crosses
+a boundary). All three are valuable but the adapter is functional
+without them — users can step through any trace they save with
+`cast run --json` against a single contract.
 
 ### 2. Migrate parsing hot path to Solar when it stabilizes
 
@@ -371,8 +421,8 @@ report.
 |----------|-------|-------------------|
 | P1 | 0 | — |
 | P2 | 0 | — |
-| P3 | 3 | ~5–7 weeks (DAP dominates) |
-<!-- Counts: DAP debugger, Solar migration (blocked on upstream), ongoing E2E coverage. -->
+| P3 | 2 | ~2–3 weeks |
+<!-- Counts: Solar migration (blocked on upstream), ongoing E2E coverage. The DAP debugger's five originally-scoped stages all shipped in the May 2026 sweep; stretch goals (live forge launch, AST local-variable decoding, multi-contract source maps) are tracked at the bottom of the DAP entry. -->
 
 | **Total to public beta** | **0** | **ship the VSIX** |
 | **Total to v1.0** | **0** | **ship the VSIX** |

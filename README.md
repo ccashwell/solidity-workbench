@@ -307,8 +307,35 @@ Quick picks for `sig`, `4byte`, `calldata-decode`, `abi-encode`, `keccak`, `to-w
 
 ### Debugging
 
-Terminal-based: `forge test --debug`, `forge debug`, or `forge debug --rpc-url <url> <txHash>`.
-A Debug Adapter Protocol (DAP) implementation is planned.
+Two paths:
+
+- **Terminal fallback**: `forge test --debug`, `forge debug`, or
+  `forge debug --rpc-url <url> <txHash>` for the canonical Foundry
+  TUI.
+- **Native DAP adapter** (`type: "solidity-workbench"`): step
+  through any saved EVM trace from VSCode's Run-and-Debug panel.
+  Hand the adapter a trace from `cast run --json <txhash> > trace.json`
+  plus the contract's forge artifact, and it resolves PCs back to
+  source lines on the fly:
+    - **Source-aware step over / step in / step out / continue**,
+      with line breakpoints set in the gutter of any `.sol` file.
+    - **Internal call stack** built from solc's source-map jump
+      markers — every Solidity function call appears as its own
+      DAP frame with its own source position.
+    - **Stack / Memory / Storage scopes** in the Variables panel,
+      with storage entries pretty-printed via the artifact's
+      `storageLayout` (so `count` shows up under its declared
+      name, packed slots surface every entry that occupies them).
+    - **Hover evaluation** for `stack[N]`, `memory[0xN]`,
+      `storage[<slot>]`, and bare state-variable identifiers.
+    - **Disassembly view** of the deployed bytecode through
+      Cancun + post-Cancun opcodes.
+  See the launch.json snippet (Cmd+Shift+P → "Debug: Add
+  Configuration..." → "Solidity Workbench: Debug Foundry Test")
+  or read [PRODUCTION_GAPS.md](PRODUCTION_GAPS.md) for the
+  remaining stretch goals (live `forge test --debug --json`
+  launch, AST-driven local-variable decoding, multi-contract
+  source maps).
 
 ### IR inspection
 
@@ -503,13 +530,13 @@ chisel output adapter, ABI signature formatters, and text utilities.
 
 All P1 and P2 items are resolved. Aderyn integration, the trigram-backed
 fuzzy workspace symbols, the subgraph scaffold, the chisel webview, the
-remote chain UI, the IR Viewer, the Wake bridge, and the Mythril bridge
-all landed in the April–May 2026 sweeps. Remaining P3 enhancements — see
+remote chain UI, the IR Viewer, the Wake bridge, the Mythril bridge, and
+the native DAP debug adapter all landed in the April–May 2026 sweeps.
+Remaining P3 enhancements — see
 [PRODUCTION_GAPS.md](PRODUCTION_GAPS.md):
 
 | Item | Effort | Description |
 | --- | --- | --- |
-| DAP debugger | 3–4 weeks | Source-level step-through via forge trace + source maps |
 | Solar integration | 2–3 weeks | Swap parser hot path to Solar WASM for ~40× speed once Solar publishes a stable LSP |
 | More E2E coverage | Ongoing | Test-explorer discovery after `forge build`, coverage decoration rendering, storage-layout webview shape, Slither / Aderyn diagnostic round-trip |
 
