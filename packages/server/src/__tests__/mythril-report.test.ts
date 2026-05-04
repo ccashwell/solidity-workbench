@@ -48,9 +48,7 @@ describe("parseMythrilReport", () => {
     const json = JSON.stringify({
       "src/A.sol": {
         success: true,
-        issues: [
-          { title: "Reentrancy", severity: "High", "swc-id": "107", lineno: 10 },
-        ],
+        issues: [{ title: "Reentrancy", severity: "High", "swc-id": "107", lineno: 10 }],
       },
       "src/B.sol": {
         success: true,
@@ -160,7 +158,14 @@ describe("summarizeMythril", () => {
       { title: "b", description: "", severity: "high", swcId: null, contractPath: "f", line: 2 },
       { title: "c", description: "", severity: "medium", swcId: null, contractPath: "f", line: 3 },
       { title: "d", description: "", severity: "low", swcId: null, contractPath: "f", line: 4 },
-      { title: "e", description: "", severity: "informational", swcId: null, contractPath: "f", line: 5 },
+      {
+        title: "e",
+        description: "",
+        severity: "informational",
+        swcId: null,
+        contractPath: "f",
+        line: 5,
+      },
     ];
     assert.deepEqual(summarizeMythril(findings), {
       high: 2,

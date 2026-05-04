@@ -58,9 +58,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
       terminal.show();
       const verbosity = config().get<number>("test.verbosity") ?? 2;
       const flag = forgeVerbosityFlag(verbosity);
-      terminal.sendText(
-        `${getForge()} test --match-path ${filePath}${flag ? " " + flag : ""}`,
-      );
+      terminal.sendText(`${getForge()} test --match-path ${filePath}${flag ? " " + flag : ""}`);
     }),
   );
 
@@ -86,9 +84,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
       terminal.show();
       const verbosity = config().get<number>("test.verbosity") ?? 2;
       const flag = forgeVerbosityFlag(verbosity);
-      terminal.sendText(
-        `${getForge()} test --match-test ${testName}${flag ? " " + flag : ""}`,
-      );
+      terminal.sendText(`${getForge()} test --match-test ${testName}${flag ? " " + flag : ""}`);
     }),
   );
 

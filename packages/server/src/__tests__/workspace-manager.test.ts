@@ -54,7 +54,8 @@ describe("WorkspaceManager", () => {
       await ws.initialize();
 
       const tiers = ws.getFileUrisByTier();
-      const basenames = (uris: string[]) => uris.map((u) => path.basename(URI.parse(u).fsPath)).sort();
+      const basenames = (uris: string[]) =>
+        uris.map((u) => path.basename(URI.parse(u).fsPath)).sort();
 
       assert.deepEqual(basenames(tiers.project), ["Counter.sol", "Token.sol"]);
       assert.deepEqual(basenames(tiers.tests), ["Counter.t.sol", "Deploy.s.sol"]);

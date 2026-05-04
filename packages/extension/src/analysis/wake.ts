@@ -58,15 +58,11 @@ export class WakeIntegration {
 
     let stdout = "";
     try {
-      const result = await execFileAsync(
-        wakePath,
-        ["detect", "all", "--output-format", "json"],
-        {
-          cwd: workspaceFolder.uri.fsPath,
-          maxBuffer: 50 * 1024 * 1024,
-          timeout: 300_000,
-        },
-      );
+      const result = await execFileAsync(wakePath, ["detect", "all", "--output-format", "json"], {
+        cwd: workspaceFolder.uri.fsPath,
+        maxBuffer: 50 * 1024 * 1024,
+        timeout: 300_000,
+      });
       stdout = result.stdout;
     } catch (err: unknown) {
       // Wake exits non-zero when findings exist. The report still
@@ -164,8 +160,7 @@ function toDiagnosticSeverity(impact: WakeFinding["impact"]): vscode.DiagnosticS
 function toRange(instance: WakeInstance): vscode.Range {
   const startLine = Math.max(0, instance.line - 1);
   const startCol = instance.column !== undefined ? Math.max(0, instance.column - 1) : 0;
-  const endLine =
-    instance.endLine !== undefined ? Math.max(0, instance.endLine - 1) : startLine;
+  const endLine = instance.endLine !== undefined ? Math.max(0, instance.endLine - 1) : startLine;
   const endCol =
     instance.endColumn !== undefined
       ? Math.max(0, instance.endColumn - 1)

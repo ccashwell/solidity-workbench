@@ -50,9 +50,7 @@ export interface MythrilFinding {
  * Renamed from a generic `severityLabel` to avoid colliding with
  * the same-named Aderyn helper at the flat re-export layer.
  */
-export function mythrilSeverityLabel(
-  severity: MythrilSeverity,
-): "error" | "warning" | "info" {
+export function mythrilSeverityLabel(severity: MythrilSeverity): "error" | "warning" | "info" {
   switch (severity) {
     case "high":
       return "error";
@@ -125,8 +123,7 @@ function parseIssueEntry(entry: unknown, filenameFallback: string | undefined): 
   const severity = normalizeSeverity(readString(e, ["severity"]));
   if (!title || !severity) return [];
 
-  const contractPath =
-    readString(e, ["filename", "source_unit_name", "file"]) ?? filenameFallback;
+  const contractPath = readString(e, ["filename", "source_unit_name", "file"]) ?? filenameFallback;
   if (!contractPath) return [];
 
   const line = readNumber(e, ["lineno", "line", "line_number"]);

@@ -183,7 +183,7 @@ export function parseYulOutline(source: string): YulOutline {
       if (word === "object") {
         const opened = consumeObjectHeader(source, end, line);
         if (opened) {
-          const obj: (YulObject & { _openDepth: number }) = {
+          const obj: YulObject & { _openDepth: number } = {
             name: opened.name,
             startLine: line,
             endLine: -1,
@@ -264,13 +264,7 @@ function demangle(mangled: string): { displayName: string | null; astId: string 
   const astId = idMatch ? idMatch[1] : null;
   const stripped = idMatch ? mangled.slice(0, -idMatch[0].length) : mangled;
 
-  const PREFIXES = [
-    "external_fun_",
-    "getter_fun_",
-    "fun_",
-    "constructor_",
-    "modifier_",
-  ] as const;
+  const PREFIXES = ["external_fun_", "getter_fun_", "fun_", "constructor_", "modifier_"] as const;
   for (const p of PREFIXES) {
     if (stripped.startsWith(p)) {
       const rest = stripped.slice(p.length);
@@ -303,7 +297,11 @@ function categorize(mangled: string): YulFunctionCategory {
     mangled.startsWith("array_storage_")
   )
     return "storage";
-  if (mangled.startsWith("allocate_") || mangled.startsWith("array_") || mangled.startsWith("memory_"))
+  if (
+    mangled.startsWith("allocate_") ||
+    mangled.startsWith("array_") ||
+    mangled.startsWith("memory_")
+  )
     return "memory";
   if (
     mangled.startsWith("shift_") ||
@@ -403,9 +401,7 @@ function consumeFunctionHeader(
 }
 
 function isIdStart(ch: string): boolean {
-  return (
-    (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch === "_" || ch === "$"
-  );
+  return (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch === "_" || ch === "$";
 }
 
 function isIdCont(ch: string): boolean {

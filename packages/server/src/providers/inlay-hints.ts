@@ -3,11 +3,7 @@ import { InlayHintKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
-import {
-  CALL_LIKE_KEYWORDS,
-  findCommentRanges,
-  isPositionInCommentRanges,
-} from "../utils/text.js";
+import { CALL_LIKE_KEYWORDS, findCommentRanges, isPositionInCommentRanges } from "../utils/text.js";
 
 /**
  * Provides inlay hints — inline annotations that show parameter names

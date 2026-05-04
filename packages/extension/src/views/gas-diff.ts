@@ -58,7 +58,10 @@ export class GasDiffProvider implements vscode.TreeDataProvider<GasDiffEntry> {
 
     if (element.delta !== undefined) {
       if (element.delta > 0) {
-        item.iconPath = new vscode.ThemeIcon("arrow-up", new vscode.ThemeColor("testing.iconFailed"));
+        item.iconPath = new vscode.ThemeIcon(
+          "arrow-up",
+          new vscode.ThemeColor("testing.iconFailed"),
+        );
         item.tooltip = `+${element.delta.toLocaleString()} gas (${element.percentChange})`;
       } else if (element.delta < 0) {
         item.iconPath = new vscode.ThemeIcon(
@@ -195,7 +198,8 @@ export class GasDiffProvider implements vscode.TreeDataProvider<GasDiffEntry> {
     for (const entry of contractMap.values()) {
       entry.children.sort((a, b) => (b.delta ?? 0) - (a.delta ?? 0));
       const contractDelta = entry.children.reduce((sum, c) => sum + (c.delta ?? 0), 0);
-      entry.description = contractDelta >= 0 ? `+${this.formatGas(contractDelta)}` : this.formatGas(contractDelta);
+      entry.description =
+        contractDelta >= 0 ? `+${this.formatGas(contractDelta)}` : this.formatGas(contractDelta);
     }
 
     this.entries = Array.from(contractMap.values()).sort((a, b) => {

@@ -143,9 +143,8 @@ function readNumber(obj: Record<string, unknown>, keys: string[]): number | unde
     if (typeof v === "number" && Number.isFinite(v)) return v;
     // Some emitters serialise gas as a hex string ("0xff..."); accept both.
     if (typeof v === "string") {
-      const parsed = v.startsWith("0x") || v.startsWith("0X")
-        ? Number.parseInt(v, 16)
-        : Number.parseInt(v, 10);
+      const parsed =
+        v.startsWith("0x") || v.startsWith("0X") ? Number.parseInt(v, 16) : Number.parseInt(v, 10);
       if (Number.isFinite(parsed)) return parsed;
     }
   }

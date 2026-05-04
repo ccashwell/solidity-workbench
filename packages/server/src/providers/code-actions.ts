@@ -198,9 +198,7 @@ export class CodeActionsProvider {
       kind: CodeActionKind.QuickFix,
       edit: {
         changes: {
-          [uri]: [
-            TextEdit.insert({ line: lineNum, character: insertAt }, ` ${visibility}`),
-          ],
+          [uri]: [TextEdit.insert({ line: lineNum, character: insertAt }, ` ${visibility}`)],
         },
       },
     }));
@@ -291,10 +289,7 @@ export class CodeActionsProvider {
     // Extract events
     for (const event of contract.events) {
       const params = event.parameters
-        .map(
-          (p) =>
-            `${p.typeName}${p.indexed ? " indexed" : ""}${p.name ? " " + p.name : ""}`,
-        )
+        .map((p) => `${p.typeName}${p.indexed ? " indexed" : ""}${p.name ? " " + p.name : ""}`)
         .join(", ");
       lines.push(`    event ${event.name}(${params});`);
     }
@@ -307,7 +302,10 @@ export class CodeActionsProvider {
       lines.push(`    error ${error.name}(${params});`);
     }
 
-    if ((contract.events.length > 0 || contract.errors.length > 0) && contract.functions.length > 0) {
+    if (
+      (contract.events.length > 0 || contract.errors.length > 0) &&
+      contract.functions.length > 0
+    ) {
       lines.push("");
     }
 

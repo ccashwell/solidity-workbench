@@ -246,11 +246,7 @@ describe("RenameProvider", () => {
         }),
       } as any);
 
-      const result = await h.provider.provideRename(
-        doc,
-        doc.positionAt(declOffset),
-        "pong",
-      );
+      const result = await h.provider.provideRename(doc, doc.positionAt(declOffset), "pong");
 
       assert.ok(result?.changes);
       const edits = result.changes[h.uriFor(file.path)] ?? [];

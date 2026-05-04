@@ -29,7 +29,10 @@ export class FoldingRangesProvider {
 
     const ranges: FoldingRange[] = [];
 
-    this.addImportFolds(result.sourceUnit.imports.map((imp) => imp.range), ranges);
+    this.addImportFolds(
+      result.sourceUnit.imports.map((imp) => imp.range),
+      ranges,
+    );
 
     for (const contract of result.sourceUnit.contracts) {
       this.pushRange(ranges, contract.range);
@@ -40,9 +43,7 @@ export class FoldingRangesProvider {
 
     this.addCommentFolds(document.getText(), ranges);
 
-    return this.dedupe(ranges).sort(
-      (a, b) => a.startLine - b.startLine || a.endLine - b.endLine,
-    );
+    return this.dedupe(ranges).sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);
   }
 
   private contractChildren(

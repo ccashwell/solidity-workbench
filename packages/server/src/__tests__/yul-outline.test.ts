@@ -109,8 +109,7 @@ object "Foo" {
 }
 `;
     const fns = parseYulOutline(src).objects[0].functions;
-    const cat = (name: string): YulFunctionCategory =>
-      fns.find((f) => f.name === name)!.category;
+    const cat = (name: string): YulFunctionCategory => fns.find((f) => f.name === name)!.category;
     assert.equal(cat("fun_x"), "internal");
     assert.equal(cat("external_fun_x"), "external");
     assert.equal(cat("getter_fun_x"), "getter");

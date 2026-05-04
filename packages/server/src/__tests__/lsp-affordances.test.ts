@@ -47,10 +47,22 @@ contract C {
     const { doc, parser } = setup(text);
     const ranges = new FoldingRangesProvider(parser).provideFoldingRanges(doc);
 
-    assert.ok(ranges.some((r) => r.kind === FoldingRangeKind.Imports), "expected import fold");
-    assert.ok(ranges.some((r) => r.kind === FoldingRangeKind.Comment), "expected comment fold");
-    assert.ok(ranges.some((r) => r.startLine === 6 && r.endLine === 9), "expected contract fold");
-    assert.ok(ranges.some((r) => r.startLine === 7 && r.endLine === 8), "expected function fold");
+    assert.ok(
+      ranges.some((r) => r.kind === FoldingRangeKind.Imports),
+      "expected import fold",
+    );
+    assert.ok(
+      ranges.some((r) => r.kind === FoldingRangeKind.Comment),
+      "expected comment fold",
+    );
+    assert.ok(
+      ranges.some((r) => r.startLine === 6 && r.endLine === 9),
+      "expected contract fold",
+    );
+    assert.ok(
+      ranges.some((r) => r.startLine === 7 && r.endLine === 8),
+      "expected function fold",
+    );
   });
 
   it("turns import strings into document links", () => {

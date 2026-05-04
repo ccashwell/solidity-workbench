@@ -151,12 +151,11 @@ export class ReferencesProvider {
       const absolute = this.absolutePath(filePath);
       const uri = URI.file(absolute).toString();
       const text =
-        uri === document.uri ? document.getText() : this.documents.get(uri)?.getText() ?? this.read(absolute);
-      if (text === null) return;
-      const doc =
         uri === document.uri
-          ? document
-          : TextDocument.create(uri, "solidity", 1, text);
+          ? document.getText()
+          : (this.documents.get(uri)?.getText() ?? this.read(absolute));
+      if (text === null) return;
+      const doc = uri === document.uri ? document : TextDocument.create(uri, "solidity", 1, text);
       const range = {
         start: doc.positionAt(startOffset),
         end: doc.positionAt(startOffset + length),

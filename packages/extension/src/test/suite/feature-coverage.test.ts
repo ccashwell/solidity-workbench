@@ -340,7 +340,12 @@ interface SessionTracker {
 
 function installSessionTracker(): SessionTracker {
   const events: { name: string; body: unknown }[] = [];
-  const waiters: { name: string; resolve: (body: unknown) => void; reject: (err: Error) => void; timer: NodeJS.Timeout }[] = [];
+  const waiters: {
+    name: string;
+    resolve: (body: unknown) => void;
+    reject: (err: Error) => void;
+    timer: NodeJS.Timeout;
+  }[] = [];
 
   const onEvent = (name: string, body: unknown): void => {
     events.push({ name, body });

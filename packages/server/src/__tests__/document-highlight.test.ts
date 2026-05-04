@@ -196,9 +196,7 @@ describe("DocumentHighlightProvider", () => {
     provider.setSolcBridge({
       findReferencesAt: () => ({
         declaration: null,
-        references: [
-          { filePath: "/C.sol", offset: firstUse, length: "count".length },
-        ],
+        references: [{ filePath: "/C.sol", offset: firstUse, length: "count".length }],
       }),
     } as any);
 

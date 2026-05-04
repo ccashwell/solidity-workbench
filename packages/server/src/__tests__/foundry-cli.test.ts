@@ -56,7 +56,10 @@ describe("forgeVerbosityFlag", () => {
 describe("stripForgeTestSignature", () => {
   it("drops everything from the first `(` onward", () => {
     assert.equal(stripForgeTestSignature("test_Increment()"), "test_Increment");
-    assert.equal(stripForgeTestSignature("testFuzz_Bound(uint256,uint256,uint256)"), "testFuzz_Bound");
+    assert.equal(
+      stripForgeTestSignature("testFuzz_Bound(uint256,uint256,uint256)"),
+      "testFuzz_Bound",
+    );
     assert.equal(
       stripForgeTestSignature("test_RevertWhen_Something(address,uint256)"),
       "test_RevertWhen_Something",

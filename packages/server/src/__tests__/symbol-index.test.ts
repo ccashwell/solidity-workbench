@@ -358,10 +358,7 @@ contract DiskOnly {
       const depPath = path.join(tmp, "Dep.sol");
       const projPath = path.join(tmp, "Proj.sol");
       fs.writeFileSync(depPath, `contract LibraryDep { function helper() external {} }`);
-      fs.writeFileSync(
-        projPath,
-        `import "./Dep.sol";\ncontract Project is LibraryDep {}`,
-      );
+      fs.writeFileSync(projPath, `import "./Dep.sol";\ncontract Project is LibraryDep {}`);
       const projUri = URI.file(projPath).toString();
       const depUri = URI.file(depPath).toString();
       const ws = {

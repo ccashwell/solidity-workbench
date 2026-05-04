@@ -92,14 +92,8 @@ describe("generateEnvioScaffold", () => {
     const { files } = generateEnvioScaffold({ contractName: "Token" }, ERC20_ABI);
     const handlers = files["src/EventHandlers.ts"];
     assert.match(handlers, /from "generated";/);
-    assert.match(
-      handlers,
-      /Token\.Transfer\.handler\(async \(\{ event, context \}\) => \{/,
-    );
-    assert.match(
-      handlers,
-      /Token\.Approval\.handler\(async \(\{ event, context \}\) => \{/,
-    );
+    assert.match(handlers, /Token\.Transfer\.handler\(async \(\{ event, context \}\) => \{/);
+    assert.match(handlers, /Token\.Approval\.handler\(async \(\{ event, context \}\) => \{/);
     assert.match(handlers, /context\.Transfer\.set\(entity\)/);
     assert.match(handlers, /context\.Approval\.set\(entity\)/);
     // Primary-key id uses chainId + blockNumber + logIndex to guarantee uniqueness
@@ -125,10 +119,7 @@ describe("generateEnvioScaffold", () => {
         ],
       },
     ];
-    const { files, eventsWithTupleWarnings } = generateEnvioScaffold(
-      { contractName: "Pool" },
-      abi,
-    );
+    const { files, eventsWithTupleWarnings } = generateEnvioScaffold({ contractName: "Pool" }, abi);
     assert.deepEqual(eventsWithTupleWarnings, ["Complex"]);
     assert.match(files["src/EventHandlers.ts"], /key: JSON\.stringify\(event\.params\.key\)/);
     assert.match(files["src/EventHandlers.ts"], /TODO: encode tuple/);
@@ -143,10 +134,7 @@ describe("generateEnvioScaffold", () => {
       {
         type: "event",
         name: "Anon",
-        inputs: [
-          { type: "address", indexed: true },
-          { type: "uint256" },
-        ],
+        inputs: [{ type: "address", indexed: true }, { type: "uint256" }],
       },
     ];
     const { files } = generateEnvioScaffold({ contractName: "Thing" }, abi);

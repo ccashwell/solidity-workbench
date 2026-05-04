@@ -148,9 +148,7 @@ describe("parseWakeReport", () => {
 
   it("drops detections without a location", () => {
     const json = JSON.stringify({
-      detections: [
-        { detector_name: "x", impact: "high", message: "no location here" },
-      ],
+      detections: [{ detector_name: "x", impact: "high", message: "no location here" }],
     });
     assert.deepEqual(parseWakeReport(json), []);
   });

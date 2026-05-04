@@ -70,11 +70,7 @@ describe("parseForgeArtifact", () => {
       }),
     });
     const artifact = parseForgeArtifact(json);
-    assert.deepEqual(artifact!.sources, [
-      "src/Counter.sol",
-      "src/Vault.sol",
-      "src/lib/Math.sol",
-    ]);
+    assert.deepEqual(artifact!.sources, ["src/Counter.sol", "src/Vault.sol", "src/lib/Math.sol"]);
   });
 
   it("falls back to a top-level `sources` array when metadata is absent", () => {

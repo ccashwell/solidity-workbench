@@ -318,7 +318,7 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
         step.op === "CALLCODE"
       ) {
         const addr = readAddressFromStack(step);
-        pendingCallContext = addr ? this.auxContexts.get(addr) ?? null : null;
+        pendingCallContext = addr ? (this.auxContexts.get(addr) ?? null) : null;
       } else if (step.op === "CREATE" || step.op === "CREATE2") {
         // Address not known yet; the next depth gets null.
         pendingCallContext = null;
@@ -685,8 +685,7 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
         const match = ctx.storageLayout.entries.find((e) => e.label === expression);
         if (match) {
           const slotKey = match.slot.toString();
-          const value =
-            step.storage[slotKey] ?? step.storage[`0x${match.slot.toString(16)}`];
+          const value = step.storage[slotKey] ?? step.storage[`0x${match.slot.toString(16)}`];
           if (value !== undefined) return prefixHex(value);
           return "(slot has no observed write — value unchanged from before this trace)";
         }
@@ -1133,9 +1132,7 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
     if (args.rpcUrl) argv.push("--rpc-url", args.rpcUrl);
 
     const cwd =
-      args.projectRoot ??
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
-      process.cwd();
+      args.projectRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
 
     let stdout = "";
     try {
@@ -1203,7 +1200,9 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       return "Artifact JSON did not match an expected forge / solc shape (missing deployedBytecode).";
     }
     const root =
-      projectRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? path.dirname(artifactPath);
+      projectRoot ??
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
+      path.dirname(artifactPath);
     this.entryContext = this.buildContractContext(artifact, root);
     return null;
   }
@@ -1294,7 +1293,9 @@ export class SolidityDapAdapter implements vscode.DebugAdapter {
       parts.push(`${sourcesWithIndex} source file${sourcesWithIndex === 1 ? "" : "s"} indexed`);
     }
     if (this.auxContexts.size > 0) {
-      parts.push(`${this.auxContexts.size} aux contract${this.auxContexts.size === 1 ? "" : "s"} loaded`);
+      parts.push(
+        `${this.auxContexts.size} aux contract${this.auxContexts.size === 1 ? "" : "s"} loaded`,
+      );
     }
     if (parts.length === 0) {
       return "Live execution path not yet wired (stage 4) — supply `traceFile` and `artifact` for stage-3 stepping.";

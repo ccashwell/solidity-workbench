@@ -90,7 +90,10 @@ export class ImplementationProvider {
     return a.every((param, i) => param.typeName === b[i].typeName);
   }
 
-  private sameRange(a: FunctionDefinition["nameRange"], b: FunctionDefinition["nameRange"]): boolean {
+  private sameRange(
+    a: FunctionDefinition["nameRange"],
+    b: FunctionDefinition["nameRange"],
+  ): boolean {
     return (
       a.start.line === b.start.line &&
       a.start.character === b.start.character &&

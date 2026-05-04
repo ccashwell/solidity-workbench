@@ -26,7 +26,9 @@ export class SelectionRangesProvider {
     const result = this.parser.get(document.uri);
     if (!result) return positions.map(() => this.documentSelection(document));
 
-    return positions.map((position) => this.selectionForPosition(document, result.sourceUnit, position));
+    return positions.map((position) =>
+      this.selectionForPosition(document, result.sourceUnit, position),
+    );
   }
 
   private selectionForPosition(
@@ -150,6 +152,8 @@ export class SelectionRangesProvider {
   }
 
   private size(range: Range): number {
-    return (range.end.line - range.start.line) * 10000 + range.end.character - range.start.character;
+    return (
+      (range.end.line - range.start.line) * 10000 + range.end.character - range.start.character
+    );
   }
 }

@@ -12,10 +12,7 @@ import { ParserPool } from "../parser/parser-pool.js";
  * build having run first, which is the same constraint the LSP
  * server binary itself has at runtime.
  */
-const WORKER_PATH = path.resolve(
-  __dirname,
-  "../../../extension/dist/parser-worker.js",
-);
+const WORKER_PATH = path.resolve(__dirname, "../../../extension/dist/parser-worker.js");
 
 describe("ParserPool", () => {
   // Every test below requires the bundled worker to exist. Skip the
@@ -73,10 +70,7 @@ describe("ParserPool", () => {
   it("rejects parse() after terminate()", async () => {
     const pool = new ParserPool(WORKER_PATH, 1);
     await pool.terminate();
-    await assert.rejects(
-      () => pool.parse("file:///pool/x.sol", "contract X {}"),
-      /terminate/i,
-    );
+    await assert.rejects(() => pool.parse("file:///pool/x.sol", "contract X {}"), /terminate/i);
   });
 
   it("surfaces worker parse errors as rejected promises with the original message", async () => {

@@ -246,11 +246,7 @@ async function runScaffold(backend: Backend): Promise<void> {
     abi: pick.artifact.abi,
   });
 
-  const outRoot = path.join(
-    workspaceFolder.uri.fsPath,
-    spec.rootDir,
-    pick.artifact.contractName,
-  );
+  const outRoot = path.join(workspaceFolder.uri.fsPath, spec.rootDir, pick.artifact.contractName);
   if (fs.existsSync(outRoot)) {
     const overwrite = await vscode.window.showWarningMessage(
       `${spec.label} directory already exists: ${path.relative(workspaceFolder.uri.fsPath, outRoot)}. Overwrite?`,

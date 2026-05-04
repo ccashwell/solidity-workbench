@@ -196,10 +196,7 @@ export class SolidityLinter {
    * rules differ across compiler versions and false-positives there
    * would be noisy.
    */
-  private checkFuncVisibilityExplicitAst(
-    rawContract: RawContract,
-    lines: string[],
-  ): Diagnostic[] {
+  private checkFuncVisibilityExplicitAst(rawContract: RawContract, lines: string[]): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
     for (const sub of rawContract.subNodes ?? []) {
       if (sub?.type !== "FunctionDefinition") continue;
@@ -759,7 +756,8 @@ export class SolidityLinter {
       visit(func.body as any, {
         BinaryOperation: (n: any) => {
           if (n.operator !== "==" && n.operator !== "!=") return undefined;
-          const volatileSide = this.volatileExpressionLabel(n.left) ?? this.volatileExpressionLabel(n.right);
+          const volatileSide =
+            this.volatileExpressionLabel(n.left) ?? this.volatileExpressionLabel(n.right);
           if (!volatileSide) return undefined;
           diagnostics.push({
             severity: DiagnosticSeverity.Warning,

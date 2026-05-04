@@ -134,7 +134,10 @@ contract User2 { Foo public b; }`;
       const lenses = provider.provideCodeLenses(doc);
       const expected = expectedErrorSelector("Overflow()");
       const errorLens = lenses.find((l) => l.command?.title === `selector: ${expected}`);
-      assert.ok(errorLens, `expected Overflow() selector lens at ${expected}; got ${JSON.stringify(lenses.map((l) => l.command?.title))}`);
+      assert.ok(
+        errorLens,
+        `expected Overflow() selector lens at ${expected}; got ${JSON.stringify(lenses.map((l) => l.command?.title))}`,
+      );
     });
 
     it("emits a selector lens for a file-level (global) error", () => {

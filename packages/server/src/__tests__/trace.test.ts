@@ -98,9 +98,7 @@ describe("parseTraceJson", () => {
 
   it("accepts numeric gas as either a number or a hex string", () => {
     const json = JSON.stringify({
-      structLogs: [
-        { pc: 0, op: "STOP", gas: "0x186a0", gasCost: "3" },
-      ],
+      structLogs: [{ pc: 0, op: "STOP", gas: "0x186a0", gasCost: "3" }],
     });
     const trace = parseTraceJson(json);
     assert.ok(trace);
@@ -133,7 +131,9 @@ describe("parseTraceJson", () => {
     const json = JSON.stringify({
       structLogs: [
         { pc: 0, op: "STOP" },
-        { /* missing pc and op */ },
+        {
+          /* missing pc and op */
+        },
         { pc: 5, op: "ADD" },
       ],
     });
@@ -216,7 +216,10 @@ describe("TraceCursor", () => {
     assert.equal(exitIdx, 6);
 
     // Nothing further matches.
-    assert.equal(c.findNext(() => true), -1);
+    assert.equal(
+      c.findNext(() => true),
+      -1,
+    );
     assert.equal(c.isAtEnd, true);
   });
 
@@ -230,7 +233,10 @@ describe("TraceCursor", () => {
     assert.equal(addIdx, 2);
     // No further matches walking back from before index 0.
     c.findPrevious((s) => s.op === "ADD"); // moves to 0
-    assert.equal(c.findPrevious(() => true), -1);
+    assert.equal(
+      c.findPrevious(() => true),
+      -1,
+    );
     assert.equal(c.index, 0);
   });
 

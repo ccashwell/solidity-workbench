@@ -613,8 +613,7 @@ function rangeContains(range: SourceRange, position: Position): boolean {
 
 function rangeSize(range: SourceRange): number {
   return (
-    (range.end.line - range.start.line) * 10_000 +
-    (range.end.character - range.start.character)
+    (range.end.line - range.start.line) * 10_000 + (range.end.character - range.start.character)
   );
 }
 
