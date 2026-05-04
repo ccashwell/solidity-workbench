@@ -143,7 +143,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 
   completionProvider = new CompletionProvider(symbolIndex, workspaceManager);
   definitionProvider = new DefinitionProvider(symbolIndex, workspaceManager);
-  hoverProvider = new HoverProvider(symbolIndex, parser);
+  hoverProvider = new HoverProvider(symbolIndex, parser, workspaceManager);
   diagnosticsProvider = new DiagnosticsProvider(workspaceManager, connection, documents);
   diagnosticsProvider.setParser(parser);
   semanticTokensProvider = new SemanticTokensProvider(parser);

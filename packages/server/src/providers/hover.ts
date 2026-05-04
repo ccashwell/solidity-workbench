@@ -1,10 +1,18 @@
 import type { Hover, Position } from "vscode-languageserver/node.js";
 import { MarkupKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
-import type { NatspecComment, SolSymbol } from "@solidity-workbench/common";
+import type {
+  FunctionDefinition,
+  ModifierDefinition,
+  NatspecComment,
+  ParameterDeclaration,
+  SolSymbol,
+  SourceRange,
+} from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import { URI } from "vscode-uri";
 import { readFileSync } from "node:fs";
 
@@ -23,6 +31,7 @@ export class HoverProvider {
   constructor(
     private symbolIndex: SymbolIndex,
     private parser: SolidityParser,
+    private workspace?: WorkspaceManager,
   ) {}
 
   /**
@@ -58,17 +67,22 @@ export class HoverProvider {
     const typeHover = this.getTypeHover(word);
     if (typeHover) return typeHover;
 
+    const localHover = this.getLocalParameterHover(document, position, word);
+    if (localHover) return localHover;
+
     const symbols = this.symbolIndex.findSymbols(word);
     if (symbols.length === 0) return null;
 
     // Pick the canonical symbol:
-    // 1. When multiple candidates exist, consult the solc AST for the
+    // 1. Consult the solc AST for the
     //    cursor position. If it resolves to a specific declaration, find
     //    the matching symbol-index entry and use that.
-    // 2. Otherwise prefer the symbol from the current file.
-    // 3. Otherwise take the first match.
+    // 2. Otherwise discard symbols that are not visible from the current
+    //    file through the current file + transitive import graph.
+    // 3. Otherwise prefer the symbol from the current file.
+    // 4. Otherwise take the first visible match.
     let sym: SolSymbol | undefined;
-    if (symbols.length > 1 && this.solcBridge) {
+    if (this.solcBridge) {
       const resolved = this.resolveViaSolc(document, position);
       if (resolved) {
         sym = symbols.find(
@@ -79,7 +93,11 @@ export class HoverProvider {
         );
       }
     }
-    if (!sym) sym = symbols.find((s) => s.filePath === document.uri) ?? symbols[0];
+    if (!sym) {
+      const visibleSymbols = this.filterVisibleSymbols(document.uri, symbols);
+      if (visibleSymbols.length === 0) return null;
+      sym = visibleSymbols.find((s) => s.filePath === document.uri) ?? visibleSymbols[0];
+    }
 
     return this.buildHover(sym);
   }
@@ -127,6 +145,100 @@ export class HoverProvider {
     }
 
     return null;
+  }
+
+  /**
+   * Parameters and named return values are lexical declarations, not
+   * workspace-global symbols. Resolve them before the global symbol
+   * index so a local `poolId` never hovers as an unrelated state
+   * variable from a different indexed test or dependency file.
+   */
+  private getLocalParameterHover(
+    document: TextDocument,
+    position: Position,
+    word: string,
+  ): Hover | null {
+    const result = this.parser.get(document.uri);
+    if (!result) return null;
+
+    const candidates: Array<FunctionDefinition | ModifierDefinition> = [];
+    for (const contract of result.sourceUnit.contracts) {
+      candidates.push(...contract.functions, ...contract.modifiers);
+    }
+    candidates.push(...result.sourceUnit.freeFunctions);
+
+    const scope = candidates
+      .filter((candidate) => rangeContains(candidate.range, position))
+      .sort((a, b) => rangeSize(a.range) - rangeSize(b.range))[0];
+    if (!scope) return null;
+
+    const input = scope.parameters.find((param) => param.name === word);
+    if (input) return this.buildParameterHover(input, scope, "Parameter");
+
+    if ("returnParameters" in scope) {
+      const output = scope.returnParameters.find((param) => param.name === word);
+      if (output) return this.buildParameterHover(output, scope, "Return parameter");
+    }
+
+    return null;
+  }
+
+  private buildParameterHover(
+    param: ParameterDeclaration,
+    scope: FunctionDefinition | ModifierDefinition,
+    label: "Parameter" | "Return parameter",
+  ): Hover {
+    const name = param.name ?? "";
+    const storage = param.storageLocation ? ` ${param.storageLocation}` : "";
+    const declaration = `${param.typeName}${storage} ${name}`.trim();
+    const parts = [`\`\`\`solidity\n${declaration}\n\`\`\``];
+
+    const docs = name ? scope.natspec?.params?.[name] : undefined;
+    if (docs) parts.push(docs);
+
+    const scopeName =
+      scope.type === "ModifierDefinition"
+        ? `modifier ${scope.name}`
+        : scope.name
+          ? `function ${scope.name}`
+          : scope.kind;
+    parts.push(`*${label} of* \`${scopeName}\``);
+
+    return {
+      contents: {
+        kind: MarkupKind.Markdown,
+        value: parts.join("\n\n---\n\n"),
+      },
+    };
+  }
+
+  private filterVisibleSymbols(currentUri: string, symbols: SolSymbol[]): SolSymbol[] {
+    const reachable = this.collectReachableUris(currentUri);
+    return symbols.filter((sym) => reachable.has(sym.filePath));
+  }
+
+  private collectReachableUris(uri: string, visited: Set<string> = new Set()): Set<string> {
+    if (visited.has(uri)) return visited;
+    visited.add(uri);
+
+    if (!this.workspace) return visited;
+    const result = this.parser.get(uri);
+    if (!result) return visited;
+
+    let fsPath: string;
+    try {
+      fsPath = this.workspace.uriToPath(uri);
+    } catch {
+      return visited;
+    }
+
+    for (const imp of result.sourceUnit.imports) {
+      const targetPath = this.workspace.resolveImport(imp.path, fsPath);
+      if (!targetPath) continue;
+      this.collectReachableUris(URI.file(targetPath).toString(), visited);
+    }
+
+    return visited;
   }
 
   private findMemberInInheritanceChain(receiver: string, member: string): SolSymbol | null {
@@ -493,4 +605,20 @@ function describeElementaryType(word: string): string | null {
   }
 
   return null;
+}
+
+function rangeContains(range: SourceRange, position: Position): boolean {
+  return comparePosition(position, range.start) >= 0 && comparePosition(position, range.end) <= 0;
+}
+
+function rangeSize(range: SourceRange): number {
+  return (
+    (range.end.line - range.start.line) * 10_000 +
+    (range.end.character - range.start.character)
+  );
+}
+
+function comparePosition(a: Position, b: Position): number {
+  if (a.line !== b.line) return a.line - b.line;
+  return a.character - b.character;
 }

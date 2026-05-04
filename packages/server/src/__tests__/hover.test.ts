@@ -25,6 +25,23 @@ function setup(uri: string, text: string) {
   };
 }
 
+function setupFiles(
+  currentUri: string,
+  files: Record<string, string>,
+  workspace?: WorkspaceManager,
+) {
+  const parser = new SolidityParser();
+  const idx = new SymbolIndex(parser, workspace ?? makeFakeWorkspace());
+  for (const [uri, text] of Object.entries(files)) {
+    parser.parse(uri, text);
+    idx.updateFile(uri);
+  }
+  return {
+    doc: TextDocument.create(currentUri, "solidity", 1, files[currentUri]),
+    provider: new HoverProvider(idx, parser, workspace),
+  };
+}
+
 describe("HoverProvider", () => {
   describe("built-in globals", () => {
     it("returns a hover for `msg`", () => {
@@ -107,6 +124,92 @@ contract E {}`,
       // Position 0 is the start of "pragma" — will hover the pragma keyword.
       // That's fine; we just assert the provider doesn't crash.
       void h;
+    });
+
+    it("prefers a local parameter over an unrelated same-named workspace symbol", () => {
+      const currentUri = "file:///w/src/alf/SmartPoolHook.sol";
+      const current = `pragma solidity ^0.8.0;
+type PoolId is bytes32;
+contract SmartPoolHook {
+    /// @param poolId The pool to check authorization for.
+    function _requireDepositAuth(PoolId poolId) internal view {
+        if (externalDepositsEnabled[poolId]) return;
+    }
+}`;
+      const unrelated = `pragma solidity ^0.8.0;
+type PoolId is bytes32;
+contract FluidDexLiteAggregatorUnitTest {
+    PoolId poolId;
+}`;
+      const { doc, provider } = setupFiles(currentUri, {
+        [currentUri]: current,
+        "file:///w/test/FluidDexLiteAggregatorUnitTest.t.sol": unrelated,
+      });
+
+      const line = current.split("\n")[4];
+      const col = line.indexOf("poolId)") + 1;
+      const h = provider.provideHover(doc, { line: 4, character: col });
+      assert.ok(h, "expected hover on local poolId parameter");
+      const value = (h!.contents as any).value as string;
+      assert.match(value, /PoolId poolId/);
+      assert.match(value, /Parameter of.*_requireDepositAuth/);
+      assert.match(value, /pool to check authorization/);
+      assert.doesNotMatch(value, /FluidDexLiteAggregatorUnitTest/);
+    });
+
+    it("does not surface an unimported same-workspace symbol", () => {
+      const currentUri = "file:///w/src/Current.sol";
+      const current = `pragma solidity ^0.8.0;
+contract Current {
+    function f() external pure { Ghost; }
+}`;
+      const unrelated = `pragma solidity ^0.8.0;
+contract Ghost {}`;
+      const files = {
+        [currentUri]: current,
+        "file:///w/test/Ghost.t.sol": unrelated,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: () => null,
+      } as unknown as WorkspaceManager;
+      const { doc, provider } = setupFiles(currentUri, files, workspace);
+
+      const line = current.split("\n")[2];
+      const col = line.indexOf("Ghost") + 1;
+      const h = provider.provideHover(doc, { line: 2, character: col });
+      assert.equal(h, null);
+    });
+
+    it("still resolves a symbol from a transitive import", () => {
+      const currentUri = "file:///w/src/Current.sol";
+      const importedUri = "file:///w/src/Types.sol";
+      const current = `pragma solidity ^0.8.0;
+import "./Types.sol";
+contract Current {
+    function f() external pure { ImportedType; }
+}`;
+      const imported = `pragma solidity ^0.8.0;
+contract ImportedType {}`;
+      const files = {
+        [currentUri]: current,
+        [importedUri]: imported,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string) =>
+          importPath === "./Types.sol" ? URI.parse(importedUri).fsPath : null,
+      } as unknown as WorkspaceManager;
+      const { doc, provider } = setupFiles(currentUri, files, workspace);
+
+      const line = current.split("\n")[3];
+      const col = line.indexOf("ImportedType") + 1;
+      const h = provider.provideHover(doc, { line: 3, character: col });
+      assert.ok(h, "expected hover for imported symbol");
+      const value = (h!.contents as any).value as string;
+      assert.match(value, /contract ImportedType/);
     });
   });
 
