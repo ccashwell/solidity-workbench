@@ -488,7 +488,23 @@ export class HoverProvider {
       }
     }
 
+    if (natspec.custom && Object.keys(natspec.custom).length > 0) {
+      for (const [tag, desc] of Object.entries(natspec.custom)) {
+        parts.push(`\n**${this.formatCustomNatspecLabel(tag)}:** ${desc}`);
+      }
+    }
+
     return parts.join("\n");
+  }
+
+  private formatCustomNatspecLabel(tag: string): string {
+    if (tag === "security-contact") return "Security Contact";
+    if (tag === "inheritdoc") return "Inherits Documentation From";
+    return tag
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map((part) => part[0].toUpperCase() + part.slice(1))
+      .join(" ");
   }
 
   private getBuiltinHover(word: string): Hover | null {

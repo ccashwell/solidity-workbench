@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hyphenated custom NatSpec tags were folded into the previous
+  section.** `@custom:security-contact` now parses as its own
+  custom tag instead of becoming continuation text for `@notice` or
+  `@dev`, and hover/signature documentation renders it as a
+  standalone `Security Contact: ...` line.
+
 ## [0.3.2] - 2026-04-28
 
 ### Added

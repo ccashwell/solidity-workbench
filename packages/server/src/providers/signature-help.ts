@@ -235,8 +235,23 @@ export class SignatureHelpProvider {
     const parts: string[] = [];
     if (natspec.notice) parts.push(natspec.notice);
     if (natspec.dev) parts.push(`\n**Dev:** ${natspec.dev}`);
+    if (natspec.custom) {
+      for (const [tag, desc] of Object.entries(natspec.custom)) {
+        parts.push(`\n**${this.formatCustomNatspecLabel(tag)}:** ${desc}`);
+      }
+    }
     parts.push(`\n*Defined in* \`${containerName}\``);
     return parts.join("\n");
+  }
+
+  private formatCustomNatspecLabel(tag: string): string {
+    if (tag === "security-contact") return "Security Contact";
+    if (tag === "inheritdoc") return "Inherits Documentation From";
+    return tag
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map((part) => part[0].toUpperCase() + part.slice(1))
+      .join(" ");
   }
 
   /**

@@ -102,6 +102,26 @@ contract C {
       assert.match(value, /The input/);
     });
 
+    it("renders @custom:security-contact as a standalone security contact line", () => {
+      const { doc, provider } = setup(
+        "file:///w/Security.sol",
+        `pragma solidity ^0.8.0;
+contract Security {
+    /// @notice Handles sensitive work.
+    /// @custom:security-contact security@example.com
+    function guarded() external {}
+}`,
+      );
+
+      const h = provider.provideHover(doc, { line: 4, character: 18 });
+      assert.ok(h, "expected hover");
+      assert.ok(!Array.isArray(h.contents) && typeof h.contents !== "string");
+      const value = h.contents.value;
+      assert.match(value, /Handles sensitive work\./);
+      assert.match(value, /\*\*Security Contact:\*\* security@example\.com/);
+      assert.doesNotMatch(value, /Handles sensitive work\..*@custom:security-contact/s);
+    });
+
     it("shows `contract C` for a contract-name hover", () => {
       const { doc, provider } = setup(
         "file:///w/D.sol",

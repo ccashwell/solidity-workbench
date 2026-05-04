@@ -607,6 +607,26 @@ contract C {
       assert.equal(func.natspec.custom?.security, "High risk");
     });
 
+    it("extracts hyphenated @custom tags without appending them to the previous section", () => {
+      const result = parser.parse(
+        "natspec-security-contact.sol",
+        `
+pragma solidity ^0.8.24;
+
+contract C {
+    /// @notice Handles privileged transfers.
+    /// @custom:security-contact security@example.com
+    function transfer() external {}
+}
+`,
+      );
+
+      const func = result.sourceUnit.contracts[0].functions[0];
+      assert.ok(func.natspec);
+      assert.equal(func.natspec.notice, "Handles privileged transfers.");
+      assert.equal(func.natspec.custom?.["security-contact"], "security@example.com");
+    });
+
     it("joins untagged continuation lines onto the most recent section", () => {
       const result = parser.parse(
         "natspec-continuation.sol",

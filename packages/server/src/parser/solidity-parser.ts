@@ -670,10 +670,11 @@ export class SolidityParser {
 /**
  * Matches a NatSpec tag line. Captures:
  *   1. tag name (e.g. "notice", "param", "custom")
- *   2. optional sub-tag after `:` (e.g. "security" in `@custom:security`)
+ *   2. optional sub-tag after `:` (e.g. "security-contact" in
+ *      `@custom:security-contact`)
  *   3. optional remainder of the line after whitespace
  */
-const TAG_REGEX = /^@(\w+)(?::(\w+))?(?:\s+(.*))?$/;
+const TAG_REGEX = /^@([\w-]+)(?::([\w-]+))?(?:\s+(.*))?$/;
 
 /** Matches a Solidity identifier (used to detect named `@return` values). */
 const IDENTIFIER_REGEX = /^[a-zA-Z_$][a-zA-Z0-9_$]*$/;
