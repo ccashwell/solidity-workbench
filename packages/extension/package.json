@@ -185,11 +185,34 @@
       },
       {
         "command": "solidity-workbench.anvil.start",
-        "title": "Solidity Workbench: Start Anvil"
+        "title": "Solidity Workbench: Start Anvil Instance",
+        "icon": "$(add)"
       },
       {
         "command": "solidity-workbench.anvil.stop",
-        "title": "Solidity Workbench: Stop Anvil"
+        "title": "Solidity Workbench: Stop Anvil Instance"
+      },
+      {
+        "command": "solidity-workbench.anvil.stopAll",
+        "title": "Solidity Workbench: Stop All Anvil Instances",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "solidity-workbench.anvil.startPreset",
+        "title": "Solidity Workbench: Start Anvil Preset (Multi-Chain)",
+        "icon": "$(layers)"
+      },
+      {
+        "command": "solidity-workbench.anvil.editPresets",
+        "title": "Solidity Workbench: Edit Anvil Presets"
+      },
+      {
+        "command": "solidity-workbench.anvil.showOutput",
+        "title": "Solidity Workbench: Show Anvil Output"
+      },
+      {
+        "command": "solidity-workbench.anvil.copyRpcUrl",
+        "title": "Copy RPC URL"
       },
       {
         "command": "solidity-workbench.chisel.start",
@@ -360,10 +383,43 @@
           "id": "solidity-workbench-gas-diff",
           "name": "Gas Diff",
           "when": "workspaceFolderCount > 0"
+        },
+        {
+          "id": "solidity-workbench-anvil-instances",
+          "name": "Anvil Instances",
+          "when": "workspaceFolderCount > 0"
         }
       ]
     },
     "menus": {
+      "view/title": [
+        {
+          "command": "solidity-workbench.anvil.start",
+          "when": "view == solidity-workbench-anvil-instances",
+          "group": "navigation@1"
+        },
+        {
+          "command": "solidity-workbench.anvil.startPreset",
+          "when": "view == solidity-workbench-anvil-instances",
+          "group": "navigation@2"
+        },
+        {
+          "command": "solidity-workbench.anvil.stopAll",
+          "when": "view == solidity-workbench-anvil-instances",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "solidity-workbench.anvil.copyRpcUrl",
+          "when": "view == solidity-workbench-anvil-instances && viewItem == anvilInstance",
+          "group": "inline"
+        },
+        {
+          "command": "solidity-workbench.anvil.stop",
+          "when": "view == solidity-workbench-anvil-instances && viewItem == anvilInstance"
+        }
+      ],
       "editor/context": [
         {
           "command": "solidity-workbench.testFunction",
