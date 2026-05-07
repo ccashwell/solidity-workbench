@@ -457,6 +457,16 @@ export class SemanticTokensProvider {
     tokens: TokenInfo[],
     token?: CancellationToken,
   ): void {
+    // Mutate-and-restore the global `nameKinds` map per function instead
+    // of cloning it. Cloning a map of every name in the file (often
+    // hundreds of entries) per function — and a file may have dozens of
+    // functions — was the dominant cost of this provider on each
+    // keystroke. We push parameter overrides, scan the body, then undo
+    // exactly what we wrote: restore prior values, delete brand-new
+    // entries. A `Map.set` + `Map.delete` is O(1); the prior `new
+    // Map(nameKinds)` was O(file_symbols) and ran once per function.
+    const overrides: { name: string; prior: string | undefined; existed: boolean }[] = [];
+
     for (const contract of result.sourceUnit.contracts) {
       if (token?.isCancellationRequested) return;
       for (const func of contract.functions) {
@@ -465,17 +475,19 @@ export class SemanticTokensProvider {
         const bounds = getFunctionBodyBounds(lines, func.range.start.line);
         if (!bounds) continue;
 
-        const scopedNameKinds = new Map(nameKinds);
-        for (const param of func.parameters) {
-          if (param.name) scopedNameKinds.set(param.name, "parameter");
-        }
-        for (const param of func.returnParameters) {
-          if (param.name) scopedNameKinds.set(param.name, "parameter");
-        }
+        overrides.length = 0;
+        const applyParam = (name: string | undefined): void => {
+          if (!name) return;
+          const existed = nameKinds.has(name);
+          overrides.push({ name, prior: nameKinds.get(name), existed });
+          nameKinds.set(name, "parameter");
+        };
+        for (const param of func.parameters) applyParam(param.name);
+        for (const param of func.returnParameters) applyParam(param.name);
 
         const idents = scanIdentifiersInRange(lines, bounds);
         for (const id of idents) {
-          const kind = scopedNameKinds.get(id.text);
+          const kind = nameKinds.get(id.text);
           if (!kind) continue;
           tokens.push({
             line: id.line,
@@ -484,6 +496,18 @@ export class SemanticTokensProvider {
             type: kind,
             modifiers: [],
           });
+        }
+
+        // Walk overrides in reverse so that if the same name was
+        // overridden twice (parameter + named return) the original
+        // value is restored, not an intermediate one.
+        for (let i = overrides.length - 1; i >= 0; i--) {
+          const o = overrides[i];
+          if (o.existed) {
+            nameKinds.set(o.name, o.prior as string);
+          } else {
+            nameKinds.delete(o.name);
+          }
         }
       }
     }
