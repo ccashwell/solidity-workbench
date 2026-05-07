@@ -24,6 +24,22 @@ import { keccak256 } from "js-sha3";
 export class CodeLensProvider {
   private gasSnapshots: Map<string, number> = new Map();
   private solcBridge: SolcBridge | null = null;
+  /**
+   * Memoize selector hashes by the canonical signature string. Selectors
+   * (and event topics) only depend on the function/event name and the
+   * sequence of canonical type names, so once we've computed them we
+   * never need to keccak the same signature again. CodeLens is requested
+   * frequently — every viewport change, every edit — and a typical
+   * contract has 10-50 functions; without caching, every request paid
+   * the full keccak cost across all of them. js-sha3 keccak is ~20µs per
+   * call but compounds quickly when called several hundred times per
+   * second during interactive editing.
+   *
+   * Cache lives for the provider's lifetime: signatures are content-
+   * addressed so a stale entry is impossible. Memory cost is bounded by
+   * the number of distinct signatures in the workspace.
+   */
+  private selectorCache: Map<string, string> = new Map();
 
   constructor(
     private symbolIndex: SymbolIndex,
@@ -347,15 +363,26 @@ export class CodeLensProvider {
    * selector = keccak256(signature)[0:4]
    */
   private computeSelector(name: string, params: ParameterDeclaration[]): string {
-    const types = params.map((p) => this.canonicalType(p.typeName));
-    const sig = `${name}(${types.join(",")})`;
-    return "0x" + keccak256(sig).slice(0, 8);
+    const sig = this.canonicalSignature(name, params);
+    const cached = this.selectorCache.get(`s:${sig}`);
+    if (cached) return cached;
+    const out = "0x" + keccak256(sig).slice(0, 8);
+    this.selectorCache.set(`s:${sig}`, out);
+    return out;
   }
 
   private computeEventTopic(name: string, params: ParameterDeclaration[]): string {
+    const sig = this.canonicalSignature(name, params);
+    const cached = this.selectorCache.get(`t:${sig}`);
+    if (cached) return cached;
+    const out = "0x" + keccak256(sig);
+    this.selectorCache.set(`t:${sig}`, out);
+    return out;
+  }
+
+  private canonicalSignature(name: string, params: ParameterDeclaration[]): string {
     const types = params.map((p) => this.canonicalType(p.typeName));
-    const sig = `${name}(${types.join(",")})`;
-    return "0x" + keccak256(sig);
+    return `${name}(${types.join(",")})`;
   }
 
   /**
