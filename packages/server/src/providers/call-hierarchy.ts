@@ -22,6 +22,19 @@ import { getWordAtPosition, CALL_LIKE_KEYWORDS, isSolidityBuiltinType } from "..
 const CALL_HIERARCHY_INDEX_BATCH_SIZE = 24;
 
 /**
+ * Maximum number of files for which we keep the raw source text in
+ * `fileTextCache`. Texts referenced via solc declaration resolution
+ * (`getTextForPath`) get cached so we don't re-read the same file from
+ * disk on every call hierarchy query, but unbounded growth was a real
+ * problem on long-running editor sessions: every dependency file ever
+ * referenced stayed resident in V8's heap, and the cache slowly grew
+ * to dwarf the per-uri parser cache. 256 is large enough to cover the
+ * working set of any reasonable interactive session and small enough
+ * that even pessimistic 100KB-per-file averages cap us at ~25MB.
+ */
+const FILE_TEXT_CACHE_LIMIT = 256;
+
+/**
  * Call Hierarchy provider — traces call chains through the codebase.
  *
  * "Show Incoming Calls" → who calls this function?
@@ -62,6 +75,13 @@ export class CallHierarchyProvider {
   private workspaceIndexPromise: Promise<void> | null = null;
   private reachableCache: Map<string, Set<string>> = new Map();
   private qualifierCache: Map<string, Set<string>> = new Map();
+  /**
+   * LRU bounded by {@link FILE_TEXT_CACHE_LIMIT}. We use insertion-
+   * order semantics: every `set` and every `get` re-inserts the entry
+   * to mark it most-recently-used, and on overflow we evict the
+   * oldest. `Map.delete` + `Map.set` is O(1) and Maps preserve
+   * insertion order, so this needs no extra bookkeeping.
+   */
   private fileTextCache: Map<string, string | null> = new Map();
 
   constructor(
@@ -675,17 +695,41 @@ export class CallHierarchyProvider {
     const cachedText = this.parser.getText(uri);
     if (cachedText !== undefined) return cachedText;
     const cached = this.fileTextCache.get(uri);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      // Touch this entry so it moves to the most-recently-used end of
+      // the insertion order. `Map` iterates in insertion order, so
+      // re-setting the key is the canonical LRU bump on V8 Maps.
+      this.fileTextCache.delete(uri);
+      this.fileTextCache.set(uri, cached);
+      return cached;
+    }
     let filePath: string;
     try {
       filePath = this.workspace.uriToPath(uri);
     } catch {
-      this.fileTextCache.set(uri, null);
+      this.cacheFileText(uri, null);
       return null;
     }
     const text = this.readFile(filePath);
-    this.fileTextCache.set(uri, text);
+    this.cacheFileText(uri, text);
     return text;
+  }
+
+  /**
+   * Insert into `fileTextCache`, evicting the least-recently-used
+   * entry when we exceed {@link FILE_TEXT_CACHE_LIMIT}. The cache is
+   * just a hint to avoid re-reading the same dependency file from disk
+   * in close succession during a call hierarchy traversal; we do not
+   * rely on it for correctness, so dropping the oldest entry is safe.
+   */
+  private cacheFileText(uri: string, text: string | null): void {
+    if (this.fileTextCache.has(uri)) this.fileTextCache.delete(uri);
+    this.fileTextCache.set(uri, text);
+    while (this.fileTextCache.size > FILE_TEXT_CACHE_LIMIT) {
+      const oldest = this.fileTextCache.keys().next().value;
+      if (oldest === undefined) break;
+      this.fileTextCache.delete(oldest);
+    }
   }
 
   private getTextForPath(filePath: string): string | null {
