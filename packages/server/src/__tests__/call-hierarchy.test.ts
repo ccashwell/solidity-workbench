@@ -69,6 +69,8 @@ interface Fixture {
   bUri: string;
   cUri: string;
   provider: CallHierarchyProvider;
+  parser: SolidityParser;
+  symbolIndex: SymbolIndex;
 }
 
 function setupFixture(files: Record<string, string>): Fixture {
@@ -113,6 +115,8 @@ function setupFixture(files: Record<string, string>): Fixture {
     bUri: uriByName["B.sol"] ?? "",
     cUri: uriByName["C.sol"] ?? "",
     provider,
+    parser,
+    symbolIndex,
   };
 }
 
@@ -350,6 +354,61 @@ contract MockERC4626 {
         assert.notEqual(convert.to.detail, "MockERC4626");
       } finally {
         teardownFixture(erc4626);
+      }
+    });
+
+    it("drops only the changed file's call sites on invalidate, leaving other callers intact", async () => {
+      // Regression test for the per-keystroke invalidate hot path:
+      // `invalidateFile` used to walk every callee name in the
+      // workspace map and rebuild each entry's array. We replaced
+      // that with an inverse `incomingByFile` index so the walk is
+      // O(file) instead of O(workspace). This test pins the
+      // resulting correctness contract: rewriting B.sol to drop the
+      // call to `transfer` and then invalidating only B must remove
+      // useB from A.transfer's incoming list — and must NOT also
+      // remove useC, which lives in a different file.
+      const local = setupFixture({
+        "A.sol": A_SOL,
+        "B.sol": B_SOL,
+        "C.sol": C_SOL,
+      });
+      try {
+        const before = await local.provider.getIncomingCalls(transferItem(local.aUri, "A"));
+        const beforeNames = before.map((c) => c.from.name).sort();
+        assert.ok(
+          beforeNames.includes("useB") && beforeNames.includes("useC"),
+          `expected useB and useC as initial callers, got [${beforeNames.join(", ")}]`,
+        );
+
+        // Rewrite B.sol so `useB` no longer calls `transfer`. In the
+        // real LSP flow, `documents.onDidChangeContent` re-parses
+        // BEFORE invoking `invalidateFile`; we mimic that here so
+        // the next call hierarchy query indexes against the fresh
+        // AST. Without re-parsing, indexCallsInFile would walk the
+        // stale cached AST that still contains the call.
+        const bPath = path.join(local.tmpDir, "B.sol");
+        const newB = B_SOL.replace("a.transfer();", "uint256 _x = 1; _x;");
+        fs.writeFileSync(bPath, newB, "utf-8");
+        local.parser.parse(local.bUri, newB);
+        local.symbolIndex.updateFile(local.bUri);
+        local.provider.invalidateFile(local.bUri);
+
+        const after = await local.provider.getIncomingCalls(transferItem(local.aUri, "A"));
+        const afterNames = after.map((c) => c.from.name).sort();
+        assert.ok(
+          !afterNames.includes("useB"),
+          `useB should be gone once B.sol no longer calls transfer; got [${afterNames.join(", ")}]`,
+        );
+        assert.ok(
+          afterNames.includes("useC"),
+          `useC must remain after invalidating B.sol — that's the per-file invalidation contract; got [${afterNames.join(", ")}]`,
+        );
+        assert.ok(
+          afterNames.includes("useA"),
+          `useA must remain after invalidating B.sol; got [${afterNames.join(", ")}]`,
+        );
+      } finally {
+        teardownFixture(local);
       }
     });
 

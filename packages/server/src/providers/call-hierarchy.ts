@@ -70,6 +70,24 @@ export class CallHierarchyProvider {
   /** callerFunction key (`<uri>#<name>`) → [site, ...] */
   private outgoingCalls: Map<string, CallSite[]> = new Map();
 
+  /**
+   * Inverse index over `incomingCalls`: maps a file URI to the set of
+   * callee names referenced anywhere in that file. Without this, every
+   * keystroke in any document triggered an O(workspace_callee_names)
+   * scan of `incomingCalls` to evict that file's stale sites — a cost
+   * that grew unboundedly as more of the dependency tree got indexed.
+   * With it, `invalidateFile` only iterates the names this file
+   * actually mentioned, which is typically a few dozen even in large
+   * files.
+   */
+  private incomingByFile: Map<string, Set<string>> = new Map();
+  /**
+   * Inverse index over `outgoingCalls`: per-file list of caller keys
+   * indexed from this file. Lets us delete only those keys instead of
+   * scanning every entry in `outgoingCalls`.
+   */
+  private outgoingByFile: Map<string, Set<string>> = new Map();
+
   private indexedFiles: Set<string> = new Set();
   private solcBridge: SolcBridge | null = null;
   private workspaceIndexPromise: Promise<void> | null = null;
@@ -243,20 +261,58 @@ export class CallHierarchyProvider {
   }
 
   /**
-   * Build the call graph by scanning all workspace files.
+   * Drop every cached call site that originated from `uri`.
+   *
+   * Called from `documents.onDidChangeContent`, which fires on every
+   * keystroke, so this MUST be O(callees-referenced-in-this-file)
+   * rather than O(total-callees-in-workspace). The previous
+   * implementation walked every entry in `incomingCalls` and rebuilt
+   * its array, which became the dominant per-keystroke cost on
+   * sessions where the dependency tree (forge-std, OpenZeppelin,
+   * project libraries) had been indexed.
+   *
+   * The `incomingByFile` / `outgoingByFile` inverse indexes record
+   * exactly which entries to touch, so this work scales with the file
+   * rather than the workspace.
    */
   invalidateFile(uri: string): void {
-    // Remove all call sites from/to this file
-    for (const [key, sites] of this.incomingCalls) {
-      const filtered = sites.filter((s) => s.callerUri !== uri);
-      if (filtered.length > 0) this.incomingCalls.set(key, filtered);
-      else this.incomingCalls.delete(key);
+    const incomingNames = this.incomingByFile.get(uri);
+    if (incomingNames) {
+      for (const calleeName of incomingNames) {
+        const sites = this.incomingCalls.get(calleeName);
+        if (!sites) continue;
+        const filtered = sites.filter((s) => s.callerUri !== uri);
+        if (filtered.length === sites.length) continue;
+        if (filtered.length > 0) this.incomingCalls.set(calleeName, filtered);
+        else this.incomingCalls.delete(calleeName);
+      }
+      this.incomingByFile.delete(uri);
     }
-    for (const [key] of this.outgoingCalls) {
-      if (key.startsWith(uri + "#")) this.outgoingCalls.delete(key);
+
+    const outgoingKeys = this.outgoingByFile.get(uri);
+    if (outgoingKeys) {
+      for (const key of outgoingKeys) this.outgoingCalls.delete(key);
+      this.outgoingByFile.delete(uri);
     }
+
     this.indexedFiles.delete(uri);
-    this.reachableCache.clear();
+    // Reachability is rooted at this file's import list; drop only the
+    // entry that depends on this file's contents. Reach sets that
+    // include this URI but are rooted elsewhere are unaffected by
+    // edits to this file's body. (If imports were added or removed,
+    // those reach sets become slightly stale until the user navigates
+    // through the relevant file — an acceptable trade-off given the
+    // alternative is wiping every cached reach set on every keystroke.)
+    this.reachableCache.delete(uri);
+    // Qualifier cache is keyed by container name and depends on the
+    // inheritance chain owned by the symbol index. Edits that change
+    // a contract's `is ...` clause invalidate it; we can't cheaply
+    // tell whether the current edit was such a change, so a cache-
+    // wide wipe is the conservative choice. The cache typically has
+    // a handful of entries (one per contract a user has invoked call-
+    // hierarchy on), so `clear` is microseconds — unlike the prior
+    // O(workspace) loop over `incomingCalls`, this isn't the cost
+    // we were trying to dodge.
     this.qualifierCache.clear();
     this.fileTextCache.delete(uri);
     this.resolver?.invalidate(uri);
@@ -366,6 +422,20 @@ export class CallHierarchyProvider {
     const result = this.parser.get(uri) ?? this.parser.parse(uri, text);
     const lines = text.split("\n");
 
+    // Track which callee names and caller keys this file owns so
+    // `invalidateFile` can drop them in O(file) instead of scanning
+    // the whole workspace map.
+    let fileIncomingNames = this.incomingByFile.get(uri);
+    if (!fileIncomingNames) {
+      fileIncomingNames = new Set();
+      this.incomingByFile.set(uri, fileIncomingNames);
+    }
+    let fileOutgoingKeys = this.outgoingByFile.get(uri);
+    if (!fileOutgoingKeys) {
+      fileOutgoingKeys = new Set();
+      this.outgoingByFile.set(uri, fileOutgoingKeys);
+    }
+
     for (const contract of result.sourceUnit.contracts) {
       for (const func of contract.functions) {
         const callerName = func.name ?? func.kind;
@@ -429,6 +499,7 @@ export class CallHierarchyProvider {
             target,
           });
           this.outgoingCalls.set(callerKey, outgoing);
+          fileOutgoingKeys.add(callerKey);
 
           const incoming = this.incomingCalls.get(calleeName) ?? [];
           incoming.push({
@@ -441,6 +512,7 @@ export class CallHierarchyProvider {
             target,
           });
           this.incomingCalls.set(calleeName, incoming);
+          fileIncomingNames.add(calleeName);
         }
       }
     }
