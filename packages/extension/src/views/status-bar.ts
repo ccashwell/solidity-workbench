@@ -28,7 +28,8 @@ export class StatusBar {
     warnings: number;
     durationMs: number;
   } = null;
-  private anvil: { forked: boolean; host?: string } | null = null;
+  private anvilCount = 0;
+  private anvilForkedCount = 0;
   private coveragePct: number | null = null;
 
   constructor() {
@@ -57,7 +58,20 @@ export class StatusBar {
   }
 
   setAnvil(anvil: { forked: boolean; host?: string } | null): void {
-    this.anvil = anvil;
+    // Legacy single-instance compatibility
+    if (anvil) {
+      this.anvilCount = 1;
+      this.anvilForkedCount = anvil.forked ? 1 : 0;
+    } else {
+      this.anvilCount = 0;
+      this.anvilForkedCount = 0;
+    }
+    this.render();
+  }
+
+  setAnvilInstances(total: number, forked: number): void {
+    this.anvilCount = total;
+    this.anvilForkedCount = forked;
     this.render();
   }
 
@@ -114,8 +128,12 @@ export class StatusBar {
       segments.push(`$(shield) ${this.coveragePct.toFixed(0)}%`);
     }
 
-    if (this.anvil) {
-      segments.push(this.anvil.forked ? `$(server) anvil⇨fork` : `$(server) anvil`);
+    if (this.anvilCount > 0) {
+      if (this.anvilCount === 1) {
+        segments.push(this.anvilForkedCount > 0 ? `$(server) anvil⇨fork` : `$(server) anvil`);
+      } else {
+        segments.push(`$(server) anvil ×${this.anvilCount}`);
+      }
     }
 
     this.item.text = segments.join("  ");
@@ -140,12 +158,17 @@ export class StatusBar {
         );
       }
     }
-    if (this.anvil) {
-      lines.push(
-        this.anvil.forked
-          ? `Anvil running (forked${this.anvil.host ? " from " + this.anvil.host : ""})`
-          : "Anvil running (fresh chain)",
-      );
+    if (this.anvilCount > 0) {
+      if (this.anvilCount === 1) {
+        lines.push(
+          this.anvilForkedCount > 0
+            ? "Anvil running (1 instance, forked)"
+            : "Anvil running (1 instance, fresh chain)",
+        );
+      } else {
+        const forkedNote = this.anvilForkedCount > 0 ? `, ${this.anvilForkedCount} forked` : "";
+        lines.push(`Anvil running (${this.anvilCount} instances${forkedNote})`);
+      }
     }
     if (this.coveragePct !== null) {
       lines.push(`Coverage: ${this.coveragePct.toFixed(1)}%`);

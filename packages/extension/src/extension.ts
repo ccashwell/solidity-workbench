@@ -3,7 +3,8 @@ import * as vscode from "vscode";
 import { LanguageClient, TransportKind } from "vscode-languageclient/node";
 import type { LanguageClientOptions, ServerOptions } from "vscode-languageclient/node";
 import { registerFoundryCommands } from "./commands/foundry.js";
-import { registerAnvilCommands } from "./commands/anvil.js";
+import { AnvilManager, registerAnvilCommands } from "./commands/anvil.js";
+import { AnvilInstancesProvider } from "./views/anvil-instances.js";
 import { registerCastCommands } from "./commands/cast.js";
 import { registerScriptCommands } from "./commands/script.js";
 import { registerDeployCommands } from "./commands/deploy.js";
@@ -79,7 +80,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // ── Commands ──────────────────────────────────────────────────────
 
   registerFoundryCommands(context);
-  registerAnvilCommands(context, (status) => statusBar.setAnvil(status));
+
+  const anvilManager = new AnvilManager();
+  anvilManager.onInstanceChange((instances) => {
+    const running = instances.filter((i) => i.status === "running" || i.status === "starting");
+    const forked = running.filter((i) => !!i.config.forkUrl);
+    statusBar.setAnvilInstances(running.length, forked.length);
+  });
+  registerAnvilCommands(context, anvilManager);
+
+  const anvilTree = new AnvilInstancesProvider(anvilManager);
+  anvilTree.activate(context);
+
   registerCastCommands(context);
   registerScriptCommands(context);
   registerDeployCommands(context);
