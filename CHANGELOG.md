@@ -15,6 +15,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `@dev`, and hover/signature documentation renders it as a
   standalone `Security Contact: ...` line.
 
+## [0.6.3] - 2026-05-07
+
+### Performance
+
+- **Editor latency stopped scaling with workspace size.** The
+  call-hierarchy provider's `invalidateFile` ran on every keystroke
+  and walked every callee name in the workspace, so the per-keystroke
+  cost grew linearly with the indexed dependency tree (forge-std,
+  OpenZeppelin, project libraries). Add per-file inverse indexes so
+  invalidation touches only the names referenced from the changed
+  file — typically a few dozen even in large files. This is the
+  primary fix for the "feels fine at first, gets bad after a while"
+  reports.
+- **Bounded the call-hierarchy `fileTextCache`.** Source text for
+  every dependency file consulted via `solcBridge.resolveReference`
+  used to be cached forever; on long-running editor sessions the
+  cache grew without bound. Capped at 256 entries with insertion-
+  order LRU eviction.
+- **Mutate-restore semantic-tokens parameter scoping.** The
+  reference-token pass cloned the file's `nameKinds` map per function
+  to add parameter overrides — a 50-function file did 50 full-map
+  copies on every keystroke. Push and pop overrides on the shared map
+  instead.
+- **Memoized code-lens selectors by canonical signature.** `keccak256`
+  was being computed afresh for every function/event/error every time
+  the editor requested code lenses. Cache by signature (content-
+  addressed, so cache entries can never go stale).
+- **Precomputed newline offsets in the call-hierarchy index pass.**
+  The per-call-match `bodyText.slice(0, idx).match(/\n/g)` was
+  O(call_sites · body_length) per function. Walk the body once up
+  front and binary-search the offset table per match.
+- **Skipped heavy directories during workspace discovery.** Initial
+  `walkDirectory` excluded only `node_modules` and `out`, so the
+  recursive walk descended into `.git/`, Foundry's `cache/` and
+  `broadcast/`, `coverage/`, `target/`, editor-config dirs, and JS
+  toolchain caches. Now skips a fuller list, cutting the cold-start
+  I/O on every editor restart.
+
 ## [0.3.2] - 2026-04-28
 
 ### Added
