@@ -452,6 +452,17 @@ export class CallHierarchyProvider {
         const restLines = lines.slice(bodyRange.bodyStartLine + 1, bodyRange.bodyEndLine + 1);
         const bodyText = restLines.length > 0 ? [firstLine, ...restLines].join("\n") : firstLine;
 
+        // Pre-compute the position of every newline in `bodyText` once,
+        // so each call match can resolve to (line, column) via a binary
+        // search instead of regex-scanning the prefix per match. The
+        // prior `bodyText.slice(0, idx).match(/\n/g)` pattern was
+        // O(call_sites × body_length), which dominated the file-index
+        // pass on dense bodies.
+        const newlineOffsets: number[] = [];
+        for (let i = 0; i < bodyText.length; i++) {
+          if (bodyText.charCodeAt(i) === 10) newlineOffsets.push(i);
+        }
+
         // Capture group 1 = optional receiver identifier, group 2 = callee
         // name. Chained expressions (`a.b.c()`) are only partially handled —
         // the captured qualifier is the identifier immediately before the
@@ -474,13 +485,19 @@ export class CallHierarchyProvider {
             contract,
             bodyText.slice(0, absoluteMatchStart),
           );
-          const precedingInBody = bodyText.slice(0, absoluteMatchStart);
-          const newlinesBefore = (precedingInBody.match(/\n/g) ?? []).length;
+
+          // Binary-search the precomputed newline offsets to locate
+          // (line, column) for `absoluteMatchStart`. `newlinesBefore`
+          // is the count of newlines strictly before the offset; the
+          // start-of-current-line is the offset just past the last
+          // newline (or 0 on the first line of the body).
+          const newlinesBefore = countNewlinesBefore(newlineOffsets, absoluteMatchStart);
+          const lineStartOffset = newlinesBefore === 0 ? 0 : newlineOffsets[newlinesBefore - 1] + 1;
           const callLine = bodyRange.bodyStartLine + newlinesBefore;
           const callCol =
             newlinesBefore === 0
               ? bodyRange.bodyStartChar + absoluteMatchStart
-              : absoluteMatchStart - precedingInBody.lastIndexOf("\n") - 1;
+              : absoluteMatchStart - lineStartOffset;
 
           const callRange: Range = {
             start: { line: callLine, character: Math.max(0, callCol) },
@@ -890,4 +907,22 @@ interface CallTarget {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Count newlines in the precomputed sorted offset array that occur
+ * strictly before `offset`. Equivalent to `Array.prototype.findIndex`
+ * for the first offset >= the target, but in O(log N) — what makes
+ * the inner call-site scan O(call_sites · log(line_count)) instead of
+ * the prior O(call_sites · body_length) regex slice-and-count.
+ */
+function countNewlinesBefore(sortedOffsets: number[], offset: number): number {
+  let lo = 0;
+  let hi = sortedOffsets.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (sortedOffsets[mid] < offset) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
 }
