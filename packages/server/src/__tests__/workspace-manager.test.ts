@@ -102,5 +102,44 @@ describe("WorkspaceManager", () => {
 
       fs.rmSync(tmp, { recursive: true, force: true });
     });
+
+    it("skips heavy Foundry/VCS directories during discovery", async () => {
+      // The previous implementation only excluded `node_modules` and
+      // `out`, so the recursive walk descended into `.git/` (commonly
+      // tens of thousands of objects), Foundry's `cache/` and
+      // `broadcast/` (build artifacts), and editor-config dirs. Any
+      // `.sol` file under these paths would otherwise be discovered
+      // and parsed during the initial sweep — pure I/O waste that
+      // delays the user's first usable LSP response. We don't fail
+      // closed (a `.sol` inside `lib/forge-std/cache` is a real lib
+      // file), but the top-level project walk skips these names.
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ws-mgr-skip-"));
+      fs.writeFileSync(path.join(tmp, "foundry.toml"), "[profile.default]\n");
+
+      const srcDir = path.join(tmp, "src");
+      fs.mkdirSync(srcDir, { recursive: true });
+      fs.writeFileSync(path.join(srcDir, "Real.sol"), "contract Real {}");
+
+      // These are the dirs we now skip. They're seeded with a fake
+      // `.sol` file so we can detect a regression: if the file is
+      // discovered, the walk is no longer respecting the skip list.
+      const skipDirs = [".git", "cache", "broadcast", ".foundry", ".vscode", "coverage"];
+      for (const d of skipDirs) {
+        const full = path.join(srcDir, d);
+        fs.mkdirSync(full, { recursive: true });
+        fs.writeFileSync(path.join(full, "Bogus.sol"), "contract Bogus {}");
+      }
+
+      const ws = new WorkspaceManager(URI.file(tmp).toString(), makeFakeConnection());
+      await ws.initialize();
+
+      const basenames = ws
+        .getAllFileUris()
+        .map((u) => path.basename(URI.parse(u).fsPath))
+        .sort();
+      assert.deepEqual(basenames, ["Real.sol"], `discovered files: ${basenames.join(", ")}`);
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
   });
 });

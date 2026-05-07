@@ -303,6 +303,40 @@ export class WorkspaceManager {
     }
   }
 
+  /**
+   * Directories we skip when discovering Solidity source files. None
+   * of these contain `.sol` files we'd want indexed, and several
+   * (`.git`, `cache`, `broadcast`) can hold tens of thousands of
+   * entries that recursively walking would force us to stat for no
+   * gain. The previous list (`node_modules`, `out` only) caused the
+   * initial workspace sweep to descend into Foundry's `cache/`
+   * (build artifacts), `broadcast/` (per-tx JSON), and `.git/`
+   * directories — pure I/O waste that delays the user's first
+   * usable LSP response on every editor restart.
+   */
+  private static readonly SKIP_DIRECTORIES: ReadonlySet<string> = new Set([
+    "node_modules",
+    "out",
+    "cache",
+    "broadcast",
+    "coverage",
+    "target",
+    "dist",
+    "build",
+    ".git",
+    ".svn",
+    ".hg",
+    ".foundry",
+    ".forge",
+    ".vscode",
+    ".idea",
+    ".cache",
+    ".pnpm",
+    ".yarn",
+    ".turbo",
+    ".next",
+  ]);
+
   private walkDirectory(dir: string, root: WorkspaceRoot, tier: FileTier): void {
     try {
       if (!fs.existsSync(dir)) return;
@@ -310,7 +344,7 @@ export class WorkspaceManager {
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) {
-          if (entry.name === "node_modules" || entry.name === "out") continue;
+          if (WorkspaceManager.SKIP_DIRECTORIES.has(entry.name)) continue;
           this.walkDirectory(fullPath, root, tier);
         } else if (entry.name.endsWith(".sol")) {
           const uri = URI.file(fullPath).toString();
