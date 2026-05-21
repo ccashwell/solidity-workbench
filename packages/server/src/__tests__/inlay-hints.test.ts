@@ -350,6 +350,86 @@ contract C {
       );
     });
 
+    it("skips the implicit receiver parameter for using-for calls on nested cast expressions", () => {
+      const text = `pragma solidity ^0.8.0;
+interface IERC20 {}
+interface Initializer {
+    function token() external view returns (address);
+}
+library SafeERC20 {
+    function safeTransfer(IERC20 token, address to, uint256 value) internal {
+        token; to; value;
+    }
+}
+contract C {
+    using SafeERC20 for IERC20;
+
+    struct MintParams {
+        address leftoverRecipient;
+    }
+
+    function f(Initializer initializer, MintParams memory mp, uint256 amount) external {
+        IERC20(initializer.token()).safeTransfer(mp.leftoverRecipient, amount);
+    }
+}`;
+      const { doc, provider } = setup("file:///w/SafeErc20NestedCast.sol", text);
+      const hints = provider.provideInlayHints(doc, {
+        start: { line: 0, character: 0 },
+        end: { line: 30, character: 0 },
+      });
+      const labels = hints.map((h) => h.label);
+      assert.ok(
+        !labels.includes("token:"),
+        `implicit receiver should be skipped; got ${JSON.stringify(labels)}`,
+      );
+      assert.ok(
+        labels.includes("to:"),
+        `expected "to:" from SafeERC20.safeTransfer; got ${JSON.stringify(labels)}`,
+      );
+      assert.ok(
+        labels.includes("value:"),
+        `expected "value:" from SafeERC20.safeTransfer; got ${JSON.stringify(labels)}`,
+      );
+    });
+
+    it("skips the implicit receiver parameter when whitespace appears after the member dot", () => {
+      const text = `pragma solidity ^0.8.0;
+interface IERC20 {}
+interface Initializer {
+    function token() external view returns (address);
+}
+library SafeERC20 {
+    function safeTransfer(IERC20 token, address to, uint256 value) internal {
+        token; to; value;
+    }
+}
+contract C {
+    using SafeERC20 for IERC20;
+
+    function f(Initializer initializer, address recipient, uint256 amount) external {
+        IERC20(initializer.token()). safeTransfer(recipient, amount);
+    }
+}`;
+      const { doc, provider } = setup("file:///w/SafeErc20Whitespace.sol", text);
+      const hints = provider.provideInlayHints(doc, {
+        start: { line: 0, character: 0 },
+        end: { line: 30, character: 0 },
+      });
+      const labels = hints.map((h) => h.label);
+      assert.ok(
+        !labels.includes("token:"),
+        `implicit receiver should be skipped; got ${JSON.stringify(labels)}`,
+      );
+      assert.ok(
+        labels.includes("to:"),
+        `expected "to:" from SafeERC20.safeTransfer; got ${JSON.stringify(labels)}`,
+      );
+      assert.ok(
+        labels.includes("value:"),
+        `expected "value:" from SafeERC20.safeTransfer; got ${JSON.stringify(labels)}`,
+      );
+    });
+
     it("still emits hints for plain unqualified function calls", () => {
       // Make sure the receiver-aware path doesn't suppress hints for
       // the common case of an in-scope function call with no dot.

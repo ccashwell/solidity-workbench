@@ -236,8 +236,10 @@ export class InlayHintsProvider {
    * for plain `funcName(` calls.
    */
   private extractReceiver(line: string, funcNameStart: number): ReceiverExpression | null {
-    if (funcNameStart <= 0 || line[funcNameStart - 1] !== ".") return null;
-    const dotIdx = funcNameStart - 1;
+    let dotIdx = funcNameStart - 1;
+    while (dotIdx >= 0 && /\s/.test(line[dotIdx])) dotIdx--;
+    if (dotIdx < 0 || line[dotIdx] !== ".") return null;
+
     let end = dotIdx;
     while (end > 0 && /\s/.test(line[end - 1])) end--;
 
