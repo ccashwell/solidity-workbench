@@ -408,6 +408,98 @@ contract C {
       assert.match(value, /Defined in.*SafeMath/, `expected SafeMath container; got ${value}`);
     });
 
+    it("resolves member hovers through a typed receiver variable", () => {
+      const code = `interface ILBPInitializer {
+    /// @notice Returns the token used by the initializer.
+    function token() external view returns (address);
+}
+contract Other {
+    function token(uint256 unrelated) external returns (address) { return address(0); }
+}
+contract C {
+    function f(ILBPInitializer initializer) external view returns (address) {
+        return initializer.token();
+    }
+}`;
+      const { doc, provider } = setup("file:///w/TypedReceiverHover.sol", code);
+      const lines = code.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("initializer.token"));
+      const tokenCol = lines[callLine].indexOf(".token") + 1;
+      const h = provider.provideHover(doc, { line: callLine, character: tokenCol });
+      assert.ok(h, "expected hover on typed receiver member");
+      assert.ok(!Array.isArray(h.contents) && typeof h.contents !== "string");
+      const value = h.contents.value;
+      assert.match(value, /function token\(\) external view returns \(address\)/);
+      assert.match(value, /Returns the token used by the initializer/);
+      assert.match(value, /Defined in.*ILBPInitializer/);
+      assert.doesNotMatch(value, /unrelated/);
+    });
+
+    it("resolves using-for function hovers on typed receiver variables", () => {
+      const code = `interface IERC20 {}
+contract Other {
+    function safeTransfer(uint256 unrelated) external {}
+}
+library SafeERC20 {
+    /// @notice Safely transfers tokens.
+    function safeTransfer(IERC20 token, address to, uint256 value) internal {
+        token; to; value;
+    }
+}
+contract C {
+    using SafeERC20 for IERC20;
+    function f(IERC20 token, address recipient, uint256 amount) external {
+        token.safeTransfer(recipient, amount);
+    }
+}`;
+      const { doc, provider } = setup("file:///w/UsingHover.sol", code);
+      const lines = code.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("token.safeTransfer"));
+      const safeTransferCol = lines[callLine].indexOf(".safeTransfer") + 1;
+      const h = provider.provideHover(doc, { line: callLine, character: safeTransferCol });
+      assert.ok(h, "expected hover on using-for safeTransfer");
+      assert.ok(!Array.isArray(h.contents) && typeof h.contents !== "string");
+      const value = h.contents.value;
+      assert.match(value, /function safeTransfer\(IERC20 token, address to, uint256 value\)/);
+      assert.match(value, /Safely transfers tokens/);
+      assert.match(value, /Defined in.*SafeERC20/);
+      assert.doesNotMatch(value, /unrelated/);
+    });
+
+    it("resolves using-for function hovers on cast receiver expressions", () => {
+      const code = `interface IERC20 {}
+interface Initializer {
+    function token() external view returns (address);
+}
+contract Other {
+    function safeTransfer(uint256 unrelated) external {}
+}
+library SafeERC20 {
+    /// @notice Safely transfers tokens.
+    function safeTransfer(IERC20 token, address to, uint256 value) internal {
+        token; to; value;
+    }
+}
+contract C {
+    using SafeERC20 for IERC20;
+    function f(Initializer initializer, address recipient, uint256 amount) external {
+        IERC20(initializer.token()).safeTransfer(recipient, amount);
+    }
+}`;
+      const { doc, provider } = setup("file:///w/UsingHoverCast.sol", code);
+      const lines = code.split("\n");
+      const callLine = lines.findIndex((line) => line.includes(".safeTransfer"));
+      const safeTransferCol = lines[callLine].indexOf(".safeTransfer") + 1;
+      const h = provider.provideHover(doc, { line: callLine, character: safeTransferCol });
+      assert.ok(h, "expected hover on using-for safeTransfer");
+      assert.ok(!Array.isArray(h.contents) && typeof h.contents !== "string");
+      const value = h.contents.value;
+      assert.match(value, /function safeTransfer\(IERC20 token, address to, uint256 value\)/);
+      assert.match(value, /Safely transfers tokens/);
+      assert.match(value, /Defined in.*SafeERC20/);
+      assert.doesNotMatch(value, /unrelated/);
+    });
+
     it("synthesises a `wrap` / `unwrap` hover on a user-defined value type", () => {
       const code = `type Currency is address;
 contract C {

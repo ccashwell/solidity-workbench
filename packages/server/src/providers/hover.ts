@@ -2,6 +2,7 @@ import type { Hover, Position } from "vscode-languageserver/node.js";
 import { MarkupKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type {
+  ContractDefinition,
   FunctionDefinition,
   ModifierDefinition,
   NatspecComment,
@@ -16,6 +17,11 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { URI } from "vscode-uri";
 import { readFileSync } from "node:fs";
+
+interface ReceiverExpression {
+  simpleName?: string;
+  explicitTypeName?: string;
+}
 
 /**
  * Provides hover information for Solidity symbols.
@@ -60,7 +66,7 @@ export class HoverProvider {
     // we return `null` — no hover is better than a misleading one.
     const dotted = this.getDottedAccessAtPosition(text, position);
     if (dotted && dotted.member === word) {
-      return this.resolveDottedHover(dotted.receiver, dotted.member, document.uri);
+      return this.resolveDottedHover(dotted.receiver, dotted.member, document.uri, position);
     }
 
     const builtinHover = this.getBuiltinHover(word);
@@ -123,9 +129,14 @@ export class HoverProvider {
    * identified but the member can't be located — surfacing the wrong
    * symbol is worse than surfacing no symbol.
    */
-  private resolveDottedHover(receiver: string, member: string, fromUri: string): Hover | null {
-    const receiverSymbols = this.symbolIndex.findSymbols(receiver);
-    if (receiverSymbols.length === 0) return null;
+  private resolveDottedHover(
+    receiver: ReceiverExpression,
+    member: string,
+    fromUri: string,
+    position: Position,
+  ): Hover | null {
+    const receiverName = receiver.simpleName ?? receiver.explicitTypeName;
+    const receiverSymbols = receiverName ? this.symbolIndex.findSymbols(receiverName) : [];
 
     // UDVT builtins: `wrap(underlying) -> UDVT`, `unwrap(UDVT) -> underlying`.
     const udvt = receiverSymbols.find((s) => s.kind === "userDefinedValueType");
@@ -135,16 +146,29 @@ export class HoverProvider {
 
     for (const receiverSym of receiverSymbols) {
       if (receiverSym.kind === "contract" || receiverSym.kind === "interface") {
-        const hit = this.findMemberInInheritanceChain(receiver, member, fromUri);
+        const hit = receiverName
+          ? this.findMemberInInheritanceChain(receiverName, member, fromUri)
+          : null;
         if (hit) return this.buildHover(hit);
       } else if (receiverSym.kind === "library") {
-        const hit = this.findMemberInContract(receiver, member, fromUri);
+        const hit = receiverName ? this.findMemberInContract(receiverName, member, fromUri) : null;
         if (hit) return this.buildHover(hit);
       } else if (receiverSym.kind === "struct") {
         const hit = this.findStructMember(receiverSym, member);
         if (hit) return hit;
       }
     }
+
+    const typedReceiverHover = this.resolveTypedReceiverHover(
+      receiver,
+      member,
+      fromUri,
+      position.line,
+    );
+    if (typedReceiverHover) return typedReceiverHover;
+
+    const usingForHover = this.resolveUsingForHover(receiver, member, fromUri, position.line);
+    if (usingForHover) return usingForHover;
 
     return null;
   }
@@ -348,36 +372,188 @@ export class HoverProvider {
 
   /**
    * Detect a dotted access of the form `Receiver.member` where the
-   * cursor is on the `member` side. Returns the receiver identifier
-   * and the member identifier, or `null` if the cursor isn't on the
+   * cursor is on the `member` side. Returns enough receiver information
+   * to distinguish simple identifiers from explicit casts such as
+   * `IERC20(token).safeTransfer`, or `null` if the cursor isn't on the
    * right-hand side of a dotted access.
    */
   private getDottedAccessAtPosition(
     text: string,
     position: Position,
-  ): { receiver: string; member: string } | null {
+  ): { receiver: ReceiverExpression; member: string } | null {
     const line = text.split("\n")[position.line] ?? "";
     // Walk backward from the cursor through identifier chars to find
     // the start of the member, then require the preceding char to be
     // a dot.
     let memberStart = position.character;
     while (memberStart > 0 && /[\w$]/.test(line[memberStart - 1])) memberStart--;
-    if (memberStart === 0 || line[memberStart - 1] !== ".") return null;
+    let dotIdx = memberStart - 1;
+    while (dotIdx >= 0 && /\s/.test(line[dotIdx])) dotIdx--;
+    if (dotIdx < 0 || line[dotIdx] !== ".") return null;
 
-    const receiverEnd = memberStart - 1;
+    let receiverEnd = dotIdx;
+    while (receiverEnd > 0 && /\s/.test(line[receiverEnd - 1])) receiverEnd--;
     let receiverStart = receiverEnd;
-    while (receiverStart > 0 && /[\w$]/.test(line[receiverStart - 1])) receiverStart--;
-    if (receiverStart === receiverEnd) return null;
+    let receiver: ReceiverExpression | null = null;
+    if (receiverEnd > 0 && /[\w$]/.test(line[receiverEnd - 1])) {
+      while (receiverStart > 0 && /[\w$]/.test(line[receiverStart - 1])) receiverStart--;
+      const simpleName = line.slice(receiverStart, receiverEnd);
+      if (simpleName) receiver = { simpleName };
+    } else if (receiverEnd > 0 && line[receiverEnd - 1] === ")") {
+      const start = this.findCallExpressionStart(line, receiverEnd - 1);
+      if (start !== null) {
+        const expression = line.slice(start, receiverEnd).trim();
+        const explicitTypeName = this.extractExplicitTypeName(expression);
+        receiver = explicitTypeName ? { explicitTypeName } : {};
+      } else {
+        receiver = {};
+      }
+    }
+    if (!receiver) return null;
 
     // Walk forward to capture the full member identifier (cursor may
     // be in the middle of it).
     let memberEnd = position.character;
     while (memberEnd < line.length && /[\w$]/.test(line[memberEnd])) memberEnd++;
 
-    const receiver = line.slice(receiverStart, receiverEnd);
     const member = line.slice(memberStart, memberEnd);
-    if (!receiver || !member) return null;
+    if (!member) return null;
     return { receiver, member };
+  }
+
+  private findCallExpressionStart(line: string, closeParenIdx: number): number | null {
+    let depth = 0;
+    for (let i = closeParenIdx; i >= 0; i--) {
+      const ch = line[i];
+      if (ch === ")") {
+        depth++;
+      } else if (ch === "(") {
+        depth--;
+        if (depth === 0) {
+          let start = i;
+          while (start > 0 && /\s/.test(line[start - 1])) start--;
+          while (start > 0 && /[\w$.]/.test(line[start - 1])) start--;
+          return start;
+        }
+      }
+    }
+    return null;
+  }
+
+  private extractExplicitTypeName(expression: string): string | undefined {
+    const match = /^([A-Za-z_$][\w$.]*)\s*\(/.exec(expression);
+    if (!match) return undefined;
+    const candidate = match[1];
+    return this.symbolIndex
+      .findSymbols(candidate)
+      .some((s) => s.kind === "contract" || s.kind === "interface")
+      ? candidate
+      : undefined;
+  }
+
+  private resolveUsingForHover(
+    receiver: ReceiverExpression,
+    member: string,
+    fromUri: string,
+    lineNum: number,
+  ): Hover | null {
+    const contract = this.getEnclosingContract(fromUri, lineNum);
+    if (!contract) return null;
+
+    const receiverType = this.resolveReceiverType(receiver, contract, lineNum);
+    if (!receiverType) return null;
+
+    for (const directive of contract.usingFor) {
+      if (
+        directive.typeName !== undefined &&
+        !this.isSameTypeName(directive.typeName, receiverType)
+      ) {
+        continue;
+      }
+
+      const library = this.symbolIndex.getContract(directive.libraryName)?.contract;
+      const fn = library?.functions.find((f) => f.name === member);
+      if (!library || !fn || fn.parameters.length === 0) continue;
+      if (!this.isSameTypeName(fn.parameters[0].typeName, receiverType)) continue;
+
+      const hit = this.lookupMember(library.name, library, member);
+      if (hit) return this.buildHover(hit);
+    }
+
+    return null;
+  }
+
+  private resolveTypedReceiverHover(
+    receiver: ReceiverExpression,
+    member: string,
+    fromUri: string,
+    lineNum: number,
+  ): Hover | null {
+    const contract = this.getEnclosingContract(fromUri, lineNum);
+    if (!contract) return null;
+
+    const receiverType = this.resolveReceiverType(receiver, contract, lineNum);
+    if (!receiverType) return null;
+
+    const typeName = this.normalizeTypeName(receiverType);
+    const typeSymbols = this.symbolIndex.findSymbols(typeName);
+    const udvt = typeSymbols.find((s) => s.kind === "userDefinedValueType");
+    if (udvt) return this.getUdvtBuiltinHover(udvt, member);
+
+    for (const typeSym of typeSymbols) {
+      if (typeSym.kind === "contract" || typeSym.kind === "interface") {
+        const hit = this.findMemberInInheritanceChain(typeName, member, fromUri);
+        if (hit) return this.buildHover(hit);
+      } else if (typeSym.kind === "library") {
+        const hit = this.findMemberInContract(typeName, member, fromUri);
+        if (hit) return this.buildHover(hit);
+      } else if (typeSym.kind === "struct") {
+        const hit = this.findStructMember(typeSym, member);
+        if (hit) return hit;
+      }
+    }
+
+    return null;
+  }
+
+  private getEnclosingContract(uri: string, lineNum: number): ContractDefinition | undefined {
+    const sourceUnit = this.parser.get(uri)?.sourceUnit;
+    return sourceUnit?.contracts.find(
+      (contract) => contract.range.start.line <= lineNum && lineNum <= contract.range.end.line,
+    );
+  }
+
+  private resolveReceiverType(
+    receiver: ReceiverExpression,
+    contract: ContractDefinition,
+    lineNum: number,
+  ): string | undefined {
+    if (receiver.explicitTypeName) return receiver.explicitTypeName;
+    if (!receiver.simpleName) return undefined;
+
+    const fn = this.getEnclosingFunction(contract, lineNum);
+    const parameter = fn?.parameters.find((p) => p.name === receiver.simpleName);
+    if (parameter) return parameter.typeName;
+
+    const stateVariable = contract.stateVariables.find((v) => v.name === receiver.simpleName);
+    return stateVariable?.typeName;
+  }
+
+  private getEnclosingFunction(
+    contract: ContractDefinition,
+    lineNum: number,
+  ): FunctionDefinition | undefined {
+    return contract.functions.find(
+      (fn) => fn.range.start.line <= lineNum && lineNum <= fn.range.end.line,
+    );
+  }
+
+  private isSameTypeName(left: string, right: string): boolean {
+    return this.normalizeTypeName(left) === this.normalizeTypeName(right);
+  }
+
+  private normalizeTypeName(typeName: string): string {
+    return typeName.replace(/\s+(memory|storage|calldata)\b/g, "").trim();
   }
 
   /**
