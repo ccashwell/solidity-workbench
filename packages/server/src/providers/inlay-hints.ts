@@ -1,9 +1,15 @@
 import type { InlayHint, Range } from "vscode-languageserver/node.js";
 import { InlayHintKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
+import type { ContractDefinition, FunctionDefinition } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import { CALL_LIKE_KEYWORDS, findCommentRanges, isPositionInCommentRanges } from "../utils/text.js";
+
+interface ReceiverExpression {
+  simpleName?: string;
+  explicitTypeName?: string;
+}
 
 /**
  * Provides inlay hints — inline annotations that show parameter names
@@ -48,7 +54,7 @@ export class InlayHintsProvider {
     lines: string[],
     line: string,
     lineNum: number,
-    _uri: string,
+    uri: string,
     commentRanges: Map<number, Array<[number, number]>>,
     hints: InlayHint[],
   ): void {
@@ -67,10 +73,9 @@ export class InlayHintsProvider {
       if (CALL_LIKE_KEYWORDS.has(funcName)) continue;
 
       // Detect `Receiver.funcName(...)` by looking at the char just
-      // before the match. If present, the receiver is the identifier
-      // walking backward through word chars. For a chain like
-      // `a.b.c.fn()` we pick the immediate receiver `c` — that's the
-      // type `fn` belongs to, not the root `a`.
+      // before the match. For a chain like `a.b.c.fn()` we pick the
+      // immediate receiver `c`; for `IERC20(x).fn()` we keep enough
+      // of the cast expression to recover the explicit receiver type.
       const receiver = this.extractReceiver(line, match.index);
 
       // Opening paren immediately follows the identifier (modulo optional
@@ -81,7 +86,7 @@ export class InlayHintsProvider {
       const parseResult = this.parseArgumentList(lines, lineNum, openParenIdx);
       if (!parseResult) continue;
 
-      const paramNames = this.getParameterNames(funcName, receiver);
+      const paramNames = this.getParameterNames(funcName, receiver, uri, lineNum);
       if (paramNames.length === 0) continue;
 
       for (let i = 0; i < Math.min(parseResult.args.length, paramNames.length); i++) {
@@ -226,18 +231,32 @@ export class InlayHintsProvider {
   }
 
   /**
-   * Extract the receiver identifier from `<Receiver>.funcName(` when
+   * Extract the receiver expression from `<Receiver>.funcName(` when
    * the char immediately before the match is a `.`. Returns `null`
-   * for plain `funcName(` calls. Whitespace between the dot and the
-   * function name is legal Solidity but vanishingly rare; we match
-   * the common, no-whitespace form.
+   * for plain `funcName(` calls.
    */
-  private extractReceiver(line: string, funcNameStart: number): string | null {
+  private extractReceiver(line: string, funcNameStart: number): ReceiverExpression | null {
     if (funcNameStart <= 0 || line[funcNameStart - 1] !== ".") return null;
-    let start = funcNameStart - 1;
-    while (start > 0 && /[\w$]/.test(line[start - 1])) start--;
-    const ident = line.slice(start, funcNameStart - 1);
-    return ident || null;
+    const dotIdx = funcNameStart - 1;
+    let end = dotIdx;
+    while (end > 0 && /\s/.test(line[end - 1])) end--;
+
+    if (end > 0 && /[\w$]/.test(line[end - 1])) {
+      let start = end;
+      while (start > 0 && /[\w$]/.test(line[start - 1])) start--;
+      const simpleName = line.slice(start, end);
+      return simpleName ? { simpleName } : null;
+    }
+
+    if (end > 0 && line[end - 1] === ")") {
+      const start = this.findCallExpressionStart(line, end - 1);
+      if (start === null) return {};
+      const text = line.slice(start, end).trim();
+      const explicitTypeName = this.extractExplicitTypeName(text);
+      return explicitTypeName ? { explicitTypeName } : {};
+    }
+
+    return {};
   }
 
   /**
@@ -252,27 +271,42 @@ export class InlayHintsProvider {
    *   - `Receiver.funcName(...)` where `Receiver` resolves to a
    *     contract / interface / library: walk its inheritance chain
    *     and return the matching function's parameter names.
+   *   - `receiver.funcName(...)` where `receiver` is a typed parameter
+   *     or state variable covered by a `using Library for Type`
+   *     directive: resolve the library function and skip its implicit
+   *     first parameter.
    *   - `Receiver.funcName(...)` where `Receiver` doesn't resolve
-   *     (e.g. it's a local variable whose type we can't infer at
-   *     the inlay-hint layer): return `[]`. "Silent when unsure" is
-   *     the right default — surfacing a same-named function from an
-   *     unrelated type would be worse than no hint.
+   *     to a known member or using-for extension: return `[]`.
+   *     "Silent when unsure" is the right default — surfacing a
+   *     same-named function from an unrelated type would be worse
+   *     than no hint.
    *   - `funcName(...)` (no receiver): fall back to the legacy
    *     name-only lookup, preferring the first `function`-kind
    *     symbol whose container we can resolve.
    */
-  private getParameterNames(funcName: string, receiver: string | null): string[] {
+  private getParameterNames(
+    funcName: string,
+    receiver: ReceiverExpression | null,
+    uri: string,
+    lineNum: number,
+  ): string[] {
     if (receiver !== null) {
-      const receiverSymbols = this.symbolIndex.findSymbols(receiver);
+      const receiverName = receiver.simpleName ?? receiver.explicitTypeName;
+      const receiverSymbols = receiverName ? this.symbolIndex.findSymbols(receiverName) : [];
       if (receiverSymbols.some((s) => s.kind === "userDefinedValueType")) return [];
 
-      const chain = this.symbolIndex.getInheritanceChain(receiver);
-      for (const c of chain) {
-        const fn = c.functions.find((f) => f.name === funcName);
-        if (fn) {
-          return fn.parameters.map((p) => p.name).filter((n): n is string => !!n);
+      if (receiverName) {
+        const chain = this.symbolIndex.getInheritanceChain(receiverName);
+        for (const c of chain) {
+          const fn = c.functions.find((f) => f.name === funcName);
+          if (fn) {
+            return fn.parameters.map((p) => p.name).filter((n): n is string => !!n);
+          }
         }
       }
+
+      const usingForParams = this.getUsingForParameterNames(funcName, receiver, uri, lineNum);
+      if (usingForParams.length > 0) return usingForParams;
 
       // Receiver specified but not resolvable to a known type —
       // refuse to guess.
@@ -294,5 +328,109 @@ export class InlayHintsProvider {
       }
     }
     return [];
+  }
+
+  private findCallExpressionStart(line: string, closeParenIdx: number): number | null {
+    let depth = 0;
+    for (let i = closeParenIdx; i >= 0; i--) {
+      const ch = line[i];
+      if (ch === ")") {
+        depth++;
+      } else if (ch === "(") {
+        depth--;
+        if (depth === 0) {
+          let start = i;
+          while (start > 0 && /\s/.test(line[start - 1])) start--;
+          while (start > 0 && /[\w$.]/.test(line[start - 1])) start--;
+          return start;
+        }
+      }
+    }
+    return null;
+  }
+
+  private extractExplicitTypeName(expression: string): string | undefined {
+    const match = /^([A-Za-z_$][\w$.]*)\s*\(/.exec(expression);
+    if (!match) return undefined;
+    const candidate = match[1];
+    return this.symbolIndex
+      .findSymbols(candidate)
+      .some((s) => s.kind === "contract" || s.kind === "interface")
+      ? candidate
+      : undefined;
+  }
+
+  private getUsingForParameterNames(
+    funcName: string,
+    receiver: ReceiverExpression,
+    uri: string,
+    lineNum: number,
+  ): string[] {
+    const contract = this.getEnclosingContract(uri, lineNum);
+    if (!contract) return [];
+
+    const receiverType = this.resolveReceiverType(receiver, contract, lineNum);
+    if (!receiverType) return [];
+
+    for (const directive of contract.usingFor) {
+      if (
+        directive.typeName !== undefined &&
+        !this.isSameTypeName(directive.typeName, receiverType)
+      ) {
+        continue;
+      }
+
+      const library = this.symbolIndex.getContract(directive.libraryName)?.contract;
+      const fn = library?.functions.find((f) => f.name === funcName);
+      if (!fn || fn.parameters.length === 0) continue;
+      if (!this.isSameTypeName(fn.parameters[0].typeName, receiverType)) continue;
+
+      return fn.parameters
+        .slice(1)
+        .map((p) => p.name)
+        .filter((n): n is string => !!n);
+    }
+
+    return [];
+  }
+
+  private getEnclosingContract(uri: string, lineNum: number): ContractDefinition | undefined {
+    const sourceUnit = this.parser.get(uri)?.sourceUnit;
+    return sourceUnit?.contracts.find(
+      (contract) => contract.range.start.line <= lineNum && lineNum <= contract.range.end.line,
+    );
+  }
+
+  private resolveReceiverType(
+    receiver: ReceiverExpression,
+    contract: ContractDefinition,
+    lineNum: number,
+  ): string | undefined {
+    if (receiver.explicitTypeName) return receiver.explicitTypeName;
+    if (!receiver.simpleName) return undefined;
+
+    const fn = this.getEnclosingFunction(contract, lineNum);
+    const parameter = fn?.parameters.find((p) => p.name === receiver.simpleName);
+    if (parameter) return parameter.typeName;
+
+    const stateVariable = contract.stateVariables.find((v) => v.name === receiver.simpleName);
+    return stateVariable?.typeName;
+  }
+
+  private getEnclosingFunction(
+    contract: ContractDefinition,
+    lineNum: number,
+  ): FunctionDefinition | undefined {
+    return contract.functions.find(
+      (fn) => fn.range.start.line <= lineNum && lineNum <= fn.range.end.line,
+    );
+  }
+
+  private isSameTypeName(left: string, right: string): boolean {
+    return this.normalizeTypeName(left) === this.normalizeTypeName(right);
+  }
+
+  private normalizeTypeName(typeName: string): string {
+    return typeName.replace(/\s+(memory|storage|calldata)\b/g, "").trim();
   }
 }

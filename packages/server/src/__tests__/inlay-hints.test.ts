@@ -280,6 +280,76 @@ contract C {
       );
     });
 
+    it("skips the implicit receiver parameter for using-for library calls", () => {
+      const text = `pragma solidity ^0.8.0;
+interface IERC20 {}
+library SafeERC20 {
+    function safeTransfer(IERC20 token, address to, uint256 value) internal {
+        token; to; value;
+    }
+}
+contract C {
+    using SafeERC20 for IERC20;
+
+    function f(IERC20 token, address recipient, uint256 amount) external {
+        token.safeTransfer(recipient, amount);
+    }
+}`;
+      const { doc, provider } = setup("file:///w/SafeErc20.sol", text);
+      const hints = provider.provideInlayHints(doc, {
+        start: { line: 0, character: 0 },
+        end: { line: 20, character: 0 },
+      });
+      const labels = hints.map((h) => h.label);
+      assert.ok(
+        !labels.includes("token:"),
+        `implicit receiver should be skipped; got ${JSON.stringify(labels)}`,
+      );
+      assert.ok(
+        labels.includes("to:"),
+        `expected "to:" from SafeERC20.safeTransfer; got ${JSON.stringify(labels)}`,
+      );
+      assert.ok(
+        labels.includes("value:"),
+        `expected "value:" from SafeERC20.safeTransfer; got ${JSON.stringify(labels)}`,
+      );
+    });
+
+    it("skips the implicit receiver parameter for using-for calls on cast expressions", () => {
+      const text = `pragma solidity ^0.8.0;
+interface IERC20 {}
+library SafeERC20 {
+    function safeTransfer(IERC20 token, address to, uint256 value) internal {
+        token; to; value;
+    }
+}
+contract C {
+    using SafeERC20 for IERC20;
+
+    function f(address token, address recipient, uint256 amount) external {
+        IERC20(token).safeTransfer(recipient, amount);
+    }
+}`;
+      const { doc, provider } = setup("file:///w/SafeErc20Cast.sol", text);
+      const hints = provider.provideInlayHints(doc, {
+        start: { line: 0, character: 0 },
+        end: { line: 20, character: 0 },
+      });
+      const labels = hints.map((h) => h.label);
+      assert.ok(
+        !labels.includes("token:"),
+        `implicit receiver should be skipped; got ${JSON.stringify(labels)}`,
+      );
+      assert.ok(
+        labels.includes("to:"),
+        `expected "to:" from SafeERC20.safeTransfer; got ${JSON.stringify(labels)}`,
+      );
+      assert.ok(
+        labels.includes("value:"),
+        `expected "value:" from SafeERC20.safeTransfer; got ${JSON.stringify(labels)}`,
+      );
+    });
+
     it("still emits hints for plain unqualified function calls", () => {
       // Make sure the receiver-aware path doesn't suppress hints for
       // the common case of an in-scope function call with no dot.
