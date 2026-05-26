@@ -7,8 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-05-21
+
+### Changed
+
+- **CI release publish is Open VSX only** on `v*.*.*` tags: uses `OVSX_TOKEN`
+  (legacy `OVSX_PAT` still accepted), fails the job if the token is missing or
+  `ovsx publish` errors. VS Code Marketplace publish removed from the workflow.
+- **Extension marketplace keywords** expanded for Open VSX discovery (LSP,
+  language server, Solidity IDE, etc.).
+
 ### Fixed
 
+- **File-level Solidity declarations were invisible to much of the LSP.**
+  Struct/enum members, free functions, file-level constants, and UDVTs are now
+  indexed, completed, and surfaced in outline, code lenses, signature help, and
+  go-to-definition — including receiver-typed member access and import aliases.
 - **Hyphenated custom NatSpec tags were folded into the previous
   section.** `@custom:security-contact` now parses as its own
   custom tag instead of becoming continuation text for `@notice` or

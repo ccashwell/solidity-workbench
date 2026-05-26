@@ -61,27 +61,17 @@ jobs:
             exit 1
           fi
 
-      - name: Publish to VS Code Marketplace
-        env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-        run: |
-          if [ -z "${VSCE_PAT:-}" ]; then
-            echo "::warning::VSCE_PAT not set — skipping VS Code Marketplace publish"
-          else
-            cd packages/extension
-            npx --yes @vscode/vsce publish --no-dependencies --pat "$VSCE_PAT"
-          fi
-
       - name: Publish to Open VSX
         env:
-          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+          # Repo secret is OVSX_TOKEN; OVSX_PAT kept as a backwards-compatible alias.
+          OVSX_PAT: ${{ secrets.OVSX_TOKEN || secrets.OVSX_PAT }}
         run: |
           if [ -z "${OVSX_PAT:-}" ]; then
-            echo "::warning::OVSX_PAT not set — skipping Open VSX publish"
-          else
-            VSIX=$(ls packages/extension/*.vsix | head -n 1)
-            npx --yes ovsx publish "$VSIX" --pat "$OVSX_PAT"
+            echo "::error::OVSX_TOKEN (or legacy OVSX_PAT) is required to publish releases"
+            exit 1
           fi
+          VSIX=$(ls packages/extension/*.vsix | head -n 1)
+          npx --yes ovsx publish "$VSIX" --pat "$OVSX_PAT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

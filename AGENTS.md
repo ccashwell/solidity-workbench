@@ -288,15 +288,13 @@ be `v<X.Y.Z>` and must match the `version` field in
 
 1. Verifies tag ↔ version parity
 2. Builds, packages, and verifies VSIX contents
-3. Publishes to VS Code Marketplace via `VSCE_PAT` secret
-4. Publishes to Open VSX via `OVSX_PAT` secret
-5. Attaches the VSIX to a GitHub Release
+3. Publishes to Open VSX via `OVSX_TOKEN` (`ovsx publish` on the built VSIX).
+   Legacy secret name `OVSX_PAT` is still accepted. Missing token or publish
+   failure fails the job — Open VSX is the canonical distribution channel.
+4. Attaches the VSIX to a GitHub Release
 
-Both tokens are optional — missing tokens produce a CI warning but don't
-fail the job. The GitHub Release always happens.
-
-Publisher is `ccashwell`. Do **not** change the publisher without
-coordinating the Azure DevOps PAT.
+VS Code Marketplace publish is not wired in CI yet. Publisher id is
+`ccashwell` on Open VSX.
 
 ---
 
@@ -320,14 +318,24 @@ coordinating the Azure DevOps PAT.
 
 ---
 
-## Agent preferences learned in prior sessions
+## Learned User Preferences
 
 - When reviewing code for findings, **resolve them immediately** — do not stop at "here's a list of issues."
 - Commit scope should match logical change boundaries, not sweep everything into one `WIP` commit.
+- When fixing an audit or review list, land **one commit per item** — do not batch unrelated fixes.
 - Use the `continual-learning` workflow to persist durable facts across sessions — this document is the primary output.
 - Prefer conventional-commit-style messages (`fix(scope): …`, `feat(scope): …`) with a short body explaining _why_.
 - When a feature gets a second implementation (e.g. a new indexer backend), extract the shared helpers into a peer module before adding the variant — do not fork-then-diverge.
 - Split unrelated fixes in a session into separate commits; don't sweep them into one "WIP".
+- When the user needs to test fixes in an installed extension, run `pnpm package` for a VSIX — `pnpm build` alone does not produce one.
+
+## Learned Workspace Facts
+
+- File-level Solidity declarations (structs, enums, errors, free functions, UDVTs) live on `SoliditySourceUnit` outside `contracts`; providers must consult `sourceUnit.structs`, `freeFunctions`, etc., not only `getEnclosingContract`.
+- `using for` library extension calls bind the receiver as the library function's first explicit parameter; inlay hints and signature help must resolve the receiver type via contract `using` directives and omit that parameter from labeled arguments.
+- Webview `buildHtml` inline scripts must register DOM event listeners once at initialization — re-invoked render helpers must update DOM only, not call `addEventListener` again (stacked listeners leak memory).
+- Filesystem watchers that trigger LSP round-trips (e.g. Test Explorer on `**/*.sol`) should debounce rapid create/change/delete bursts (~400ms) from fmt, multi-file saves, and codegen.
+- Comments inside webview HTML template literals must not contain backticks; block comments must not contain `*/` substrings — both break parsing of the surrounding string or comment.
 
 ---
 
