@@ -3,9 +3,11 @@ import { Location } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
 import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
+import { resolveDottedReceiverTypeName } from "../utils/receiver-type.js";
 import { getWordAtPosition } from "../utils/text.js";
 import { readFileSync } from "node:fs";
 
@@ -23,6 +25,7 @@ export class DefinitionProvider {
 
   constructor(
     private symbolIndex: SymbolIndex,
+    private parser: SolidityParser,
     private workspace: WorkspaceManager,
     private resolver?: SemanticResolver,
   ) {}
@@ -57,15 +60,36 @@ export class DefinitionProvider {
       }
     }
 
-    // Check for dotted access (Type.member)
+    // Check for dotted access (Type.member or receiver.member)
     const dottedTarget = this.getDottedAccess(text, position);
     if (dottedTarget) {
+      const receiverType =
+        resolveDottedReceiverTypeName(
+          this.parser,
+          this.symbolIndex,
+          document.uri,
+          position,
+          dottedTarget.type,
+        ) ?? dottedTarget.type;
+
       const resolved = this.resolveMemberDefinition(
-        dottedTarget.type,
+        receiverType,
         dottedTarget.member,
         document.uri,
       );
-      if (resolved || this.resolver) return resolved;
+      if (resolved) return resolved;
+
+      if (this.solcBridge) {
+        const solcResolved = this.resolveViaSolc(document, position);
+        if (solcResolved) {
+          return Location.create(solcResolved.uri, {
+            start: { line: solcResolved.line, character: solcResolved.character },
+            end: { line: solcResolved.line, character: solcResolved.character + word.length },
+          });
+        }
+      }
+
+      return null;
     }
 
     // Look up in symbol index
@@ -213,6 +237,27 @@ export class DefinitionProvider {
         if (entry) return Location.create(entry.uri, event.nameRange);
       }
     }
+
+    const structMember = this.symbolIndex.findContainerMember(
+      memberName,
+      typeName,
+      "structMember",
+      fromUri,
+    );
+    if (structMember) {
+      return Location.create(structMember.filePath, structMember.nameRange);
+    }
+
+    const enumMember = this.symbolIndex.findContainerMember(
+      memberName,
+      typeName,
+      "enumMember",
+      fromUri,
+    );
+    if (enumMember) {
+      return Location.create(enumMember.filePath, enumMember.nameRange);
+    }
+
     return null;
   }
 

@@ -39,7 +39,13 @@ function setup(files: Record<string, string>) {
     docs[uri] = doc(uri, text);
   }
 
-  return { parser, idx, workspace, docs, provider: new DefinitionProvider(idx, workspace) };
+  return {
+    parser,
+    idx,
+    workspace,
+    docs,
+    provider: new DefinitionProvider(idx, parser, workspace),
+  };
 }
 
 describe("DefinitionProvider", () => {
@@ -104,7 +110,7 @@ contract Wrapper {}`;
       parser.parse("file:///w/A.sol", text);
       idx.updateFile("file:///w/A.sol");
 
-      const provider = new DefinitionProvider(idx, workspace);
+      const provider = new DefinitionProvider(idx, parser, workspace);
       const d = doc("file:///w/A.sol", text);
 
       // Place cursor inside `"lib/Token.sol"`
@@ -175,7 +181,7 @@ contract Use {
       }
 
       const resolver = new SemanticResolver(parser, workspace, idx);
-      const provider = new DefinitionProvider(idx, workspace, resolver);
+      const provider = new DefinitionProvider(idx, parser, workspace, resolver);
       const line = files[currentUri].split("\n")[3];
       const def = provider.provideDefinition(docs[currentUri], {
         line: 3,
@@ -186,6 +192,31 @@ contract Use {
       const loc = Array.isArray(def) ? def[0] : def;
       assert.ok("uri" in loc, "expected a Location result");
       assert.equal(loc.uri, srcBaseUri);
+    });
+
+    it("jumps to a struct member through a typed receiver variable", () => {
+      const { docs, provider } = setup({
+        "file:///w/struct-member.sol": `pragma solidity ^0.8.24;
+struct Params { uint256 spacing; }
+contract C {
+    function f(Params memory p) external pure returns (uint256) {
+        return p.spacing;
+    }
+}`,
+      });
+
+      const lines = docs["file:///w/struct-member.sol"].getText().split("\n");
+      const useLine = lines.findIndex((line) => line.includes("p.spacing"));
+      const col = lines[useLine].indexOf("spacing");
+      const def = provider.provideDefinition(docs["file:///w/struct-member.sol"], {
+        line: useLine,
+        character: col,
+      });
+
+      assert.ok(def, "expected struct member definition");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc);
+      assert.equal(loc.range.start.line, 1);
     });
   });
 
