@@ -60,6 +60,9 @@ export class DefinitionProvider {
       }
     }
 
+    const importSymbol = this.resolveImportSymbolAtPosition(text, position, document.uri);
+    if (importSymbol) return importSymbol;
+
     // Check for dotted access (Type.member or receiver.member)
     const dottedTarget = this.getDottedAccess(text, position);
     if (dottedTarget) {
@@ -178,6 +181,68 @@ export class DefinitionProvider {
             return typeSymbols.map((s) => Location.create(s.filePath, s.nameRange));
           }
         }
+      }
+    }
+
+    return null;
+  }
+
+  private resolveImportSymbolAtPosition(
+    text: string,
+    position: Position,
+    fromUri: string,
+  ): Definition | null {
+    const line = text.split("\n")[position.line] ?? "";
+    const braceImport = line.match(/import\s*\{([^}]+)\}\s*from\s*["']([^"']+)["']/);
+    if (!braceImport) return null;
+
+    const symbolSpec = braceImport[1];
+    const importPath = braceImport[2];
+    const pathStart = line.indexOf(importPath);
+    const pathEnd = pathStart + importPath.length;
+    if (position.character >= pathStart && position.character <= pathEnd) {
+      return null;
+    }
+
+    const resolvedPath = this.workspace.resolveImport(
+      importPath,
+      this.workspace.uriToPath(fromUri),
+    );
+    if (!resolvedPath) return null;
+
+    const targetUri = URI.file(resolvedPath).toString();
+    if (!this.parser.get(targetUri)) {
+      try {
+        const source = readFileSync(resolvedPath, "utf-8");
+        this.parser.parse(targetUri, source);
+        this.symbolIndex.updateFile(targetUri);
+      } catch {
+        return null;
+      }
+    }
+
+    const specs = symbolSpec.split(",").map((part) => part.trim());
+    for (const spec of specs) {
+      const asMatch = /^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/.exec(spec);
+      const exportedName = asMatch?.[1] ?? spec;
+      const localName = asMatch?.[2] ?? spec;
+      const labels = asMatch ? [localName, exportedName] : [exportedName];
+
+      for (const label of labels) {
+        const start = line.indexOf(label);
+        if (start < 0) continue;
+        const end = start + label.length;
+        if (position.character < start || position.character > end) continue;
+
+        const symbols = this.symbolIndex
+          .findSymbols(exportedName)
+          .filter((sym) => sym.filePath === targetUri);
+        if (symbols.length === 0) return null;
+        if (symbols.length === 1) {
+          return Location.create(symbols[0].filePath, symbols[0].nameRange);
+        }
+        const sameFile = symbols.filter((s) => s.filePath === targetUri);
+        return sameFile.map((s) => Location.create(s.filePath, s.nameRange));
       }
     }
 

@@ -95,6 +95,45 @@ contract B {
     });
   });
 
+  describe("import symbol aliases", () => {
+    it("jumps to the exported symbol for a named import", () => {
+      const files = {
+        "file:///w/Token.sol": `pragma solidity ^0.8.24;
+contract Token {
+    function mint() external {}
+}`,
+        "file:///w/User.sol": `pragma solidity ^0.8.24;
+import {Token} from "./Token.sol";
+contract User {
+    function f() external {}
+}`,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, from: string) =>
+          importPath === "./Token.sol" && from.endsWith("/User.sol")
+            ? URI.parse("file:///w/Token.sol").fsPath
+            : null,
+      } as unknown as WorkspaceManager;
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, workspace);
+      const docs: Record<string, TextDocument> = {};
+      for (const [uri, text] of Object.entries(files)) {
+        parser.parse(uri, text);
+        idx.updateFile(uri);
+        docs[uri] = doc(uri, text);
+      }
+      const provider = new DefinitionProvider(idx, parser, workspace);
+      const importLine = files["file:///w/User.sol"].split("\n")[1];
+      const col = importLine.indexOf("Token") + 1;
+      const def = provider.provideDefinition(docs["file:///w/User.sol"], { line: 1, character: col });
+      assert.ok(def, "expected definition for imported symbol");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.equal(loc.uri, "file:///w/Token.sol");
+    });
+  });
+
   describe("cross-file resolution via remapped imports", () => {
     it('resolves `import "X/Y.sol"` to an absolute file path', () => {
       const parser = new SolidityParser();
