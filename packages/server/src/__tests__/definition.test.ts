@@ -189,6 +189,39 @@ contract Use {
     });
   });
 
+  describe("file-level declarations", () => {
+    it("jumps to a file-level struct declaration from a parameter type", () => {
+      const { docs, provider } = setup({
+        "file:///w/structs.sol": `pragma solidity ^0.8.24;
+
+struct MigratorParameters {
+    uint256 poolTickSpacing;
+}
+
+contract C {
+    function validate(MigratorParameters memory p) internal pure {}
+}`,
+      });
+
+      const line = docs["file:///w/structs.sol"].getText().split("\n")[7];
+      const col = line.indexOf("MigratorParameters") + 2;
+      const def = provider.provideDefinition(docs["file:///w/structs.sol"], {
+        line: 7,
+        character: col,
+      });
+
+      assert.ok(def, "expected definition for file-level struct");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc);
+      assert.equal(loc.uri, "file:///w/structs.sol");
+      const structLine = docs["file:///w/structs.sol"]
+        .getText()
+        .split("\n")
+        .findIndex((l) => l.includes("struct MigratorParameters"));
+      assert.equal(loc.range.start.line, structLine);
+    });
+  });
+
   describe("robustness", () => {
     it("returns null when the cursor is on whitespace", () => {
       const { docs, provider } = setup({

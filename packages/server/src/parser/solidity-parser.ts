@@ -210,6 +210,8 @@ export class SolidityParser {
     const imports: ImportDirective[] = [];
     const contracts: ContractDefinition[] = [];
     const freeFunctions: FunctionDefinition[] = [];
+    const structs: StructDefinition[] = [];
+    const enums: EnumDefinition[] = [];
     const errors: ErrorDefinition[] = [];
     const userDefinedValueTypes: {
       type: "UserDefinedValueTypeDefinition";
@@ -242,6 +244,14 @@ export class SolidityParser {
           freeFunctions.push(this.mapFunction(node));
           break;
 
+        case "StructDefinition":
+          structs.push(this.mapStruct(node));
+          break;
+
+        case "EnumDefinition":
+          enums.push(this.mapEnum(node));
+          break;
+
         case "CustomErrorType":
         case "CustomErrorDefinition":
           errors.push(this.mapError(node));
@@ -265,6 +275,8 @@ export class SolidityParser {
       imports,
       contracts,
       freeFunctions,
+      structs,
+      enums,
       errors,
       userDefinedValueTypes,
     };
@@ -659,6 +671,8 @@ export class SolidityParser {
       imports: [],
       contracts: [],
       freeFunctions: [],
+      structs: [],
+      enums: [],
       errors: [],
       userDefinedValueTypes: [],
     };

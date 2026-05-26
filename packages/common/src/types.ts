@@ -12,6 +12,10 @@ export interface SoliditySourceUnit {
   contracts: ContractDefinition[];
   /** Free functions (Solidity >=0.7.1) */
   freeFunctions: FunctionDefinition[];
+  /** File-level structs (Solidity >=0.8.0) */
+  structs: StructDefinition[];
+  /** File-level enums (Solidity >=0.8.0) */
+  enums: EnumDefinition[];
   /** Custom errors at file level */
   errors: ErrorDefinition[];
   /** User-defined value types */

@@ -635,7 +635,7 @@ export class CallHierarchyProvider {
   private findLocalVariableType(bodyPrefix: string, name: string): string | undefined {
     const escapedName = escapeRegExp(name);
     const declarationRe = new RegExp(
-      String.raw`(?:^|[;{}\n])\s*([A-Za-z_$][\w$]*(?:\s*\[[^\]]*\])*)\s+(?:(?:memory|storage|calldata)\s+)?${escapedName}\b`,
+      String.raw`(?:^|[;{}\n])\s*([A-Za-z_$][\w$]*(?:\s*\[[^\]]*\])*)\s+(?:(?:memory|storage|calldata)\s+)?${escapedName}\s*(?:=|;|,|\))`,
       "g",
     );
     let match: RegExpExecArray | null;

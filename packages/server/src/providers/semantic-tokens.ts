@@ -414,6 +414,12 @@ export class SemanticTokensProvider {
     for (const udvt of su.userDefinedValueTypes ?? []) {
       if (udvt.name) kinds.set(udvt.name, "type");
     }
+    for (const struct of su.structs ?? []) {
+      if (struct.name) kinds.set(struct.name, "struct");
+    }
+    for (const enumDef of su.enums ?? []) {
+      if (enumDef.name) kinds.set(enumDef.name, "enum");
+    }
     for (const contract of su.contracts) {
       if (contract.name) {
         kinds.set(contract.name, contract.kind === "interface" ? "interface" : "class");

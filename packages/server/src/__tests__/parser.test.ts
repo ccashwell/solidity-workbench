@@ -471,6 +471,30 @@ contract Types {
     });
   });
 
+  describe("file-level structs and enums", () => {
+    it("parses file-level structs", () => {
+      const result = parser.parse(
+        "test.sol",
+        `
+pragma solidity ^0.8.24;
+
+struct MigratorParameters {
+    uint256 poolTickSpacing;
+}
+
+contract C {
+    function validate(MigratorParameters memory p) internal pure {}
+}
+`,
+      );
+
+      assert.equal(result.sourceUnit.structs.length, 1);
+      assert.equal(result.sourceUnit.structs[0].name, "MigratorParameters");
+      assert.equal(result.sourceUnit.structs[0].members.length, 1);
+      assert.equal(result.sourceUnit.structs[0].members[0].name, "poolTickSpacing");
+    });
+  });
+
   describe("free functions", () => {
     it("parses file-level functions", () => {
       const result = parser.parse(

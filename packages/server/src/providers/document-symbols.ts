@@ -41,6 +41,46 @@ export class DocumentSymbolProvider {
       symbols.push(this.buildContractSymbol(contract));
     }
 
+    for (const struct of result.sourceUnit.structs) {
+      symbols.push({
+        name: struct.name,
+        kind: SymbolKind.Struct,
+        range: struct.range,
+        selectionRange: struct.nameRange,
+      });
+    }
+
+    for (const enumDef of result.sourceUnit.enums) {
+      symbols.push({
+        name: enumDef.name,
+        detail: `{ ${enumDef.members.join(", ")} }`,
+        kind: SymbolKind.Enum,
+        range: enumDef.range,
+        selectionRange: enumDef.nameRange,
+      });
+    }
+
+    for (const fn of result.sourceUnit.freeFunctions) {
+      if (!fn.name) continue;
+      symbols.push({
+        name: fn.name,
+        detail: this.buildFunctionDetail(fn),
+        kind: SymbolKind.Function,
+        range: fn.range,
+        selectionRange: fn.nameRange,
+      });
+    }
+
+    for (const err of result.sourceUnit.errors) {
+      symbols.push({
+        name: err.name,
+        detail: "error",
+        kind: SymbolKind.Struct,
+        range: err.range,
+        selectionRange: err.nameRange,
+      });
+    }
+
     return symbols;
   }
 

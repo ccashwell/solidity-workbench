@@ -291,3 +291,105 @@ export function findLineCommentStart(line: string): number {
 
   return -1;
 }
+
+export interface FunctionBodyRange {
+  bodyStartLine: number;
+  bodyStartChar: number;
+  bodyEndLine: number;
+}
+
+/**
+ * Locate the `{ ... }` body of a function starting at `funcStartLine`.
+ * Returns null for interface-style declarations that end with `;`.
+ */
+export function getFunctionBodyRange(
+  text: string,
+  funcStartLine: number,
+): FunctionBodyRange | null {
+  const lines = text.split("\n");
+  let braceDepth = 0;
+  let foundOpen = false;
+  let bodyStartLine = funcStartLine;
+  let bodyStartChar = 0;
+
+  for (let i = funcStartLine; i < lines.length; i++) {
+    const line = lines[i];
+    for (let j = 0; j < line.length; j++) {
+      const ch = line[j];
+      if (ch === "{") {
+        if (!foundOpen) {
+          foundOpen = true;
+          bodyStartLine = i;
+          bodyStartChar = j + 1;
+        }
+        braceDepth++;
+      } else if (ch === "}") {
+        braceDepth--;
+        if (foundOpen && braceDepth === 0) {
+          return { bodyStartLine, bodyStartChar, bodyEndLine: i };
+        }
+      }
+    }
+    if (!foundOpen && line.includes(";")) return null;
+  }
+
+  return null;
+}
+
+/**
+ * Source text from the opening `{` of a function body up to (but not
+ * including) `endLine`/`endChar`. Used to resolve locals declared earlier
+ * in the same function.
+ */
+export function getFunctionBodyTextPrefix(
+  text: string,
+  funcStartLine: number,
+  endLine: number,
+  endChar: number,
+): string | null {
+  const bodyRange = getFunctionBodyRange(text, funcStartLine);
+  if (!bodyRange) return null;
+
+  const lines = text.split("\n");
+  const { bodyStartLine, bodyStartChar, bodyEndLine } = bodyRange;
+
+  if (endLine < bodyStartLine || endLine > bodyEndLine) return null;
+
+  if (endLine === bodyStartLine) {
+    return lines[endLine].slice(bodyStartChar, endChar);
+  }
+
+  const parts = [lines[bodyStartLine].slice(bodyStartChar)];
+  for (let i = bodyStartLine + 1; i < endLine; i++) {
+    parts.push(lines[i]);
+  }
+  parts.push(lines[endLine].slice(0, endChar));
+  return parts.join("\n");
+}
+
+/**
+ * Best-effort lookup of a function-local variable's declared type name by
+ * scanning `bodyPrefix` for `TypeName name` declarations (last match wins).
+ */
+export function findLocalVariableType(bodyPrefix: string, name: string): string | undefined {
+  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const declarationRe = new RegExp(
+    String.raw`(?:^|[;{}\n])\s*([A-Za-z_$][\w$]*(?:\s*\[[^\]]*\])*)\s+(?:(?:memory|storage|calldata)\s+)?${escapedName}\s*(?:=|;|,|\))`,
+    "g",
+  );
+  let match: RegExpExecArray | null;
+  let typeName: string | undefined;
+  while ((match = declarationRe.exec(bodyPrefix)) !== null) {
+    typeName = stripTypeDecorations(match[1]);
+  }
+  return typeName;
+}
+
+export function stripTypeDecorations(typeName: string | undefined): string | undefined {
+  if (!typeName) return undefined;
+  return typeName
+    .replace(/\s+(memory|storage|calldata|payable)\b/g, "")
+    .replace(/\[[^\]]*\]/g, "")
+    .trim()
+    .split(/\s+/)[0];
+}

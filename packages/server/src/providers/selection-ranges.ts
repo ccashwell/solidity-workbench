@@ -62,6 +62,12 @@ export class SelectionRangesProvider {
     for (const fn of sourceUnit.freeFunctions) {
       if (this.contains(fn.range, position)) ranges.push(fn.range);
     }
+    for (const struct of sourceUnit.structs) {
+      if (this.contains(struct.range, position)) ranges.push(struct.range);
+    }
+    for (const enumDef of sourceUnit.enums) {
+      if (this.contains(enumDef.range, position)) ranges.push(enumDef.range);
+    }
     for (const err of sourceUnit.errors) {
       if (this.contains(err.range, position)) ranges.push(err.range);
     }

@@ -368,6 +368,29 @@ export class SymbolIndex {
       });
     }
 
+    // File-level structs and enums (Solidity >=0.8.0)
+    for (const struct of su.structs) {
+      newSymbols.push({
+        name: struct.name,
+        kind: "struct",
+        filePath: uri,
+        range: struct.range,
+        nameRange: struct.nameRange,
+        natspec: struct.natspec,
+      });
+    }
+
+    for (const enumDef of su.enums) {
+      newSymbols.push({
+        name: enumDef.name,
+        kind: "enum",
+        filePath: uri,
+        range: enumDef.range,
+        nameRange: enumDef.nameRange,
+        natspec: enumDef.natspec,
+      });
+    }
+
     // File-level custom errors
     for (const err of su.errors) {
       newSymbols.push({

@@ -408,7 +408,30 @@ contract C {
       assert.match(value, /Defined in.*SafeMath/, `expected SafeMath container; got ${value}`);
     });
 
-    it("resolves member hovers through a typed receiver variable", () => {
+    it("hovers a file-level struct type used in a function parameter", () => {
+      const code = `pragma solidity ^0.8.24;
+
+/// @notice Parameters for the migrator.
+struct MigratorParameters {
+    uint256 poolTickSpacing;
+}
+
+contract C {
+    function validate(MigratorParameters memory p) internal pure {}
+}`;
+      const { doc, provider } = setup("file:///w/FileStruct.sol", code);
+      const lines = code.split("\n");
+      const sigLine = lines.findIndex((line) => line.includes("function validate"));
+      const col = lines[sigLine].indexOf("MigratorParameters") + 2;
+      const h = provider.provideHover(doc, { line: sigLine, character: col });
+      assert.ok(h, "expected hover on file-level struct type");
+      assert.ok(!Array.isArray(h.contents) && typeof h.contents !== "string");
+      const value = h.contents.value;
+      assert.match(value, /struct MigratorParameters/);
+      assert.match(value, /Parameters for the migrator/);
+    });
+
+    it("resolves member hovers through a typed receiver parameter", () => {
       const code = `interface ILBPInitializer {
     /// @notice Returns the token used by the initializer.
     function token() external view returns (address);
@@ -427,6 +450,34 @@ contract C {
       const tokenCol = lines[callLine].indexOf(".token") + 1;
       const h = provider.provideHover(doc, { line: callLine, character: tokenCol });
       assert.ok(h, "expected hover on typed receiver member");
+      assert.ok(!Array.isArray(h.contents) && typeof h.contents !== "string");
+      const value = h.contents.value;
+      assert.match(value, /function token\(\) external view returns \(address\)/);
+      assert.match(value, /Returns the token used by the initializer/);
+      assert.match(value, /Defined in.*ILBPInitializer/);
+      assert.doesNotMatch(value, /unrelated/);
+    });
+
+    it("resolves member hovers through a typed function-local variable", () => {
+      const code = `interface ILBPInitializer {
+    /// @notice Returns the token used by the initializer.
+    function token() external view returns (address);
+}
+contract Other {
+    function token(uint256 unrelated) external returns (address) { return address(0); }
+}
+contract C {
+    function f() external view returns (address) {
+        ILBPInitializer initializer = ILBPInitializer(address(0));
+        return initializer.token();
+    }
+}`;
+      const { doc, provider } = setup("file:///w/LocalReceiverHover.sol", code);
+      const lines = code.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("initializer.token"));
+      const tokenCol = lines[callLine].indexOf(".token") + 1;
+      const h = provider.provideHover(doc, { line: callLine, character: tokenCol });
+      assert.ok(h, "expected hover on local receiver member");
       assert.ok(!Array.isArray(h.contents) && typeof h.contents !== "string");
       const value = h.contents.value;
       assert.match(value, /function token\(\) external view returns \(address\)/);

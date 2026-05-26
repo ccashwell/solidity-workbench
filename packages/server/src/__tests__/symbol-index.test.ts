@@ -116,6 +116,33 @@ error MyError(uint256 x);
       assert.equal(syms[0].containerName, undefined);
     });
 
+    it("indexes file-level structs with no containerName", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      indexText(
+        parser,
+        idx,
+        "file:///w/structs.sol",
+        `
+pragma solidity ^0.8.24;
+
+struct MigratorParameters {
+    uint256 poolTickSpacing;
+}
+
+contract C {
+    function validate(MigratorParameters memory p) internal pure {}
+}
+`,
+      );
+
+      const syms = idx.findSymbols("MigratorParameters");
+      assert.equal(syms.length, 1);
+      assert.equal(syms[0].kind, "struct");
+      assert.equal(syms[0].containerName, undefined);
+      assert.equal(syms[0].nameRange.start.line, 3);
+    });
+
     it("indexes user-defined value types", () => {
       const parser = new SolidityParser();
       const idx = new SymbolIndex(parser, makeFakeWorkspace());

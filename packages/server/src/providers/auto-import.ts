@@ -327,6 +327,8 @@ export class AutoImportProvider {
     }
 
     for (const udvt of su.userDefinedValueTypes) names.add(udvt.name);
+    for (const struct of su.structs) names.add(struct.name);
+    for (const enumDef of su.enums) names.add(enumDef.name);
     for (const err of su.errors) names.add(err.name);
     for (const fn of su.freeFunctions) if (fn.name) names.add(fn.name);
 

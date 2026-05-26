@@ -17,6 +17,10 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { URI } from "vscode-uri";
 import { readFileSync } from "node:fs";
+import {
+  findLocalVariableType,
+  getFunctionBodyTextPrefix,
+} from "../utils/text.js";
 
 interface ReceiverExpression {
   simpleName?: string;
@@ -163,11 +167,11 @@ export class HoverProvider {
       receiver,
       member,
       fromUri,
-      position.line,
+      position,
     );
     if (typedReceiverHover) return typedReceiverHover;
 
-    const usingForHover = this.resolveUsingForHover(receiver, member, fromUri, position.line);
+    const usingForHover = this.resolveUsingForHover(receiver, member, fromUri, position);
     if (usingForHover) return usingForHover;
 
     return null;
@@ -455,12 +459,12 @@ export class HoverProvider {
     receiver: ReceiverExpression,
     member: string,
     fromUri: string,
-    lineNum: number,
+    position: Position,
   ): Hover | null {
-    const contract = this.getEnclosingContract(fromUri, lineNum);
+    const contract = this.getEnclosingContract(fromUri, position.line);
     if (!contract) return null;
 
-    const receiverType = this.resolveReceiverType(receiver, contract, lineNum);
+    const receiverType = this.resolveReceiverType(receiver, contract, fromUri, position);
     if (!receiverType) return null;
 
     for (const directive of contract.usingFor) {
@@ -487,12 +491,12 @@ export class HoverProvider {
     receiver: ReceiverExpression,
     member: string,
     fromUri: string,
-    lineNum: number,
+    position: Position,
   ): Hover | null {
-    const contract = this.getEnclosingContract(fromUri, lineNum);
+    const contract = this.getEnclosingContract(fromUri, position.line);
     if (!contract) return null;
 
-    const receiverType = this.resolveReceiverType(receiver, contract, lineNum);
+    const receiverType = this.resolveReceiverType(receiver, contract, fromUri, position);
     if (!receiverType) return null;
 
     const typeName = this.normalizeTypeName(receiverType);
@@ -526,14 +530,29 @@ export class HoverProvider {
   private resolveReceiverType(
     receiver: ReceiverExpression,
     contract: ContractDefinition,
-    lineNum: number,
+    fromUri: string,
+    position: Position,
   ): string | undefined {
     if (receiver.explicitTypeName) return receiver.explicitTypeName;
     if (!receiver.simpleName) return undefined;
 
-    const fn = this.getEnclosingFunction(contract, lineNum);
+    const fn = this.getEnclosingFunction(contract, position.line);
     const parameter = fn?.parameters.find((p) => p.name === receiver.simpleName);
     if (parameter) return parameter.typeName;
+
+    const text = this.parser.getText(fromUri);
+    if (text && fn) {
+      const bodyPrefix = getFunctionBodyTextPrefix(
+        text,
+        fn.range.start.line,
+        position.line,
+        position.character,
+      );
+      if (bodyPrefix) {
+        const localType = findLocalVariableType(bodyPrefix, receiver.simpleName);
+        if (localType) return localType;
+      }
+    }
 
     const stateVariable = contract.stateVariables.find((v) => v.name === receiver.simpleName);
     return stateVariable?.typeName;

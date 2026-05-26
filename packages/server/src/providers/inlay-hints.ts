@@ -4,7 +4,13 @@ import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { ContractDefinition, FunctionDefinition } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
-import { CALL_LIKE_KEYWORDS, findCommentRanges, isPositionInCommentRanges } from "../utils/text.js";
+import {
+  CALL_LIKE_KEYWORDS,
+  findCommentRanges,
+  findLocalVariableType,
+  getFunctionBodyTextPrefix,
+  isPositionInCommentRanges,
+} from "../utils/text.js";
 
 interface ReceiverExpression {
   simpleName?: string;
@@ -86,7 +92,7 @@ export class InlayHintsProvider {
       const parseResult = this.parseArgumentList(lines, lineNum, openParenIdx);
       if (!parseResult) continue;
 
-      const paramNames = this.getParameterNames(funcName, receiver, uri, lineNum);
+      const paramNames = this.getParameterNames(funcName, receiver, uri, lineNum, match.index);
       if (paramNames.length === 0) continue;
 
       for (let i = 0; i < Math.min(parseResult.args.length, paramNames.length); i++) {
@@ -291,6 +297,7 @@ export class InlayHintsProvider {
     receiver: ReceiverExpression | null,
     uri: string,
     lineNum: number,
+    lineChar: number,
   ): string[] {
     if (receiver !== null) {
       const receiverName = receiver.simpleName ?? receiver.explicitTypeName;
@@ -307,7 +314,13 @@ export class InlayHintsProvider {
         }
       }
 
-      const usingForParams = this.getUsingForParameterNames(funcName, receiver, uri, lineNum);
+      const usingForParams = this.getUsingForParameterNames(
+        funcName,
+        receiver,
+        uri,
+        lineNum,
+        lineChar,
+      );
       if (usingForParams.length > 0) return usingForParams;
 
       // Receiver specified but not resolvable to a known type —
@@ -367,11 +380,12 @@ export class InlayHintsProvider {
     receiver: ReceiverExpression,
     uri: string,
     lineNum: number,
+    lineChar: number,
   ): string[] {
     const contract = this.getEnclosingContract(uri, lineNum);
     if (!contract) return [];
 
-    const receiverType = this.resolveReceiverType(receiver, contract, lineNum);
+    const receiverType = this.resolveReceiverType(receiver, contract, uri, lineNum, lineChar);
     if (!receiverType) return [];
 
     for (const directive of contract.usingFor) {
@@ -406,7 +420,9 @@ export class InlayHintsProvider {
   private resolveReceiverType(
     receiver: ReceiverExpression,
     contract: ContractDefinition,
+    uri: string,
     lineNum: number,
+    lineChar: number,
   ): string | undefined {
     if (receiver.explicitTypeName) return receiver.explicitTypeName;
     if (!receiver.simpleName) return undefined;
@@ -414,6 +430,20 @@ export class InlayHintsProvider {
     const fn = this.getEnclosingFunction(contract, lineNum);
     const parameter = fn?.parameters.find((p) => p.name === receiver.simpleName);
     if (parameter) return parameter.typeName;
+
+    const text = this.parser.getText(uri);
+    if (text && fn) {
+      const bodyPrefix = getFunctionBodyTextPrefix(
+        text,
+        fn.range.start.line,
+        lineNum,
+        lineChar,
+      );
+      if (bodyPrefix) {
+        const localType = findLocalVariableType(bodyPrefix, receiver.simpleName);
+        if (localType) return localType;
+      }
+    }
 
     const stateVariable = contract.stateVariables.find((v) => v.name === receiver.simpleName);
     return stateVariable?.typeName;
