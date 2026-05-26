@@ -375,6 +375,18 @@ export class SymbolIndex {
       });
     }
 
+    for (const constant of su.fileConstants) {
+      newSymbols.push({
+        name: constant.name,
+        kind: "fileConstant",
+        filePath: uri,
+        range: constant.range,
+        nameRange: constant.nameRange,
+        detail: constant.typeName,
+        natspec: constant.natspec,
+      });
+    }
+
     // File-level user-defined value types (e.g. `type Fixed is uint256;`)
     for (const udvt of su.userDefinedValueTypes) {
       newSymbols.push({

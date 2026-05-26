@@ -472,6 +472,23 @@ contract Types {
     });
   });
 
+  describe("file-level constants", () => {
+    it("parses file-level constants", () => {
+      const result = parser.parse(
+        "test.sol",
+        `
+pragma solidity ^0.8.24;
+
+uint256 constant MAX_SUPPLY = 1_000;
+`,
+      );
+
+      assert.equal(result.sourceUnit.fileConstants.length, 1);
+      assert.equal(result.sourceUnit.fileConstants[0].name, "MAX_SUPPLY");
+      assert.equal(result.sourceUnit.fileConstants[0].typeName, "uint256");
+    });
+  });
+
   describe("file-level structs and enums", () => {
     it("parses file-level structs", () => {
       const result = parser.parse(

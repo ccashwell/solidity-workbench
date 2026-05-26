@@ -19,6 +19,7 @@ import type {
   ContractKind,
   ParameterDeclaration,
   NatspecComment,
+  FileConstantDefinition,
 } from "@solidity-workbench/common";
 
 /**
@@ -213,6 +214,7 @@ export class SolidityParser {
     const structs: StructDefinition[] = [];
     const enums: EnumDefinition[] = [];
     const errors: ErrorDefinition[] = [];
+    const fileConstants: FileConstantDefinition[] = [];
     const userDefinedValueTypes: {
       type: "UserDefinedValueTypeDefinition";
       name: string;
@@ -257,6 +259,17 @@ export class SolidityParser {
           errors.push(this.mapError(node));
           break;
 
+        case "FileLevelConstant":
+          fileConstants.push({
+            type: "FileConstantDefinition",
+            typeName: this.typeNameToString(node.typeName),
+            name: node.name,
+            mutability: node.isDeclaredConst ? "constant" : "immutable",
+            range: this.locToRange(node.loc),
+            nameRange: this.nameRange(node),
+          });
+          break;
+
         case "TypeDefinition":
           userDefinedValueTypes.push({
             type: "UserDefinedValueTypeDefinition",
@@ -279,7 +292,7 @@ export class SolidityParser {
       enums,
       errors,
       userDefinedValueTypes,
-      fileConstants: [],
+      fileConstants,
     };
   }
 

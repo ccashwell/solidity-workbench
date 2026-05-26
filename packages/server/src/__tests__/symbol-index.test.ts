@@ -176,6 +176,26 @@ contract C {
       assert.equal(syms[0].nameRange.start.line, 3);
     });
 
+    it("indexes file-level constants", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      indexText(
+        parser,
+        idx,
+        "file:///w/constants.sol",
+        `
+pragma solidity ^0.8.24;
+
+uint256 constant MAX_SUPPLY = 1_000;
+`,
+      );
+
+      const syms = idx.findSymbols("MAX_SUPPLY");
+      assert.equal(syms.length, 1);
+      assert.equal(syms[0].kind, "fileConstant");
+      assert.equal(syms[0].detail, "uint256");
+    });
+
     it("indexes user-defined value types", () => {
       const parser = new SolidityParser();
       const idx = new SymbolIndex(parser, makeFakeWorkspace());

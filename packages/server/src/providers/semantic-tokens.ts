@@ -420,6 +420,9 @@ export class SemanticTokensProvider {
     for (const enumDef of su.enums ?? []) {
       if (enumDef.name) kinds.set(enumDef.name, "enum");
     }
+    for (const constant of su.fileConstants ?? []) {
+      if (constant.name) kinds.set(constant.name, "property");
+    }
     for (const contract of su.contracts) {
       if (contract.name) {
         kinds.set(contract.name, contract.kind === "interface" ? "interface" : "class");

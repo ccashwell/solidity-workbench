@@ -74,6 +74,9 @@ export class SelectionRangesProvider {
     for (const udvt of sourceUnit.userDefinedValueTypes) {
       if (this.contains(udvt.range, position)) ranges.push(udvt.range);
     }
+    for (const constant of sourceUnit.fileConstants) {
+      if (this.contains(constant.range, position)) ranges.push(constant.range);
+    }
     return ranges.sort((a, b) => this.size(a) - this.size(b));
   }
 
