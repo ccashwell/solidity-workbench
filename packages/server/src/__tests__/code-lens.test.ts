@@ -140,6 +140,38 @@ contract User2 { Foo public b; }`;
       );
     });
 
+    it("emits reference and selector lenses for a file-level function", () => {
+      const uri = "file:///w/FreeFn.sol";
+      const text = `function helper(uint256 x) external pure returns (uint256) {
+    return x;
+}
+contract C {
+    function useHelper() external pure returns (uint256) {
+        return helper(1);
+    }
+}`;
+      const { doc, provider } = setup(uri, text);
+      const lenses = provider.provideCodeLenses(doc);
+
+      const refLens = lenses.find(
+        (l) =>
+          l.command?.command === "solidity-workbench.findReferencesAt" &&
+          l.range.start.line === 0,
+      );
+      assert.ok(refLens, `expected reference lens for helper; got ${JSON.stringify(lenses)}`);
+
+      const selectorLens = lenses.find(
+        (l) =>
+          l.command?.command === "solidity-workbench.copySelector" &&
+          /^selector: 0x[0-9a-f]{8}$/.test(l.command?.title ?? "") &&
+          l.range.start.line === 0,
+      );
+      assert.ok(
+        selectorLens,
+        `expected selector lens for file-level helper; got ${JSON.stringify(lenses.map((l) => l.command?.title))}`,
+      );
+    });
+
     it("emits a selector lens for a file-level (global) error", () => {
       // Solidity 0.8.4+ allows top-level errors outside any contract.
       const uri = "file:///w/C.sol";

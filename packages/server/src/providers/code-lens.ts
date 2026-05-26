@@ -190,6 +190,33 @@ export class CodeLensProvider {
       }
     }
 
+    for (const fn of result.sourceUnit.freeFunctions) {
+      if (!fn.name) continue;
+
+      if (!isTestFile && fn.name) {
+        const funcLens = this.createReferenceLens(fn.name, fn.nameRange, document.uri);
+        if (funcLens) lenses.push(funcLens);
+      }
+
+      if (
+        (fn.visibility === "external" || fn.visibility === "public") &&
+        fn.kind === "function"
+      ) {
+        const selector = this.computeSelector(
+          fn.name,
+          fn.parameters,
+        );
+        lenses.push({
+          range: fn.range,
+          command: {
+            title: `selector: ${selector}`,
+            command: "solidity-workbench.copySelector",
+            arguments: [selector],
+          },
+        });
+      }
+    }
+
     // File-level custom errors (Solidity >= 0.8.4) also get a selector
     // lens. They have no containing contract so the solc cache lookup
     // is skipped — we always compute locally.
