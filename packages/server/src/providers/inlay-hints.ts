@@ -1,21 +1,19 @@
 import type { InlayHint, Range } from "vscode-languageserver/node.js";
 import { InlayHintKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
-import type { ContractDefinition, FunctionDefinition } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import {
+  isSameTypeName,
+  resolveReceiverTypeName,
+  type ReceiverExpression,
+} from "../utils/receiver-type.js";
+import { getEnclosingContract } from "../utils/scope.js";
+import {
   CALL_LIKE_KEYWORDS,
   findCommentRanges,
-  findLocalVariableType,
-  getFunctionBodyTextPrefix,
   isPositionInCommentRanges,
 } from "../utils/text.js";
-
-interface ReceiverExpression {
-  simpleName?: string;
-  explicitTypeName?: string;
-}
 
 /**
  * Provides inlay hints — inline annotations that show parameter names
@@ -385,13 +383,16 @@ export class InlayHintsProvider {
     const contract = this.getEnclosingContract(uri, lineNum);
     if (!contract) return [];
 
-    const receiverType = this.resolveReceiverType(receiver, contract, uri, lineNum, lineChar);
+    const receiverType = resolveReceiverTypeName(this.parser, this.symbolIndex, uri, {
+      line: lineNum,
+      character: lineChar,
+    }, receiver);
     if (!receiverType) return [];
 
     for (const directive of contract.usingFor) {
       if (
         directive.typeName !== undefined &&
-        !this.isSameTypeName(directive.typeName, receiverType)
+        !isSameTypeName(directive.typeName, receiverType)
       ) {
         continue;
       }
@@ -399,7 +400,7 @@ export class InlayHintsProvider {
       const library = this.symbolIndex.getContract(directive.libraryName)?.contract;
       const fn = library?.functions.find((f) => f.name === funcName);
       if (!fn || fn.parameters.length === 0) continue;
-      if (!this.isSameTypeName(fn.parameters[0].typeName, receiverType)) continue;
+      if (!isSameTypeName(fn.parameters[0].typeName, receiverType)) continue;
 
       return fn.parameters
         .slice(1)
@@ -410,59 +411,9 @@ export class InlayHintsProvider {
     return [];
   }
 
-  private getEnclosingContract(uri: string, lineNum: number): ContractDefinition | undefined {
+  private getEnclosingContract(uri: string, lineNum: number) {
     const sourceUnit = this.parser.get(uri)?.sourceUnit;
-    return sourceUnit?.contracts.find(
-      (contract) => contract.range.start.line <= lineNum && lineNum <= contract.range.end.line,
-    );
-  }
-
-  private resolveReceiverType(
-    receiver: ReceiverExpression,
-    contract: ContractDefinition,
-    uri: string,
-    lineNum: number,
-    lineChar: number,
-  ): string | undefined {
-    if (receiver.explicitTypeName) return receiver.explicitTypeName;
-    if (!receiver.simpleName) return undefined;
-
-    const fn = this.getEnclosingFunction(contract, lineNum);
-    const parameter = fn?.parameters.find((p) => p.name === receiver.simpleName);
-    if (parameter) return parameter.typeName;
-
-    const text = this.parser.getText(uri);
-    if (text && fn) {
-      const bodyPrefix = getFunctionBodyTextPrefix(
-        text,
-        fn.range.start.line,
-        lineNum,
-        lineChar,
-      );
-      if (bodyPrefix) {
-        const localType = findLocalVariableType(bodyPrefix, receiver.simpleName);
-        if (localType) return localType;
-      }
-    }
-
-    const stateVariable = contract.stateVariables.find((v) => v.name === receiver.simpleName);
-    return stateVariable?.typeName;
-  }
-
-  private getEnclosingFunction(
-    contract: ContractDefinition,
-    lineNum: number,
-  ): FunctionDefinition | undefined {
-    return contract.functions.find(
-      (fn) => fn.range.start.line <= lineNum && lineNum <= fn.range.end.line,
-    );
-  }
-
-  private isSameTypeName(left: string, right: string): boolean {
-    return this.normalizeTypeName(left) === this.normalizeTypeName(right);
-  }
-
-  private normalizeTypeName(typeName: string): string {
-    return typeName.replace(/\s+(memory|storage|calldata)\b/g, "").trim();
+    if (!sourceUnit) return undefined;
+    return getEnclosingContract(sourceUnit, lineNum);
   }
 }

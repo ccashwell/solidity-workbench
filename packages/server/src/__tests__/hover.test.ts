@@ -476,6 +476,24 @@ contract C {
       assert.doesNotMatch(value, /unrelated/);
     });
 
+    it("resolves member hovers inside a file-level free function", () => {
+      const code = `interface IToken {
+    function decimals() external view returns (uint8);
+}
+function readDecimals(IToken token) pure returns (uint8) {
+    return token.decimals();
+}`;
+      const { doc, provider } = setup("file:///w/FreeFnHover.sol", code);
+      const lines = code.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("token.decimals"));
+      const col = lines[callLine].indexOf(".decimals") + 1;
+      const h = provider.provideHover(doc, { line: callLine, character: col });
+      assert.ok(h, "expected hover on member inside free function");
+      assert.ok(!Array.isArray(h.contents) && typeof h.contents !== "string");
+      assert.match(h.contents.value, /function decimals\(\)/);
+      assert.match(h.contents.value, /IToken/);
+    });
+
     it("resolves member hovers through a typed function-local variable", () => {
       const code = `interface ILBPInitializer {
     /// @notice Returns the token used by the initializer.
