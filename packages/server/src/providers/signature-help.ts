@@ -137,7 +137,6 @@ export class SignatureHelpProvider {
     const symbols = this.symbolIndex.findSymbols(funcName);
     for (const sym of symbols) {
       if (sym.kind === "function" || sym.kind === "event" || sym.kind === "error") {
-        // Get the full function definition from the contract
         if (sym.containerName) {
           const entry = this.symbolIndex.getContract(sym.containerName);
           if (entry) {
@@ -146,17 +145,27 @@ export class SignatureHelpProvider {
               signatures.push(this.buildSignature(func, sym.containerName));
               continue;
             }
-            // Check events
             const event = entry.contract.events.find((e) => e.name === funcName);
             if (event) {
               signatures.push(this.buildEventSignature(event));
               continue;
             }
-            // Check errors
             const error = entry.contract.errors.find((e) => e.name === funcName);
             if (error) {
               signatures.push(this.buildErrorSignature(error));
             }
+          }
+        } else if (sym.kind === "function") {
+          const parsed = this.parser.get(sym.filePath);
+          const fn = parsed?.sourceUnit.freeFunctions.find((f) => f.name === funcName);
+          if (fn) {
+            signatures.push(this.buildSignature(fn, ""));
+          }
+        } else if (sym.kind === "error") {
+          const parsed = this.parser.get(sym.filePath);
+          const err = parsed?.sourceUnit.errors.find((e) => e.name === funcName);
+          if (err) {
+            signatures.push(this.buildErrorSignature(err));
           }
         }
       }

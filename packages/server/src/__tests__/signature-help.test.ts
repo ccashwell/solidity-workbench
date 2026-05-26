@@ -93,6 +93,25 @@ contract C {
       assert.match(label, /address to/);
       assert.match(label, /uint256 amount/);
     });
+
+    it("returns signatures for file-level free functions", () => {
+      const text = `pragma solidity ^0.8.24;
+function add(uint256 a, uint256 b) pure returns (uint256) {
+    return a + b;
+}
+contract C {
+    function f() external pure {
+        add(1, 2);
+    }
+}`;
+      const { doc, provider } = setup("file:///w/FreeFnSig.sol", text);
+      const lines = text.split("\n");
+      const callLine = lines.findIndex((l) => l.includes("add(1"));
+      const col = lines[callLine].indexOf("add(") + "add(".length;
+      const sig = provider.provideSignatureHelp(doc, { line: callLine, character: col });
+      assert.ok(sig, "expected signature help for free function");
+      assert.match(sig!.signatures[0].label, /add\(uint256 a, uint256 b\)/);
+    });
   });
 
   describe("robustness", () => {
