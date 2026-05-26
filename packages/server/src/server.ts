@@ -149,7 +149,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   if (parserPool) parser.setPool(parserPool);
 
   semanticResolver = new SemanticResolver(parser, workspaceManager, symbolIndex);
-  completionProvider = new CompletionProvider(symbolIndex, workspaceManager);
+  completionProvider = new CompletionProvider(symbolIndex, parser, workspaceManager);
   definitionProvider = new DefinitionProvider(symbolIndex, workspaceManager, semanticResolver);
   hoverProvider = new HoverProvider(symbolIndex, parser, workspaceManager, semanticResolver);
   diagnosticsProvider = new DiagnosticsProvider(workspaceManager, connection, documents);

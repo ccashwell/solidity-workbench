@@ -3,8 +3,10 @@ import { CompletionItemKind, InsertTextFormat, MarkupKind } from "vscode-languag
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolKind } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
+import { resolveReceiverTypeName } from "../utils/receiver-type.js";
 
 /**
  * Provides context-aware completions for Solidity.
@@ -20,6 +22,7 @@ export class CompletionProvider {
 
   constructor(
     private symbolIndex: SymbolIndex,
+    private parser: SolidityParser,
     private workspace: WorkspaceManager,
   ) {}
 
@@ -151,15 +154,34 @@ export class CompletionProvider {
       return this.contractMemberCompletions(target);
     }
 
-    // 2. Variable of a contract/interface/library type, resolved via solc
+    const structItems = this.structMemberCompletions(target, document.uri);
+    if (structItems.length > 0) return structItems;
+
+    const parserResolvedType = resolveReceiverTypeName(
+      this.parser,
+      this.symbolIndex,
+      document.uri,
+      position,
+      { simpleName: target },
+    );
+    if (parserResolvedType) {
+      const viaParserContract = this.symbolIndex.getContract(parserResolvedType);
+      if (viaParserContract) {
+        return this.contractMemberCompletions(parserResolvedType);
+      }
+      const viaParserStruct = this.structMemberCompletions(parserResolvedType, document.uri);
+      if (viaParserStruct.length > 0) return viaParserStruct;
+    }
+
+    // 2. Variable of a contract/interface/library/struct type, resolved via solc
     const resolvedType = this.resolveVariableTypeName(document, position, target);
     if (resolvedType) {
       const viaType = this.symbolIndex.getContract(resolvedType);
       if (viaType) {
         return this.contractMemberCompletions(resolvedType);
       }
-      const structItems = this.structMemberCompletions(resolvedType);
-      if (structItems.length > 0) return structItems;
+      const viaSolcStruct = this.structMemberCompletions(resolvedType, document.uri);
+      if (viaSolcStruct.length > 0) return viaSolcStruct;
     }
 
     // 3. Address member completions (heuristic + name hint)
@@ -272,16 +294,15 @@ export class CompletionProvider {
     return items;
   }
 
-  private structMemberCompletions(structName: string): CompletionItem[] {
+  private structMemberCompletions(structName: string, fromUri?: string): CompletionItem[] {
     const items: CompletionItem[] = [];
     const structSymbols = this.symbolIndex
       .findSymbols(structName)
-      .filter((s) => s.kind === "struct");
+      .filter((s) => s.kind === "struct")
+      .filter((s) => !fromUri || s.filePath === fromUri);
 
     for (const sym of structSymbols) {
-      if (!sym.containerName) continue;
-      const entry = this.symbolIndex.getContract(sym.containerName);
-      const struct = entry?.contract.structs.find((s) => s.name === structName);
+      const struct = this.symbolIndex.getStruct(sym.filePath, structName);
       if (!struct) continue;
 
       for (const member of struct.members) {

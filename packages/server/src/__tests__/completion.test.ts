@@ -25,7 +25,7 @@ function setup(uri: string, text: string) {
   idx.updateFile(uri);
   return {
     doc: TextDocument.create(uri, "solidity", 1, text),
-    provider: new CompletionProvider(idx, makeFakeWorkspace()),
+    provider: new CompletionProvider(idx, parser, makeFakeWorkspace()),
   };
 }
 
@@ -163,6 +163,25 @@ contract User {
       assert.ok(ls.has("deposit"), "public state var should appear");
       assert.ok(ls.has("withdraw"), "external function should appear");
       assert.ok(!ls.has("_internal"), "private function should NOT appear");
+    });
+
+    it("returns struct members for a variable of a file-level struct type", () => {
+      const text = `pragma solidity ^0.8.24;
+struct Params {
+    uint256 spacing;
+}
+contract C {
+    function f(Params memory p) external pure returns (uint256) {
+        return p.spacing;
+    }
+}`;
+      const { doc, provider } = setup("file:///w/FileStruct.sol", text);
+      const lines = text.split("\n");
+      const line = lines.findIndex((l) => l.includes("p.spacing"));
+      const col = lines[line].indexOf("p.") + 2;
+      const items = provider.provideCompletions(doc, { line, character: col });
+      const ls = labels(items);
+      assert.ok(ls.has("spacing"), "file-level struct member should complete on typed variable");
     });
 
     it("returns contract members after an explicit type cast", () => {
