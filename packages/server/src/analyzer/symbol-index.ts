@@ -7,6 +7,8 @@ import type {
   SymbolKind,
   ContractDefinition,
   FunctionDefinition,
+  StructDefinition,
+  EnumDefinition,
 } from "@solidity-workbench/common";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
@@ -316,28 +318,12 @@ export class SymbolIndex {
 
       // Structs
       for (const struct of contract.structs) {
-        newSymbols.push({
-          name: struct.name,
-          kind: "struct",
-          filePath: uri,
-          range: struct.range,
-          nameRange: struct.nameRange,
-          containerName: contract.name,
-          natspec: struct.natspec,
-        });
+        this.indexStruct(newSymbols, uri, struct, contract.name);
       }
 
       // Enums
       for (const enumDef of contract.enums) {
-        newSymbols.push({
-          name: enumDef.name,
-          kind: "enum",
-          filePath: uri,
-          range: enumDef.range,
-          nameRange: enumDef.nameRange,
-          containerName: contract.name,
-          natspec: enumDef.natspec,
-        });
+        this.indexEnum(newSymbols, uri, enumDef, contract.name);
       }
 
       // Modifiers
@@ -370,25 +356,11 @@ export class SymbolIndex {
 
     // File-level structs and enums (Solidity >=0.8.0)
     for (const struct of su.structs) {
-      newSymbols.push({
-        name: struct.name,
-        kind: "struct",
-        filePath: uri,
-        range: struct.range,
-        nameRange: struct.nameRange,
-        natspec: struct.natspec,
-      });
+      this.indexStruct(newSymbols, uri, struct);
     }
 
     for (const enumDef of su.enums) {
-      newSymbols.push({
-        name: enumDef.name,
-        kind: "enum",
-        filePath: uri,
-        range: enumDef.range,
-        nameRange: enumDef.nameRange,
-        natspec: enumDef.natspec,
-      });
+      this.indexEnum(newSymbols, uri, enumDef);
     }
 
     // File-level custom errors
@@ -550,6 +522,98 @@ export class SymbolIndex {
   }
 
   /**
+   * Look up a struct definition by name in `uri` (file-level, then any contract).
+   */
+  getStruct(uri: string, structName: string): StructDefinition | undefined {
+    const su = this.parser.get(uri)?.sourceUnit;
+    if (!su) return undefined;
+
+    const fileLevel = su.structs.find((s) => s.name === structName);
+    if (fileLevel) return fileLevel;
+
+    for (const contract of su.contracts) {
+      const nested = contract.structs.find((s) => s.name === structName);
+      if (nested) return nested;
+    }
+    return undefined;
+  }
+
+  /**
+   * Find an indexed struct or enum member by container type name.
+   */
+  findContainerMember(
+    memberName: string,
+    containerName: string,
+    kind: "structMember" | "enumMember",
+    uri?: string,
+  ): SolSymbol | undefined {
+    return this.findSymbols(memberName).find(
+      (sym) =>
+        sym.kind === kind &&
+        sym.containerName === containerName &&
+        (uri === undefined || sym.filePath === uri),
+    );
+  }
+
+  private indexStruct(
+    newSymbols: SolSymbol[],
+    uri: string,
+    struct: StructDefinition,
+    contractName?: string,
+  ): void {
+    newSymbols.push({
+      name: struct.name,
+      kind: "struct",
+      filePath: uri,
+      range: struct.range,
+      nameRange: struct.nameRange,
+      containerName: contractName,
+      natspec: struct.natspec,
+    });
+
+    for (const member of struct.members) {
+      if (!member.name || !member.nameRange) continue;
+      newSymbols.push({
+        name: member.name,
+        kind: "structMember",
+        filePath: uri,
+        range: member.range ?? member.nameRange,
+        nameRange: member.nameRange,
+        containerName: struct.name,
+        detail: member.typeName,
+      });
+    }
+  }
+
+  private indexEnum(
+    newSymbols: SolSymbol[],
+    uri: string,
+    enumDef: EnumDefinition,
+    contractName?: string,
+  ): void {
+    newSymbols.push({
+      name: enumDef.name,
+      kind: "enum",
+      filePath: uri,
+      range: enumDef.range,
+      nameRange: enumDef.nameRange,
+      containerName: contractName,
+      natspec: enumDef.natspec,
+    });
+
+    for (const member of enumDef.members) {
+      newSymbols.push({
+        name: member.name,
+        kind: "enumMember",
+        filePath: uri,
+        range: member.range,
+        nameRange: member.nameRange,
+        containerName: enumDef.name,
+      });
+    }
+  }
+
+  /**
    * Get all contracts (for completions and navigation).
    */
   getAllContracts(): Map<string, { uri: string; contract: ContractDefinition }> {
@@ -609,8 +673,14 @@ export class SymbolIndex {
         return LSPSymbolKind.Struct;
       case "struct":
         return LSPSymbolKind.Struct;
+      case "structMember":
+        return LSPSymbolKind.Field;
       case "enum":
         return LSPSymbolKind.Enum;
+      case "enumMember":
+        return LSPSymbolKind.EnumMember;
+      case "fileConstant":
+        return LSPSymbolKind.Constant;
       case "stateVariable":
         return LSPSymbolKind.Field;
       case "localVariable":

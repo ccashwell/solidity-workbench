@@ -408,6 +408,24 @@ contract C {
       assert.match(value, /Defined in.*SafeMath/, `expected SafeMath container; got ${value}`);
     });
 
+    it("hovers a struct member through a typed receiver", () => {
+      const code = `struct Params { uint256 poolTickSpacing; }
+contract C {
+    function validate(Params memory p) internal pure {
+        p.poolTickSpacing;
+    }
+}`;
+      const { doc, provider } = setup("file:///w/StructMemberHover.sol", code);
+      const lines = code.split("\n");
+      const useLine = lines.findIndex((line) => line.includes("p.poolTickSpacing"));
+      const col = lines[useLine].indexOf("poolTickSpacing");
+      const h = provider.provideHover(doc, { line: useLine, character: col });
+      assert.ok(h, "expected hover on struct member");
+      assert.ok(!Array.isArray(h.contents) && typeof h.contents !== "string");
+      assert.match(h.contents.value, /uint256 poolTickSpacing/);
+      assert.match(h.contents.value, /Struct member of.*Params/);
+    });
+
     it("hovers a file-level struct type used in a function parameter", () => {
       const code = `pragma solidity ^0.8.24;
 

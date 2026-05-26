@@ -355,6 +355,7 @@ contract Token {
       assert.equal(enums.length, 1);
       assert.equal(enums[0].name, "Status");
       assert.equal(enums[0].members.length, 3);
+      assert.equal(enums[0].members[0].name, "Active");
     });
   });
 

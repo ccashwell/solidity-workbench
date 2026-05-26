@@ -20,6 +20,18 @@ export interface SoliditySourceUnit {
   errors: ErrorDefinition[];
   /** User-defined value types */
   userDefinedValueTypes: UserDefinedValueTypeDefinition[];
+  /** File-level constants (Solidity >=0.8.24) */
+  fileConstants: FileConstantDefinition[];
+}
+
+export interface FileConstantDefinition {
+  type: "FileConstantDefinition";
+  typeName: string;
+  name: string;
+  mutability: "constant" | "immutable";
+  natspec?: NatspecComment;
+  range: SourceRange;
+  nameRange: SourceRange;
 }
 
 export interface PragmaDirective {
@@ -103,6 +115,14 @@ export interface ParameterDeclaration {
   name?: string;
   storageLocation?: "memory" | "storage" | "calldata";
   indexed?: boolean;
+  range?: SourceRange;
+  nameRange?: SourceRange;
+}
+
+export interface EnumValueDefinition {
+  name: string;
+  range: SourceRange;
+  nameRange: SourceRange;
 }
 
 // ── State Variables ───────────────────────────────────────────────────
@@ -151,7 +171,7 @@ export interface StructDefinition {
 export interface EnumDefinition {
   type: "EnumDefinition";
   name: string;
-  members: string[];
+  members: EnumValueDefinition[];
   natspec?: NatspecComment;
   range: SourceRange;
   nameRange: SourceRange;
@@ -206,8 +226,11 @@ export type SymbolKind =
   | "event"
   | "error"
   | "struct"
+  | "structMember"
   | "enum"
+  | "enumMember"
   | "stateVariable"
+  | "fileConstant"
   | "localVariable"
   | "parameter"
   | "userDefinedValueType";

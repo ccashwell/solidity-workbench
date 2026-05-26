@@ -279,6 +279,7 @@ export class SolidityParser {
       enums,
       errors,
       userDefinedValueTypes,
+      fileConstants: [],
     };
   }
 
@@ -496,7 +497,11 @@ export class SolidityParser {
     return {
       type: "EnumDefinition",
       name: node.name,
-      members: (node.members ?? []).map((m: any) => m.name ?? m),
+      members: (node.members ?? []).map((m: any) => ({
+        name: m.name ?? String(m),
+        range: this.locToRange(m.loc),
+        nameRange: this.nameRange(m),
+      })),
       natspec,
       range: this.locToRange(node.loc),
       nameRange: this.nameRange(node),
@@ -518,13 +523,18 @@ export class SolidityParser {
   }
 
   private mapParameter(node: any): ParameterDeclaration {
-    return {
+    const param: ParameterDeclaration = {
       type: "ParameterDeclaration",
       typeName: this.typeNameToString(node.typeName),
       name: node.name ?? node.identifier?.name ?? undefined,
       storageLocation: node.storageLocation ?? undefined,
       indexed: node.isIndexed ?? undefined,
     };
+    if (node.loc) {
+      param.range = this.locToRange(node.loc);
+      param.nameRange = this.nameRange(node);
+    }
+    return param;
   }
 
   // ── Type name serialization ────────────────────────────────────────
@@ -675,6 +685,7 @@ export class SolidityParser {
       enums: [],
       errors: [],
       userDefinedValueTypes: [],
+      fileConstants: [],
     };
   }
 }

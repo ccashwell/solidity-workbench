@@ -53,7 +53,7 @@ export class DocumentSymbolProvider {
     for (const enumDef of result.sourceUnit.enums) {
       symbols.push({
         name: enumDef.name,
-        detail: `{ ${enumDef.members.join(", ")} }`,
+        detail: `{ ${enumDef.members.map((m) => m.name).join(", ")} }`,
         kind: SymbolKind.Enum,
         range: enumDef.range,
         selectionRange: enumDef.nameRange,
@@ -146,7 +146,7 @@ export class DocumentSymbolProvider {
     for (const enumDef of contract.enums) {
       children.push({
         name: enumDef.name,
-        detail: `{ ${enumDef.members.join(", ")} }`,
+        detail: `{ ${enumDef.members.map((m) => m.name).join(", ")} }`,
         kind: SymbolKind.Enum,
         range: enumDef.range,
         selectionRange: enumDef.nameRange,

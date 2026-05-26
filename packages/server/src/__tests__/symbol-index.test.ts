@@ -116,6 +116,39 @@ error MyError(uint256 x);
       assert.equal(syms[0].containerName, undefined);
     });
 
+    it("indexes struct and enum members with their container type name", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      indexText(
+        parser,
+        idx,
+        "file:///w/members.sol",
+        `
+pragma solidity ^0.8.24;
+
+struct Box {
+    uint256 value;
+}
+
+enum Status { On, Off }
+
+contract C {
+    struct Inner { bool flag; }
+}
+`,
+      );
+
+      const value = idx.findContainerMember("value", "Box", "structMember");
+      assert.ok(value, "expected struct member value");
+      assert.equal(value!.kind, "structMember");
+
+      const on = idx.findContainerMember("On", "Status", "enumMember");
+      assert.ok(on, "expected enum member On");
+
+      const flag = idx.findContainerMember("flag", "Inner", "structMember");
+      assert.ok(flag, "expected nested struct member flag");
+    });
+
     it("indexes file-level structs with no containerName", () => {
       const parser = new SolidityParser();
       const idx = new SymbolIndex(parser, makeFakeWorkspace());

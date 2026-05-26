@@ -336,15 +336,35 @@ export class HoverProvider {
   }
 
   private findStructMember(structSym: SolSymbol, member: string): Hover | null {
-    // Struct members aren't individually registered in the symbol index
-    // today, so emit a best-effort synthetic hover that at least says
-    // "this is a member of struct X".
-    return {
-      contents: {
-        kind: MarkupKind.Markdown,
-        value: `\`\`\`solidity\n${structSym.name}.${member}\n\`\`\`\n\n*Struct member of* \`${structSym.name}\``,
-      },
-    };
+    const indexed = this.symbolIndex.findContainerMember(
+      member,
+      structSym.name,
+      "structMember",
+      structSym.filePath,
+    );
+    if (indexed) {
+      const declaration = `${indexed.detail ?? "unknown"} ${member}`.trim();
+      return {
+        contents: {
+          kind: MarkupKind.Markdown,
+          value: `\`\`\`solidity\n${declaration}\n\`\`\`\n\n*Struct member of* \`${structSym.name}\``,
+        },
+      };
+    }
+
+    const struct = this.symbolIndex.getStruct(structSym.filePath, structSym.name);
+    const field = struct?.members.find((m) => m.name === member);
+    if (field) {
+      const declaration = `${field.typeName} ${member}`.trim();
+      return {
+        contents: {
+          kind: MarkupKind.Markdown,
+          value: `\`\`\`solidity\n${declaration}\n\`\`\`\n\n*Struct member of* \`${structSym.name}\``,
+        },
+      };
+    }
+
+    return null;
   }
 
   private getUdvtBuiltinHover(udvt: SolSymbol, member: string): Hover | null {
@@ -651,8 +671,14 @@ export class HoverProvider {
         return `error ${sym.name}${sym.detail ?? "()"}`;
       case "struct":
         return `struct ${sym.name}`;
+      case "structMember":
+        return `${sym.detail ?? "unknown"} ${sym.name}`;
       case "enum":
         return `enum ${sym.name}`;
+      case "enumMember":
+        return `${sym.containerName ?? "enum"}.${sym.name}`;
+      case "fileConstant":
+        return `${sym.detail ?? "unknown"} ${sym.name}`;
       case "stateVariable":
         return `${sym.detail ?? "unknown"} ${sym.name}`;
       case "localVariable":

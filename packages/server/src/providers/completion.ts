@@ -632,8 +632,14 @@ export class CompletionProvider {
         return CompletionItemKind.Struct;
       case "struct":
         return CompletionItemKind.Struct;
+      case "structMember":
+        return CompletionItemKind.Field;
       case "enum":
         return CompletionItemKind.Enum;
+      case "enumMember":
+        return CompletionItemKind.EnumMember;
+      case "fileConstant":
+        return CompletionItemKind.Constant;
       case "stateVariable":
         return CompletionItemKind.Field;
       case "localVariable":
