@@ -81,6 +81,16 @@ export class DocumentSymbolProvider {
       });
     }
 
+    for (const udvt of result.sourceUnit.userDefinedValueTypes) {
+      symbols.push({
+        name: udvt.name,
+        detail: udvt.underlyingType,
+        kind: SymbolKind.TypeParameter,
+        range: udvt.range,
+        selectionRange: udvt.nameRange,
+      });
+    }
+
     return symbols;
   }
 
