@@ -24,6 +24,7 @@ import {
   type ReceiverExpression,
 } from "../utils/receiver-type.js";
 import { getEnclosingContract } from "../utils/scope.js";
+import { resolveEffectiveNatspec } from "../utils/natspec.js";
 
 /**
  * Provides hover information for Solidity symbols.
@@ -593,9 +594,9 @@ export class HoverProvider {
     const declaration = this.buildDeclaration(sym);
     parts.push(`\`\`\`solidity\n${declaration}\n\`\`\``);
 
-    // NatSpec documentation
-    if (sym.natspec) {
-      parts.push(this.formatNatspec(sym.natspec));
+    const natspec = resolveEffectiveNatspec(sym, this.symbolIndex);
+    if (natspec) {
+      parts.push(this.formatNatspec(natspec));
     }
 
     // Container info
@@ -669,6 +670,7 @@ export class HoverProvider {
 
     if (natspec.custom && Object.keys(natspec.custom).length > 0) {
       for (const [tag, desc] of Object.entries(natspec.custom)) {
+        if (tag === "inheritdoc") continue;
         parts.push(`\n**${this.formatCustomNatspecLabel(tag)}:** ${desc}`);
       }
     }

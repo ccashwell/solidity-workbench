@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-05-27
+
+### Fixed
+
+- **`@inheritdoc` did not show inherited NatSpec in hover or signature help.**
+  Implementations that only reference a base interface now display the parent
+  `@notice`, `@dev`, `@param`, and `@return` documentation instead of an empty
+  “Inherits Documentation From” label.
+
 ## [0.8.0] - 2026-05-21
 
 ### Changed

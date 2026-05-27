@@ -8,6 +8,7 @@ import type {
   ErrorDefinition,
 } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import { resolveEffectiveNatspec } from "../utils/natspec.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 
 /**
@@ -175,9 +176,19 @@ export class SignatureHelpProvider {
   }
 
   private buildSignature(func: FunctionDefinition, containerName: string): SignatureInformation {
+    const sym =
+      func.name && containerName
+        ? this.symbolIndex
+            .findSymbols(func.name)
+            .find((s) => s.kind === "function" && s.containerName === containerName)
+        : undefined;
+    const effective = sym
+      ? resolveEffectiveNatspec(sym, this.symbolIndex)
+      : func.natspec;
+
     const params: ParameterInformation[] = func.parameters.map((p) => {
       const label = `${p.typeName}${p.storageLocation ? " " + p.storageLocation : ""}${p.name ? " " + p.name : ""}`;
-      const doc = func.natspec?.params?.[p.name ?? ""];
+      const doc = effective?.params?.[p.name ?? ""];
       return {
         label,
         documentation: doc ? { kind: MarkupKind.Markdown, value: doc } : undefined,
@@ -194,7 +205,7 @@ export class SignatureHelpProvider {
 
     const label = `${func.name ?? func.kind}(${paramStr})${vis}${mut}${returnsStr}`;
 
-    const documentation = this.buildDocumentation(func.natspec, containerName);
+    const documentation = this.buildDocumentation(effective, containerName);
 
     return {
       label,
@@ -239,18 +250,23 @@ export class SignatureHelpProvider {
     natspec: NatspecComment | undefined,
     containerName: string,
   ): string | undefined {
-    if (!natspec) return `*Defined in* \`${containerName}\``;
+    if (!natspec) {
+      return containerName ? `*Defined in* \`${containerName}\`` : undefined;
+    }
 
     const parts: string[] = [];
     if (natspec.notice) parts.push(natspec.notice);
     if (natspec.dev) parts.push(`\n**Dev:** ${natspec.dev}`);
     if (natspec.custom) {
       for (const [tag, desc] of Object.entries(natspec.custom)) {
+        if (tag === "inheritdoc") continue;
         parts.push(`\n**${this.formatCustomNatspecLabel(tag)}:** ${desc}`);
       }
     }
-    parts.push(`\n*Defined in* \`${containerName}\``);
-    return parts.join("\n");
+    if (containerName) {
+      parts.push(`\n*Defined in* \`${containerName}\``);
+    }
+    return parts.length > 0 ? parts.join("\n") : undefined;
   }
 
   private formatCustomNatspecLabel(tag: string): string {

@@ -587,6 +587,35 @@ contract C {
       assert.doesNotMatch(value, /unrelated/);
     });
 
+    it("resolves @inheritdoc to the interface NatSpec on an override", () => {
+      const { doc, provider } = setup(
+        "file:///w/Inheritdoc.sol",
+        `pragma solidity ^0.8.24;
+
+interface IFeeClassifiedHook {
+    /// @notice Returns the protocol fee flags bitmap.
+    /// @return flags Encoded fee classification flags.
+    function protocolFeeFlags() external pure returns (uint256);
+}
+
+contract BaseAggregatorHook is IFeeClassifiedHook {
+    /// @inheritdoc IFeeClassifiedHook
+    function protocolFeeFlags() external pure virtual returns (uint256) {
+        return 1 << 11;
+    }
+}`,
+      );
+
+      const line = 10;
+      const col = 13;
+      const h = provider.provideHover(doc, { line, character: col });
+      assert.ok(h, "expected hover on overriding function");
+      const value = (h!.contents as { value: string }).value;
+      assert.match(value, /protocol fee flags bitmap/i);
+      assert.match(value, /Encoded fee classification flags/i);
+      assert.doesNotMatch(value, /Inherits Documentation From/i);
+    });
+
     it("synthesises a `wrap` / `unwrap` hover on a user-defined value type", () => {
       const code = `type Currency is address;
 contract C {
