@@ -127,7 +127,10 @@ contract User {
       const provider = new DefinitionProvider(idx, parser, workspace);
       const importLine = files["file:///w/User.sol"].split("\n")[1];
       const col = importLine.indexOf("Token") + 1;
-      const def = provider.provideDefinition(docs["file:///w/User.sol"], { line: 1, character: col });
+      const def = provider.provideDefinition(docs["file:///w/User.sol"], {
+        line: 1,
+        character: col,
+      });
       assert.ok(def, "expected definition for imported symbol");
       const loc = Array.isArray(def) ? def[0] : def;
       assert.equal(loc.uri, "file:///w/Token.sol");

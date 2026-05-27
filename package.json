@@ -14,7 +14,8 @@
     "test": "pnpm -r test",
     "package": "pnpm build:icon && cd packages/extension && pnpm package",
     "publish:ovsx": "pnpm build && pnpm package && cd packages/extension && pnpm publish:ovsx",
-    "clean": "pnpm -r clean"
+    "clean": "pnpm -r clean",
+    "prepare": "husky"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
@@ -23,6 +24,7 @@
     "@typescript-eslint/parser": "^7.0.0",
     "esbuild": "^0.25.0",
     "eslint": "^8.56.0",
+    "husky": "^9.1.7",
     "prettier": "^3.8.2",
     "typescript": "^5.3.3"
   },

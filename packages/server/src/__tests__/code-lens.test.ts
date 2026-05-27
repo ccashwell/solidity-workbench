@@ -155,8 +155,7 @@ contract C {
 
       const refLens = lenses.find(
         (l) =>
-          l.command?.command === "solidity-workbench.findReferencesAt" &&
-          l.range.start.line === 0,
+          l.command?.command === "solidity-workbench.findReferencesAt" && l.range.start.line === 0,
       );
       assert.ok(refLens, `expected reference lens for helper; got ${JSON.stringify(lenses)}`);
 

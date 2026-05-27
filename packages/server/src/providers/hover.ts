@@ -162,12 +162,7 @@ export class HoverProvider {
       }
     }
 
-    const typedReceiverHover = this.resolveTypedReceiverHover(
-      receiver,
-      member,
-      fromUri,
-      position,
-    );
+    const typedReceiverHover = this.resolveTypedReceiverHover(receiver, member, fromUri, position);
     if (typedReceiverHover) return typedReceiverHover;
 
     const usingForHover = this.resolveUsingForHover(receiver, member, fromUri, position);
@@ -493,10 +488,7 @@ export class HoverProvider {
     if (!receiverType) return null;
 
     for (const directive of contract.usingFor) {
-      if (
-        directive.typeName !== undefined &&
-        !isSameTypeName(directive.typeName, receiverType)
-      ) {
+      if (directive.typeName !== undefined && !isSameTypeName(directive.typeName, receiverType)) {
         continue;
       }
 

@@ -198,14 +198,8 @@ export class CodeLensProvider {
         if (funcLens) lenses.push(funcLens);
       }
 
-      if (
-        (fn.visibility === "external" || fn.visibility === "public") &&
-        fn.kind === "function"
-      ) {
-        const selector = this.computeSelector(
-          fn.name,
-          fn.parameters,
-        );
+      if ((fn.visibility === "external" || fn.visibility === "public") && fn.kind === "function") {
+        const selector = this.computeSelector(fn.name, fn.parameters);
         lenses.push({
           range: fn.range,
           command: {

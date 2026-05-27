@@ -9,11 +9,7 @@ import {
   type ReceiverExpression,
 } from "../utils/receiver-type.js";
 import { getEnclosingContract } from "../utils/scope.js";
-import {
-  CALL_LIKE_KEYWORDS,
-  findCommentRanges,
-  isPositionInCommentRanges,
-} from "../utils/text.js";
+import { CALL_LIKE_KEYWORDS, findCommentRanges, isPositionInCommentRanges } from "../utils/text.js";
 
 /**
  * Provides inlay hints — inline annotations that show parameter names
@@ -383,17 +379,20 @@ export class InlayHintsProvider {
     const contract = this.getEnclosingContract(uri, lineNum);
     if (!contract) return [];
 
-    const receiverType = resolveReceiverTypeName(this.parser, this.symbolIndex, uri, {
-      line: lineNum,
-      character: lineChar,
-    }, receiver);
+    const receiverType = resolveReceiverTypeName(
+      this.parser,
+      this.symbolIndex,
+      uri,
+      {
+        line: lineNum,
+        character: lineChar,
+      },
+      receiver,
+    );
     if (!receiverType) return [];
 
     for (const directive of contract.usingFor) {
-      if (
-        directive.typeName !== undefined &&
-        !isSameTypeName(directive.typeName, receiverType)
-      ) {
+      if (directive.typeName !== undefined && !isSameTypeName(directive.typeName, receiverType)) {
         continue;
       }
 

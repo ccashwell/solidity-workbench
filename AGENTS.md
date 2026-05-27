@@ -102,6 +102,7 @@ pnpm watch                         # Parallel rebuild on change
 pnpm test                          # Runs the server's node --test suite
 pnpm lint                          # ESLint over packages/*/src/**/*.ts
 pnpm format:check                  # Prettier check (use `pnpm format` to fix)
+pnpm install                       # Installs Husky; pre-commit runs format:check
 pnpm package                       # Produces packages/extension/solidity-workbench-*.vsix
 pnpm --filter solidity-workbench test:e2e   # VS Code E2E via @vscode/test-electron
 ```

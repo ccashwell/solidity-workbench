@@ -182,9 +182,7 @@ export class SignatureHelpProvider {
             .findSymbols(func.name)
             .find((s) => s.kind === "function" && s.containerName === containerName)
         : undefined;
-    const effective = sym
-      ? resolveEffectiveNatspec(sym, this.symbolIndex)
-      : func.natspec;
+    const effective = sym ? resolveEffectiveNatspec(sym, this.symbolIndex) : func.natspec;
 
     const params: ParameterInformation[] = func.parameters.map((p) => {
       const label = `${p.typeName}${p.storageLocation ? " " + p.storageLocation : ""}${p.name ? " " + p.name : ""}`;
