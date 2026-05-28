@@ -173,12 +173,22 @@ The extension activates automatically in any workspace containing `foundry.toml`
 
 ## Installation
 
-> Solidity Workbench is pre-release. Install from a CI-built VSIX or from source.
+### Open VSX (recommended)
 
-### From VSIX
+Install the published extension from the [Open VSX Registry](https://open-vsx.org/extension/ccashwell/solidity-workbench):
+
+- Open the link above and click **Install**, or search **Solidity Workbench** in the Extensions view (`ccashwell.solidity-workbench`).
+- **CLI** (VS Code, Cursor, and other editors that use Open VSX):
+  ```bash
+  code --install-extension ccashwell.solidity-workbench
+  ```
+
+New releases are published to Open VSX on every `v*.*.*` tag.
+
+### From GitHub Release (VSIX)
 
 1. Download `solidity-workbench-*.vsix` from the latest
-   [CI build artifacts](https://github.com/ccashwell/solidity-workbench/actions/workflows/ci.yml).
+   [GitHub Release](https://github.com/ccashwell/solidity-workbench/releases).
 2. Install:
    ```
    Cmd/Ctrl+Shift+P → Extensions: Install from VSIX...
