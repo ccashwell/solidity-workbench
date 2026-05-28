@@ -337,6 +337,9 @@ VS Code Marketplace publish is not wired in CI yet. Publisher id is
 - Webview `buildHtml` inline scripts must register DOM event listeners once at initialization — re-invoked render helpers must update DOM only, not call `addEventListener` again (stacked listeners leak memory).
 - Filesystem watchers that trigger LSP round-trips (e.g. Test Explorer on `**/*.sol`) should debounce rapid create/change/delete bursts (~400ms) from fmt, multi-file saves, and codegen.
 - Comments inside webview HTML template literals must not contain backticks; block comments must not contain `*/` substrings — both break parsing of the surrounding string or comment.
+- Hover and signature help must resolve NatSpec through `resolveEffectiveNatspec()` in `packages/server/src/utils/natspec.ts` — symbols with only `@inheritdoc` otherwise show the tag label, not the parent's `@notice` / `@param` / `@return`.
+- Struct and enum members are indexed as `structMember` / `enumMember`; dotted access on struct receivers must use `SymbolIndex.findContainerMember`, not contract inheritance-chain walks.
+- GitHub Actions workflows must not set `pnpm/action-setup` `version` when root `package.json` pins `packageManager` — duplicate specs cause `ERR_PNPM_BAD_PM_VERSION`.
 
 ---
 
