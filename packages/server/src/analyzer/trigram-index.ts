@@ -120,6 +120,12 @@ export class TrigramIndex {
   get size(): number {
     return this.names.size;
   }
+
+  /** Every indexed name — for fuzzy subsequence fallback when trigram
+   *  pruning finds no candidates (e.g. `ctr` → `Counter`). */
+  allNames(): string[] {
+    return Array.from(this.names);
+  }
 }
 
 /**

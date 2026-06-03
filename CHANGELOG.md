@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   NatSpec.** Implementations that mirror an interface function with an
   auto-generated getter now inherit the parent `@notice` and `@return`
   documentation.
+- **Fuzzy workspace-symbol queries with no trigram overlap returned nothing.**
+  Queries such as `Cntr` → `Counter` now fall back to ordered-subsequence
+  scoring when trigram pruning finds no candidates.
 
 ## [0.8.1] - 2026-05-27
 

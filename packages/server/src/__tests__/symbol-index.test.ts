@@ -604,6 +604,23 @@ contract Helper {
       assert.deepEqual(idx.findWorkspaceSymbols("qqqq"), []);
     });
 
+    it("ordered-subsequence queries with no trigram overlap still match", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      indexText(
+        parser,
+        idx,
+        "file:///w/Counter.sol",
+        `pragma solidity ^0.8.24;
+contract Counter { uint256 public count; }`,
+      );
+      const results = idx.findWorkspaceSymbols("ctr");
+      assert.ok(
+        results.some((r) => /Counter/.test(r.name)),
+        `ctr should fuzzy-match Counter; got ${results.map((r) => r.name).join(", ")}`,
+      );
+    });
+
     it("short 1–2 char queries fall back to a name scan and still return matches", () => {
       const parser = new SolidityParser();
       const idx = new SymbolIndex(parser, makeFakeWorkspace());

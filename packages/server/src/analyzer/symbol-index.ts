@@ -491,7 +491,13 @@ export class SymbolIndex {
   findWorkspaceSymbols(query: string, token?: CancellationToken): WorkspaceSymbol[] {
     // Collect all (symbol, score) pairs across the candidate names.
     const scored: { sym: SolSymbol; score: number }[] = [];
-    const candidates = this.trigrams.candidates(query);
+    let candidates = this.trigrams.candidates(query);
+    // Trigram intersection only guarantees substring matches. When it
+    // finds nothing (e.g. `ctr` vs `Counter`), fall back to every
+    // indexed name and let scoreName's subsequence tier decide.
+    if (candidates.length === 0 && query.length >= 3) {
+      candidates = this.trigrams.allNames();
+    }
 
     for (const name of candidates) {
       if (token?.isCancellationRequested) break;
