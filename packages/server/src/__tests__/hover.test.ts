@@ -64,6 +64,21 @@ contract A {
       assert.match(value, /message context/i);
     });
 
+    it("does not treat `constructor` as a built-in global", () => {
+      const { doc, provider } = setup(
+        "file:///w/BuiltinCtor.sol",
+        `pragma solidity ^0.8.0;
+contract BuiltinCtor {
+    constructor() {}
+}`,
+      );
+      const h = provider.provideHover(doc, { line: 2, character: 6 });
+      assert.ok(h, "expected constructor declaration hover");
+      const value = (h!.contents as { value: string }).value;
+      assert.match(value, /constructor/);
+      assert.doesNotMatch(value, /\[Function: Object\]/);
+    });
+
     it("returns a hover for `keccak256`", () => {
       const { doc, provider } = setup(
         "file:///w/B.sol",
@@ -100,6 +115,25 @@ contract C {
       assert.match(value, /Does the thing/);
       assert.match(value, /Reverts on overflow/);
       assert.match(value, /The input/);
+    });
+
+    it("surfaces NatSpec on a constructor hover", () => {
+      const { doc, provider } = setup(
+        "file:///w/Ctor.sol",
+        `pragma solidity ^0.8.0;
+contract Ctor {
+    /// @notice Deploys the contract.
+    /// @param owner The owner address.
+    constructor(address owner) {}
+}`,
+      );
+      const h = provider.provideHover(doc, { line: 4, character: 6 });
+      assert.ok(h, "expected hover on constructor");
+      const value = (h!.contents as any).value as string;
+      assert.match(value, /constructor\s*\(/);
+      assert.match(value, /Deploys the contract/);
+      assert.match(value, /owner/);
+      assert.match(value, /Defined in.*Ctor/);
     });
 
     it("renders @custom:security-contact as a standalone security contact line", () => {
@@ -585,6 +619,37 @@ contract C {
       assert.match(value, /Safely transfers tokens/);
       assert.match(value, /Defined in.*SafeERC20/);
       assert.doesNotMatch(value, /unrelated/);
+    });
+
+    it("resolves @inheritdoc on a public constant from the interface getter", () => {
+      const { doc, provider } = setup(
+        "file:///w/ConstantInherit.sol",
+        `pragma solidity ^0.8.24;
+
+interface IV4FeePolicy {
+    /// @notice Reserved family slot for native-math.
+    /// @dev Not assignable as a governance hook family.
+    /// @return 0xFF (255 == type(uint8).max).
+    function NATIVE_MATH_FAMILY_ID() external pure returns (uint8);
+}
+
+contract V4FeePolicy is IV4FeePolicy {
+    /// @inheritdoc IV4FeePolicy
+    uint8 public constant NATIVE_MATH_FAMILY_ID = 0xFF;
+}`,
+      );
+
+      const line = 11;
+      const col = 26;
+      const h = provider.provideHover(doc, { line, character: col });
+      assert.ok(h, "expected hover on public constant");
+      const value = (h!.contents as { value: string }).value;
+      assert.match(value, /uint8 NATIVE_MATH_FAMILY_ID/);
+      assert.match(value, /Reserved family slot for native-math/i);
+      assert.match(value, /Not assignable as a governance hook family/i);
+      assert.match(value, /0xFF \(255 == type\(uint8\)\.max\)/);
+      assert.match(value, /Defined in.*V4FeePolicy/);
+      assert.doesNotMatch(value, /Inherits Documentation From/i);
     });
 
     it("resolves @inheritdoc to the interface NatSpec on an override", () => {

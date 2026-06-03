@@ -645,6 +645,11 @@ export class CompletionProvider {
         return CompletionItemKind.Module;
       case "function":
         return CompletionItemKind.Function;
+      case "constructor":
+        return CompletionItemKind.Constructor;
+      case "receive":
+      case "fallback":
+        return CompletionItemKind.Function;
       case "modifier":
         return CompletionItemKind.Method;
       case "event":

@@ -260,20 +260,28 @@ export class SymbolIndex {
 
       this.contractsByName.set(contract.name, { uri, contract });
 
-      // Functions
+      // Functions (including constructor / receive / fallback — `name` is null)
       for (const func of contract.functions) {
-        if (func.name) {
-          newSymbols.push({
-            name: func.name,
-            kind: "function",
-            filePath: uri,
-            range: func.range,
-            nameRange: func.nameRange,
-            containerName: contract.name,
-            detail: this.buildFunctionSignature(func),
-            natspec: func.natspec,
-          });
-        }
+        const symbolName = func.name ?? func.kind;
+        const symbolKind =
+          func.kind === "constructor"
+            ? "constructor"
+            : func.kind === "receive"
+              ? "receive"
+              : func.kind === "fallback"
+                ? "fallback"
+                : "function";
+        if (!symbolName) continue;
+        newSymbols.push({
+          name: symbolName,
+          kind: symbolKind,
+          filePath: uri,
+          range: func.range,
+          nameRange: func.nameRange,
+          containerName: contract.name,
+          detail: this.buildFunctionSignature(func),
+          natspec: func.natspec,
+        });
       }
 
       // Events
@@ -676,6 +684,11 @@ export class SymbolIndex {
       case "library":
         return LSPSymbolKind.Module;
       case "function":
+        return LSPSymbolKind.Function;
+      case "constructor":
+        return LSPSymbolKind.Constructor;
+      case "receive":
+      case "fallback":
         return LSPSymbolKind.Function;
       case "modifier":
         return LSPSymbolKind.Method;

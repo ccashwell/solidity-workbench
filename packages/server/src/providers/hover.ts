@@ -105,6 +105,12 @@ export class HoverProvider {
       }
     }
     if (!sym) {
+      const atCursor = symbols.filter((s) => rangeContains(s.nameRange, position));
+      if (atCursor.length > 0) {
+        sym = atCursor.sort((a, b) => rangeSize(a.nameRange) - rangeSize(b.nameRange))[0];
+      }
+    }
+    if (!sym) {
       const visibleSymbols = this.filterVisibleSymbols(document.uri, symbols);
       if (visibleSymbols.length === 0) return null;
       sym = visibleSymbols.find((s) => s.filePath === document.uri) ?? visibleSymbols[0];
@@ -614,6 +620,12 @@ export class HoverProvider {
         return `library ${sym.name}`;
       case "function":
         return `function ${sym.name}${sym.detail ?? "()"}`;
+      case "constructor":
+        return `constructor${sym.detail ?? "()"}`;
+      case "receive":
+        return `receive${sym.detail ?? "()"}`;
+      case "fallback":
+        return `fallback${sym.detail ?? "()"}`;
       case "modifier":
         return `modifier ${sym.name}${sym.detail ?? "()"}`;
       case "event":
@@ -711,8 +723,10 @@ export class HoverProvider {
         "```solidity\nblockhash(uint256 blockNumber) returns (bytes32)\n```\nHash of the given block (only works for the last 256 blocks).",
     };
 
+    // Plain-object lookup — `builtins["constructor"]` would otherwise
+    // return `Object.prototype.constructor`.
+    if (!Object.hasOwn(builtins, word)) return null;
     const doc = builtins[word];
-    if (!doc) return null;
 
     return {
       contents: {

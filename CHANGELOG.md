@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-06-03
+
+### Fixed
+
+- **Constructor hovers showed no NatSpec (or `[Function: Object]`).**
+  `constructor`, `receive`, and `fallback` are now indexed like other
+  declarations, and built-in-global lookup no longer reads
+  `Object.prototype.constructor` when the cursor is on the `constructor`
+  keyword.
+- **`@inheritdoc` on a `public constant` did not pull interface getter
+  NatSpec.** Implementations that mirror an interface function with an
+  auto-generated getter now inherit the parent `@notice` and `@return`
+  documentation.
+
 ## [0.8.1] - 2026-05-27
 
 ### Fixed

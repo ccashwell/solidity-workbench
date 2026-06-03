@@ -123,7 +123,7 @@ function pickMemberSymbol(
   memberName: string,
   context: SolSymbol,
 ): SolSymbol | null {
-  const candidates = index
+  let candidates = index
     .findSymbols(memberName)
     .filter(
       (s) =>
@@ -134,6 +134,15 @@ function pickMemberSymbol(
           s.kind === "error" ||
           s.kind === "stateVariable"),
     );
+
+  // `public constant` / `public` state vars expose an auto-generated getter with
+  // the same name as an interface function — inherit NatSpec from that getter.
+  if (context.kind === "stateVariable") {
+    const getters = candidates.filter((s) => s.kind === "function");
+    if (getters.length > 0) {
+      candidates = getters;
+    }
+  }
 
   if (candidates.length === 0) return null;
   if (candidates.length === 1) return candidates[0];

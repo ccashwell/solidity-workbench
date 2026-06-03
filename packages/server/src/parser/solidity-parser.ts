@@ -414,6 +414,8 @@ export class SolidityParser {
     const modifierNames = (node.modifiers ?? []).map((m: any) => m.name ?? "");
 
     const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
+    const nameRange =
+      funcKind === "function" ? this.nameRange(node) : this.keywordNameRange(node, funcKind);
 
     return {
       type: "FunctionDefinition",
@@ -429,7 +431,7 @@ export class SolidityParser {
       body: node.body !== null && node.body !== undefined,
       natspec,
       range: this.locToRange(node.loc),
-      nameRange: this.nameRange(node),
+      nameRange,
     };
   }
 
@@ -598,6 +600,21 @@ export class SolidityParser {
       start: { line: (loc.start?.line ?? 1) - 1, character: loc.start?.column ?? 0 },
       end: { line: (loc.end?.line ?? 1) - 1, character: loc.end?.column ?? 0 },
     };
+  }
+
+  /** Range of `constructor` / `receive` / `fallback` on the declaration line. */
+  private keywordNameRange(node: any, keyword: string): SourceRange {
+    const startLine = (node.loc?.start?.line ?? 1) - 1;
+    const line = this.currentLines?.[startLine] ?? "";
+    const startCol = node.loc?.start?.column ?? 0;
+    const actualStart = line.indexOf(keyword, startCol);
+    if (actualStart >= 0) {
+      return {
+        start: { line: startLine, character: actualStart },
+        end: { line: startLine, character: actualStart + keyword.length },
+      };
+    }
+    return this.locToRange(node.loc);
   }
 
   private nameRange(node: any): SourceRange {
