@@ -3,13 +3,15 @@ import { InlayHintKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
-import {
-  isSameTypeName,
-  resolveReceiverTypeName,
-  type ReceiverExpression,
-} from "../utils/receiver-type.js";
+import { resolveReceiverTypeName, type ReceiverExpression } from "../utils/receiver-type.js";
+import { usingForParameterNames } from "../utils/using-for.js";
 import { getEnclosingContract } from "../utils/scope.js";
-import { CALL_LIKE_KEYWORDS, findCommentRanges, isPositionInCommentRanges } from "../utils/text.js";
+import {
+  extractDottedReceiver,
+  CALL_LIKE_KEYWORDS,
+  findCommentRanges,
+  isPositionInCommentRanges,
+} from "../utils/text.js";
 
 /**
  * Provides inlay hints — inline annotations that show parameter names
@@ -240,15 +242,14 @@ export class InlayHintsProvider {
     while (dotIdx >= 0 && /\s/.test(line[dotIdx])) dotIdx--;
     if (dotIdx < 0 || line[dotIdx] !== ".") return null;
 
+    const dottedPath = extractDottedReceiver(line, funcNameStart);
+    if (dottedPath) {
+      const tail = dottedPath.includes(".") ? dottedPath.split(".").pop() : dottedPath;
+      return { dottedPath, simpleName: tail };
+    }
+
     let end = dotIdx;
     while (end > 0 && /\s/.test(line[end - 1])) end--;
-
-    if (end > 0 && /[\w$]/.test(line[end - 1])) {
-      let start = end;
-      while (start > 0 && /[\w$]/.test(line[start - 1])) start--;
-      const simpleName = line.slice(start, end);
-      return simpleName ? { simpleName } : null;
-    }
 
     if (end > 0 && line[end - 1] === ")") {
       const start = this.findCallExpressionStart(line, end - 1);
@@ -308,12 +309,22 @@ export class InlayHintsProvider {
         }
       }
 
-      const usingForParams = this.getUsingForParameterNames(
-        funcName,
-        receiver,
+      const usingForParams = usingForParameterNames(
+        this.parser,
+        this.symbolIndex,
         uri,
-        lineNum,
-        lineChar,
+        this.getEnclosingContract(uri, lineNum),
+        resolveReceiverTypeName(
+          this.parser,
+          this.symbolIndex,
+          uri,
+          {
+            line: lineNum,
+            character: lineChar,
+          },
+          receiver,
+        ) ?? "",
+        funcName,
       );
       if (usingForParams.length > 0) return usingForParams;
 
@@ -367,47 +378,6 @@ export class InlayHintsProvider {
       .some((s) => s.kind === "contract" || s.kind === "interface")
       ? candidate
       : undefined;
-  }
-
-  private getUsingForParameterNames(
-    funcName: string,
-    receiver: ReceiverExpression,
-    uri: string,
-    lineNum: number,
-    lineChar: number,
-  ): string[] {
-    const contract = this.getEnclosingContract(uri, lineNum);
-    if (!contract) return [];
-
-    const receiverType = resolveReceiverTypeName(
-      this.parser,
-      this.symbolIndex,
-      uri,
-      {
-        line: lineNum,
-        character: lineChar,
-      },
-      receiver,
-    );
-    if (!receiverType) return [];
-
-    for (const directive of contract.usingFor) {
-      if (directive.typeName !== undefined && !isSameTypeName(directive.typeName, receiverType)) {
-        continue;
-      }
-
-      const library = this.symbolIndex.getContract(directive.libraryName)?.contract;
-      const fn = library?.functions.find((f) => f.name === funcName);
-      if (!fn || fn.parameters.length === 0) continue;
-      if (!isSameTypeName(fn.parameters[0].typeName, receiverType)) continue;
-
-      return fn.parameters
-        .slice(1)
-        .map((p) => p.name)
-        .filter((n): n is string => !!n);
-    }
-
-    return [];
   }
 
   private getEnclosingContract(uri: string, lineNum: number) {

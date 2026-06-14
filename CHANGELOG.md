@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-06-03
+
+### Fixed
+
+- **Global `using {…} for T global` free functions did not resolve on member
+  calls.** File-level using directives are now parsed and wired through hover,
+  go-to-definition, completion, and inlay hints — including chained struct
+  receivers such as `store.owner.write(...)`.
+
 ## [0.8.2] - 2026-06-03
 
 ### Fixed

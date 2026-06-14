@@ -49,6 +49,33 @@ export function getWordTextAtPosition(
 }
 
 /**
+ * Extract the full `a.b.c` receiver expression immediately before the dot
+ * that precedes `memberStart` (the start column of the member identifier).
+ */
+export function extractDottedReceiver(line: string, memberStart: number): string | null {
+  let dotIdx = memberStart - 1;
+  while (dotIdx >= 0 && /\s/.test(line[dotIdx])) dotIdx--;
+  if (dotIdx < 0 || line[dotIdx] !== ".") return null;
+
+  let end = dotIdx;
+  while (end > 0 && /\s/.test(line[end - 1])) end--;
+
+  let start = end;
+  while (start > 0) {
+    while (start > 0 && /[\w$]/.test(line[start - 1])) start--;
+    if (start > 0 && line[start - 1] === ".") {
+      start--;
+      while (start > 0 && /\s/.test(line[start - 1])) start--;
+      continue;
+    }
+    break;
+  }
+
+  const expr = line.slice(start, end).trim();
+  return expr || null;
+}
+
+/**
  * Solidity keywords — used across multiple providers for filtering.
  */
 export const SOLIDITY_KEYWORDS = new Set([

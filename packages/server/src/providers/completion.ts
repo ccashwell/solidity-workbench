@@ -6,7 +6,10 @@ import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
-import { resolveReceiverTypeName } from "../utils/receiver-type.js";
+import { resolveReceiverTypeName, isSameTypeName } from "../utils/receiver-type.js";
+import { collectUsingForDirectives, findUsingForFunction } from "../utils/using-for.js";
+import { getEnclosingContract } from "../utils/scope.js";
+import { extractDottedReceiver } from "../utils/text.js";
 
 /**
  * Provides context-aware completions for Solidity.
@@ -142,11 +145,13 @@ export class CompletionProvider {
     // Extract the expression before the dot. The simple identifier path
     // handles `token.` and `Contract.`; the cast path handles common
     // Solidity completions like `IERC20(token).`.
-    const dotMatch = textBefore.match(/(\w+)\.\s*$/);
+    const line = text.split("\n")[position.line] ?? "";
+    const dottedPath = extractDottedReceiver(line, position.character);
+    const dotMatch = dottedPath ? null : textBefore.match(/(\w+)\.\s*$/);
     const castMatch = textBefore.match(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\([^)]*\)\.\s*$/);
-    if (!dotMatch && !castMatch) return items;
+    if (!dottedPath && !dotMatch && !castMatch) return items;
 
-    const target = dotMatch?.[1] ?? castMatch?.[1] ?? "";
+    const target = dottedPath ?? dotMatch?.[1] ?? castMatch?.[1] ?? "";
 
     // 1. Known contract / interface / library name (static member access)
     const contract = this.symbolIndex.getContract(target);
@@ -162,7 +167,7 @@ export class CompletionProvider {
       this.symbolIndex,
       document.uri,
       position,
-      { simpleName: target },
+      dottedPath ? { dottedPath } : { simpleName: target },
     );
     if (parserResolvedType) {
       const viaParserContract = this.symbolIndex.getContract(parserResolvedType);
@@ -170,7 +175,14 @@ export class CompletionProvider {
         return this.contractMemberCompletions(parserResolvedType);
       }
       const viaParserStruct = this.structMemberCompletions(parserResolvedType, document.uri);
-      if (viaParserStruct.length > 0) return viaParserStruct;
+      const usingForItems = this.usingForMemberCompletions(
+        parserResolvedType,
+        document.uri,
+        position,
+      );
+      if (viaParserStruct.length > 0 || usingForItems.length > 0) {
+        return [...viaParserStruct, ...usingForItems];
+      }
     }
 
     // 2. Variable of a contract/interface/library/struct type, resolved via solc
@@ -311,6 +323,55 @@ export class CompletionProvider {
           label: member.name,
           kind: CompletionItemKind.Field,
           detail: member.typeName,
+        });
+      }
+    }
+
+    return items;
+  }
+
+  private usingForMemberCompletions(
+    receiverType: string,
+    uri: string,
+    position: Position,
+  ): CompletionItem[] {
+    const sourceUnit = this.parser.get(uri)?.sourceUnit;
+    if (!sourceUnit) return [];
+
+    const contract = getEnclosingContract(sourceUnit, position.line);
+    const items: CompletionItem[] = [];
+    const seen = new Set<string>();
+
+    for (const directive of collectUsingForDirectives(sourceUnit, contract)) {
+      if (directive.typeName !== undefined && !isSameTypeName(directive.typeName, receiverType)) {
+        continue;
+      }
+
+      const names =
+        directive.functionNames ??
+        (directive.libraryName
+          ? (this.symbolIndex
+              .getContract(directive.libraryName)
+              ?.contract.functions.map((f) => f.name)
+              .filter((n): n is string => !!n) ?? [])
+          : []);
+
+      for (const name of names) {
+        if (!name || seen.has(name)) continue;
+        const hit = findUsingForFunction(
+          this.parser,
+          this.symbolIndex,
+          uri,
+          contract,
+          receiverType,
+          name,
+        );
+        if (!hit?.fn.name) continue;
+        seen.add(name);
+        items.push({
+          label: hit.fn.name,
+          kind: CompletionItemKind.Function,
+          detail: directive.libraryName ? `using ${directive.libraryName}` : "using (global)",
         });
       }
     }

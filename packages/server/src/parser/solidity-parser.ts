@@ -20,6 +20,7 @@ import type {
   ParameterDeclaration,
   NatspecComment,
   FileConstantDefinition,
+  UsingForDirective,
 } from "@solidity-workbench/common";
 
 /**
@@ -215,6 +216,7 @@ export class SolidityParser {
     const enums: EnumDefinition[] = [];
     const errors: ErrorDefinition[] = [];
     const fileConstants: FileConstantDefinition[] = [];
+    const usingFor: UsingForDirective[] = [];
     const userDefinedValueTypes: {
       type: "UserDefinedValueTypeDefinition";
       name: string;
@@ -279,6 +281,10 @@ export class SolidityParser {
             nameRange: this.nameRange(node),
           });
           break;
+
+        case "UsingForDeclaration":
+          usingFor.push(this.mapUsingFor(node));
+          break;
       }
     }
 
@@ -293,6 +299,20 @@ export class SolidityParser {
       errors,
       userDefinedValueTypes,
       fileConstants,
+      usingFor,
+    };
+  }
+
+  private mapUsingFor(node: any): UsingForDirective {
+    const functionNames = Array.isArray(node.functions)
+      ? node.functions.filter((name: string | null) => !!name)
+      : undefined;
+    return {
+      type: "UsingForDirective",
+      libraryName: node.libraryName ?? undefined,
+      functionNames: functionNames?.length ? functionNames : undefined,
+      typeName: node.typeName ? this.typeNameToString(node.typeName) : undefined,
+      isGlobal: node.isGlobal ?? false,
     };
   }
 
@@ -332,7 +352,7 @@ export class SolidityParser {
     const structs: StructDefinition[] = [];
     const enums: EnumDefinition[] = [];
     const modifiers: ModifierDefinition[] = [];
-    const usingFor: { type: "UsingForDirective"; libraryName: string; typeName?: string }[] = [];
+    const usingFor: UsingForDirective[] = [];
 
     for (const sub of node.subNodes ?? []) {
       switch (sub.type) {
@@ -359,11 +379,7 @@ export class SolidityParser {
           modifiers.push(this.mapModifier(sub));
           break;
         case "UsingForDeclaration":
-          usingFor.push({
-            type: "UsingForDirective",
-            libraryName: sub.libraryName ?? (sub.functions ? "<operators>" : ""),
-            typeName: sub.typeName ? this.typeNameToString(sub.typeName) : undefined,
-          });
+          usingFor.push(this.mapUsingFor(sub));
           break;
       }
     }
@@ -716,6 +732,7 @@ export class SolidityParser {
       errors: [],
       userDefinedValueTypes: [],
       fileConstants: [],
+      usingFor: [],
     };
   }
 }

@@ -22,6 +22,8 @@ export interface SoliditySourceUnit {
   userDefinedValueTypes: UserDefinedValueTypeDefinition[];
   /** File-level constants (Solidity >=0.8.24) */
   fileConstants: FileConstantDefinition[];
+  /** File-level `using ... for` directives */
+  usingFor: UsingForDirective[];
 }
 
 export interface FileConstantDefinition {
@@ -187,8 +189,13 @@ export interface UserDefinedValueTypeDefinition {
 
 export interface UsingForDirective {
   type: "UsingForDirective";
-  libraryName: string;
+  /** Library name for `using Lib for T` */
+  libraryName?: string;
+  /** Bound free functions for `using {f, g} for T` */
+  functionNames?: string[];
   typeName?: string; // undefined means "*"
+  /** When true, applies to every contract in the file */
+  isGlobal?: boolean;
 }
 
 // ── NatSpec ───────────────────────────────────────────────────────────

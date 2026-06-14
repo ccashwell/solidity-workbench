@@ -8,7 +8,9 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
 import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { resolveDottedReceiverTypeName } from "../utils/receiver-type.js";
-import { getWordAtPosition } from "../utils/text.js";
+import { getWordAtPosition, extractDottedReceiver } from "../utils/text.js";
+import { findUsingForFunction } from "../utils/using-for.js";
+import { getEnclosingContract } from "../utils/scope.js";
 import { readFileSync } from "node:fs";
 
 /**
@@ -72,13 +74,14 @@ export class DefinitionProvider {
           this.symbolIndex,
           document.uri,
           position,
-          dottedTarget.type,
+          dottedTarget.dottedPath ?? dottedTarget.type,
         ) ?? dottedTarget.type;
 
       const resolved = this.resolveMemberDefinition(
         receiverType,
         dottedTarget.member,
         document.uri,
+        position,
       );
       if (resolved) return resolved;
 
@@ -278,7 +281,24 @@ export class DefinitionProvider {
     typeName: string,
     memberName: string,
     fromUri?: string,
+    position?: Position,
   ): Definition | null {
+    if (fromUri && position !== undefined) {
+      const sourceUnit = this.parser.get(fromUri)?.sourceUnit;
+      const contract = sourceUnit ? getEnclosingContract(sourceUnit, position.line) : undefined;
+      const hit = findUsingForFunction(
+        this.parser,
+        this.symbolIndex,
+        fromUri,
+        contract,
+        typeName,
+        memberName,
+      );
+      if (hit) {
+        return Location.create(hit.filePath, hit.fn.nameRange);
+      }
+    }
+
     const resolved = this.resolver?.findMemberInInheritanceChain(typeName, memberName, fromUri);
     if (resolved) return Location.create(resolved.filePath, resolved.nameRange);
 
@@ -329,22 +349,27 @@ export class DefinitionProvider {
   private getDottedAccess(
     text: string,
     position: Position,
-  ): { type: string; member: string } | null {
+  ): { type: string; member: string; dottedPath?: string } | null {
     const line = text.split("\n")[position.line] ?? "";
     let memberStart = position.character;
     while (memberStart > 0 && /[\w$]/.test(line[memberStart - 1])) memberStart--;
     if (memberStart === 0 || line[memberStart - 1] !== ".") return null;
 
-    const receiverEnd = memberStart - 1;
-    let receiverStart = receiverEnd;
-    while (receiverStart > 0 && /[\w$]/.test(line[receiverStart - 1])) receiverStart--;
-    if (receiverStart === receiverEnd) return null;
+    const dottedPath = extractDottedReceiver(line, memberStart);
+    const receiver =
+      dottedPath ??
+      (() => {
+        const receiverEnd = memberStart - 1;
+        let receiverStart = receiverEnd;
+        while (receiverStart > 0 && /[\w$]/.test(line[receiverStart - 1])) receiverStart--;
+        return line.slice(receiverStart, receiverEnd);
+      })();
+    if (!receiver) return null;
 
     let memberEnd = position.character;
     while (memberEnd < line.length && /[\w$]/.test(line[memberEnd])) memberEnd++;
 
-    const receiver = line.slice(receiverStart, receiverEnd);
     const member = line.slice(memberStart, memberEnd);
-    return receiver && member ? { type: receiver, member } : null;
+    return member ? { type: receiver, member, dottedPath: dottedPath ?? undefined } : null;
   }
 }

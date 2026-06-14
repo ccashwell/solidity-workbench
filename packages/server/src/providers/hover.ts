@@ -25,6 +25,8 @@ import {
 } from "../utils/receiver-type.js";
 import { getEnclosingContract } from "../utils/scope.js";
 import { resolveEffectiveNatspec } from "../utils/natspec.js";
+import { findUsingForFunction, usingForFunctionToSymbol } from "../utils/using-for.js";
+import { extractDottedReceiver } from "../utils/text.js";
 
 /**
  * Provides hover information for Solidity symbols.
@@ -417,12 +419,11 @@ export class HoverProvider {
 
     let receiverEnd = dotIdx;
     while (receiverEnd > 0 && /\s/.test(line[receiverEnd - 1])) receiverEnd--;
-    let receiverStart = receiverEnd;
     let receiver: ReceiverExpression | null = null;
-    if (receiverEnd > 0 && /[\w$]/.test(line[receiverEnd - 1])) {
-      while (receiverStart > 0 && /[\w$]/.test(line[receiverStart - 1])) receiverStart--;
-      const simpleName = line.slice(receiverStart, receiverEnd);
-      if (simpleName) receiver = { simpleName };
+    const dottedPath = extractDottedReceiver(line, memberStart);
+    if (dottedPath) {
+      const tail = dottedPath.includes(".") ? dottedPath.split(".").pop() : dottedPath;
+      receiver = { dottedPath, simpleName: tail };
     } else if (receiverEnd > 0 && line[receiverEnd - 1] === ")") {
       const start = this.findCallExpressionStart(line, receiverEnd - 1);
       if (start !== null) {
@@ -481,9 +482,10 @@ export class HoverProvider {
     fromUri: string,
     position: Position,
   ): Hover | null {
-    const contract = this.getEnclosingContract(fromUri, position.line);
-    if (!contract) return null;
+    const sourceUnit = this.parser.get(fromUri)?.sourceUnit;
+    if (!sourceUnit) return null;
 
+    const contract = this.getEnclosingContract(fromUri, position.line);
     const receiverType = resolveReceiverTypeName(
       this.parser,
       this.symbolIndex,
@@ -493,21 +495,17 @@ export class HoverProvider {
     );
     if (!receiverType) return null;
 
-    for (const directive of contract.usingFor) {
-      if (directive.typeName !== undefined && !isSameTypeName(directive.typeName, receiverType)) {
-        continue;
-      }
+    const hit = findUsingForFunction(
+      this.parser,
+      this.symbolIndex,
+      fromUri,
+      contract,
+      receiverType,
+      member,
+    );
+    if (!hit) return null;
 
-      const library = this.symbolIndex.getContract(directive.libraryName)?.contract;
-      const fn = library?.functions.find((f) => f.name === member);
-      if (!library || !fn || fn.parameters.length === 0) continue;
-      if (!isSameTypeName(fn.parameters[0].typeName, receiverType)) continue;
-
-      const hit = this.lookupMember(library.name, library, member);
-      if (hit) return this.buildHover(hit);
-    }
-
-    return null;
+    return this.buildHover(usingForFunctionToSymbol(hit));
   }
 
   private resolveTypedReceiverHover(
