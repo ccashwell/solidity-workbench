@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-06-03
+
+### Fixed
+
+- **Inlay hints showed wrong parameter names for unqualified internal calls.**
+  Calls such as `_open(input)` inside a contract now resolve parameter
+  decorators through the enclosing contract (and its bases) instead of the
+  first global `_open` symbol in the workspace, matching hover resolution.
+
 ## [0.8.3] - 2026-06-03
 
 ### Fixed

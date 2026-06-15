@@ -333,20 +333,29 @@ export class InlayHintsProvider {
       return [];
     }
 
-    const symbols = this.symbolIndex.findSymbols(funcName);
-    for (const sym of symbols) {
-      if (sym.kind === "function") {
-        const contract = sym.containerName
-          ? this.symbolIndex.getContract(sym.containerName)
-          : undefined;
-        if (contract) {
-          const func = contract.contract.functions.find((f) => f.name === funcName);
-          if (func) {
-            return func.parameters.map((p) => p.name).filter((n): n is string => !!n);
-          }
+    // Unqualified call — scope to the enclosing contract (and its bases)
+    // or same-file free functions. A global `findSymbols` pick would
+    // surface the wrong overload when unrelated contracts share a name
+    // (e.g. `_open(equity)` vs `_open(params)`).
+    const sourceUnit = this.parser.get(uri)?.sourceUnit;
+    if (!sourceUnit) return [];
+
+    const contract = getEnclosingContract(sourceUnit, lineNum);
+    if (contract) {
+      const chain = this.symbolIndex.getInheritanceChain(contract.name);
+      for (const c of chain) {
+        const fn = c.functions.find((f) => f.name === funcName);
+        if (fn) {
+          return fn.parameters.map((p) => p.name).filter((n): n is string => !!n);
         }
       }
     }
+
+    const freeFn = sourceUnit.freeFunctions.find((f) => f.name === funcName);
+    if (freeFn) {
+      return freeFn.parameters.map((p) => p.name).filter((n): n is string => !!n);
+    }
+
     return [];
   }
 

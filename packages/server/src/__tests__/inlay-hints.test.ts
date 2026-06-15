@@ -119,6 +119,42 @@ contract C {
     assert.deepEqual(hints, []);
   });
 
+  it("scopes unqualified internal calls to the enclosing contract", () => {
+    const text = `pragma solidity ^0.8.0;
+contract Other {
+    function _open(uint256 equity) private {}
+}
+
+contract MarginRouter {
+    struct OpenParams {
+        uint256 collateral;
+    }
+
+    function _open(OpenParams params) private returns (address) {
+        return address(0);
+    }
+
+    function openPosition(OpenParams input) external returns (address) {
+        return _open(input);
+    }
+}`;
+    const { doc, provider } = setup("file:///w/MarginRouter.sol", text);
+    const hints = provider.provideInlayHints(doc, {
+      start: { line: 0, character: 0 },
+      end: { line: text.split("\n").length, character: 0 },
+    });
+
+    const labels = hints.map((h) => h.label).filter((l): l is string => typeof l === "string");
+    assert.ok(
+      labels.includes("params:"),
+      `expected "params:" for MarginRouter._open, got ${JSON.stringify(labels)}`,
+    );
+    assert.ok(
+      !labels.includes("equity:"),
+      `must not pick Other._open's parameter name, got ${JSON.stringify(labels)}`,
+    );
+  });
+
   describe("comment handling", () => {
     it("does not emit hints for the `event Bootstrap` NatSpec example", () => {
       // Exact prose from a real-world report: a vault contract whose
