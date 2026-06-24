@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Project Graph.** Solidity Workbench now maintains a persistent workspace
+  graph of files, contracts, declarations, inheritance, calls, external calls,
+  state access, emitted events, custom errors, modifiers, and type usage.
+  The new Project Graph view supports focused neighborhoods, whole-workspace
+  loading with an interactive node cap, path finding, edge filters, and export
+  to JSON, DOT, GraphML, or CodeGraph-compatible JSON.
+- Project Graph caches are fingerprinted against Solidity sources,
+  `foundry.toml`, `remappings.txt`, active remappings, and workspace roots so
+  config changes cannot restore stale import or dependency graphs. Source
+  fingerprints are tracked per file, so an edited contract invalidates only
+  that file's cached declarations and relationships.
+- Low-level `address.call(...)` and `address.staticcall(...)` now appear as
+  unresolved external-call edges, while contract methods literally named
+  `call()` still resolve to their typed declaration.
+- The Project Graph view now persists search, scope, edge filters, zoom,
+  path-mode, and the selected node across webview reloads, and includes a
+  details panel for the active node's visible incoming/outgoing edges.
+- Project Graph now exposes explicit cursor-neighborhood, rebuild-index, and
+  clear-cache commands, with matching toolbar controls in the graph view.
+- Added `solidity-workbench.projectGraph.relationshipIndexing` for large
+  workspaces: `auto` indexes edges in background batches, `manual` indexes
+  relationship edges only during explicit rebuilds, and `disabled` keeps the
+  graph declaration-only.
+- Added `solidity-workbench.projectGraph.dependencyIndexing` so Project Graph
+  dependency scope is explicit. Dependency files are excluded by default, with
+  opt-in modes for dependency declarations or full dependency relationship
+  edges.
+- The Project Graph view now shows a partial-index banner while relationship
+  edges are still indexing, and JSON / CodeGraph exports include normalized
+  `relationshipStatus` metadata.
+
+### Fixed
+
+- Project Graph rebuilds now index declarations before function bodies, so
+  receiver-typed calls resolve correctly even when a caller file is visited
+  before the imported interface or contract that declares the callee.
+- Project Graph solc retargeting now covers state reads/writes, emitted events,
+  and custom-error reverts in addition to call edges, reducing same-name
+  collisions after a successful `forge build`.
+
 ## [0.8.4] - 2026-06-03
 
 ### Fixed

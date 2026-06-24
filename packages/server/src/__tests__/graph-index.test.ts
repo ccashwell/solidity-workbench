@@ -1,0 +1,2346 @@
+import { describe, it } from "node:test";
+import * as assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { URI } from "vscode-uri";
+import { GraphIndex } from "../analyzer/graph-index.js";
+import { SemanticResolver } from "../analyzer/semantic-resolver.js";
+import { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SolcBridge } from "../compiler/solc-bridge.js";
+import { SolidityParser } from "../parser/solidity-parser.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+
+describe("GraphIndex", () => {
+  it("indexes file, containment, import, inheritance, and call edges", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-test-"));
+    try {
+      const files = {
+        "src/Base.sol": `pragma solidity ^0.8.24;
+contract Base {
+    function inherited() internal {}
+}
+`,
+        "src/Child.sol": `pragma solidity ^0.8.24;
+import "./Base.sol";
+contract Child is Base {
+    struct Snapshot {
+        Base target;
+    }
+
+    event Updated(uint256 value);
+    error Unauthorized();
+    uint256 public count;
+    Base public baseRef;
+    Snapshot internal snapshot;
+
+    function entry() external {
+        count += 1;
+        helper();
+        emit Updated(count);
+        if (count > 10) revert Unauthorized();
+        inherited();
+    }
+
+    function helper() internal {}
+
+    function typed(Base target) external pure returns (Base) {
+        return target;
+    }
+}
+`,
+      };
+
+      const uris: string[] = [];
+      const parser = new SolidityParser();
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      const childPath = path.join(tmpDir, "src/Child.sol");
+      const inheritedCallOffset = fs.readFileSync(childPath, "utf-8").lastIndexOf("inherited");
+      graph.setSolcBridge({
+        getDeclarationInfoAt: (_filePath: string, offset: number) =>
+          offset === inheritedCallOffset
+            ? {
+                declarationId: 1234,
+                declarationFilePath: path.join(tmpDir, "src/Base.sol"),
+                declarationOffset: files["src/Base.sol"].indexOf("function inherited"),
+                declarationLength: "function inherited() internal {}".length,
+                nodeType: "FunctionDefinition",
+                name: "inherited",
+              }
+            : null,
+      } as unknown as SolcBridge);
+      graph.rebuildWorkspace();
+
+      const childUri = URI.file(path.join(tmpDir, "src/Child.sol")).toString();
+      const basePath = path.join(tmpDir, "src/Base.sol");
+      const baseUri = URI.file(basePath).toString();
+      const childId = resolver.contractId(childUri, "Child");
+      const baseId = resolver.contractId(baseUri, "Base");
+
+      assert.ok(graph.getNode(childId), "expected Child contract node");
+      assert.ok(graph.getNode(baseId), "expected Base contract node");
+
+      const imports = graph.getOutgoingEdges(`file:${childUri}`, "imports");
+      assert.equal(imports.length, 1);
+      assert.equal(imports[0].target, `file:${baseUri}`);
+
+      const inherits = graph.getOutgoingEdges(childId, "inherits");
+      assert.equal(inherits.length, 1);
+      assert.equal(inherits[0].target, baseId);
+      assert.equal(inherits[0].metadata?.baseName, "Base");
+
+      const entry = graph
+        .getNodes()
+        .find((node) => node.name === "entry" && node.containerName === "Child");
+      const helper = graph
+        .getNodes()
+        .find((node) => node.name === "helper" && node.containerName === "Child");
+      const inherited = graph
+        .getNodes()
+        .find((node) => node.name === "inherited" && node.containerName === "Base");
+      const count = graph
+        .getNodes()
+        .find((node) => node.name === "count" && node.containerName === "Child");
+      const updated = graph
+        .getNodes()
+        .find((node) => node.name === "Updated" && node.containerName === "Child");
+      const unauthorized = graph
+        .getNodes()
+        .find((node) => node.name === "Unauthorized" && node.containerName === "Child");
+      const typed = graph
+        .getNodes()
+        .find((node) => node.name === "typed" && node.containerName === "Child");
+      const baseRef = graph
+        .getNodes()
+        .find((node) => node.name === "baseRef" && node.containerName === "Child");
+      const snapshot = graph
+        .getNodes()
+        .find((node) => node.name === "Snapshot" && node.containerName === "Child");
+      assert.ok(entry, "expected entry function node");
+      assert.ok(helper, "expected helper function node");
+      assert.ok(inherited, "expected inherited function node");
+      assert.ok(count, "expected count state variable node");
+      assert.ok(updated, "expected Updated event node");
+      assert.ok(unauthorized, "expected Unauthorized error node");
+      assert.ok(typed, "expected typed function node");
+      assert.ok(baseRef, "expected baseRef state variable node");
+      assert.ok(snapshot, "expected Snapshot struct node");
+
+      const calls = graph.getOutgoingEdges(entry.id, "calls");
+      assert.deepEqual(calls.map((edge) => edge.target).sort(), [helper.id, inherited.id].sort());
+      const inheritedCall = calls.find((edge) => edge.target === inherited.id);
+      assert.equal(
+        inheritedCall?.metadata?.solcDeclarationId,
+        1234,
+        "expected warm SolcBridge declaration id to enrich call edges",
+      );
+      assert.equal(inheritedCall?.metadata?.resolutionConfidence, "solc");
+      const helperCall = calls.find((edge) => edge.target === helper.id);
+      assert.equal(helperCall?.metadata?.resolutionConfidence, "parser");
+
+      const writes = graph.getOutgoingEdges(entry.id, "writes");
+      assert.ok(
+        writes.some((edge) => edge.target === count.id),
+        "expected entry to write count",
+      );
+
+      const reads = graph.getOutgoingEdges(entry.id, "reads");
+      assert.ok(
+        reads.some((edge) => edge.target === count.id),
+        "expected entry to read count",
+      );
+
+      const emits = graph.getOutgoingEdges(entry.id, "emits");
+      assert.deepEqual(
+        emits.map((edge) => edge.target),
+        [updated.id],
+      );
+
+      const reverts = graph.getOutgoingEdges(entry.id, "revertsWith");
+      assert.deepEqual(
+        reverts.map((edge) => edge.target),
+        [unauthorized.id],
+      );
+
+      assert.ok(
+        graph.getOutgoingEdges(typed.id, "usesType").some((edge) => edge.target === baseId),
+        "expected function parameter and return types to create usesType edges",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(baseRef.id, "usesType").some((edge) => edge.target === baseId),
+        "expected state variable types to create usesType edges",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(snapshot.id, "usesType").some((edge) => edge.target === baseId),
+        "expected struct member types to create usesType edges",
+      );
+
+      const graphSnapshot = graph.toProjectGraph(["inherits", "emits"]);
+      assert.ok(
+        graphSnapshot.nodes.some((node) => node.id === childId && node.kind === "contract"),
+        "expected project graph snapshot to include contract nodes",
+      );
+      assert.deepEqual(
+        new Set(graphSnapshot.edges.map((edge) => edge.kind)),
+        new Set(["inherits", "emits"]),
+      );
+      assert.ok(
+        graphSnapshot.edges.some((edge) => edge.source === childId && edge.target === baseId),
+        "expected filtered snapshot to include inheritance edges",
+      );
+      assert.ok(
+        graphSnapshot.edges.some((edge) => edge.source === entry.id && edge.target === updated.id),
+        "expected filtered snapshot to include emit edges",
+      );
+      const cappedGraph = graph.toProjectGraph(undefined, 3);
+      const cappedIds = new Set(cappedGraph.nodes.map((node) => node.id));
+      assert.equal(cappedGraph.nodes.length, 3);
+      assert.equal(cappedGraph.truncated, true);
+      assert.ok(
+        cappedGraph.edges.every((edge) => cappedIds.has(edge.source) && cappedIds.has(edge.target)),
+        "expected capped project graph edges to stay within returned nodes",
+      );
+
+      const entryNeighborhood = graph.toNeighborhood({
+        rootId: entry.id,
+        depth: 1,
+        direction: "outgoing",
+        edgeKinds: ["calls"],
+      });
+      assert.equal(entryNeighborhood.focusId, entry.id);
+      assert.deepEqual(
+        entryNeighborhood.nodes.map((node) => node.id).sort(),
+        [entry.id, helper.id, inherited.id, childId, baseId].sort(),
+        "expected outgoing call neighborhood to include callees plus containing contract",
+      );
+      assert.deepEqual(
+        entryNeighborhood.edges.map((edge) => edge.target).sort(),
+        [helper.id, inherited.id].sort(),
+      );
+
+      const positionNeighborhood = graph.toNeighborhood({
+        uri: childUri,
+        position: entry.selectionRange.start,
+        depth: 0,
+      });
+      assert.equal(
+        positionNeighborhood.focusId,
+        entry.id,
+        "expected position lookup to focus the innermost graph node",
+      );
+
+      const callPath = graph.toShortestPath({
+        from: { nodeId: entry.id },
+        to: { nodeId: inherited.id },
+        direction: "outgoing",
+        edgeKinds: ["calls"],
+      });
+      assert.equal(callPath.found, true);
+      assert.equal(callPath.fromId, entry.id);
+      assert.equal(callPath.toId, inherited.id);
+      assert.deepEqual(
+        callPath.edges.map((edge) => [edge.source, edge.target, edge.kind]),
+        [[entry.id, inherited.id, "calls"]],
+        "expected shortest path to preserve the call edge",
+      );
+
+      const positionPath = graph.toShortestPath({
+        from: { uri: childUri, position: entry.selectionRange.start },
+        to: { nodeId: updated.id },
+        direction: "outgoing",
+        edgeKinds: ["emits"],
+      });
+      assert.equal(positionPath.found, true);
+      assert.deepEqual(
+        positionPath.edges.map((edge) => edge.kind),
+        ["emits"],
+        "expected source-position endpoint to resolve before path search",
+      );
+
+      const filteredPath = graph.toShortestPath({
+        from: { nodeId: entry.id },
+        to: { nodeId: helper.id },
+        direction: "outgoing",
+        edgeKinds: ["inherits"],
+      });
+      assert.equal(filteredPath.found, false);
+      assert.deepEqual(
+        filteredPath.edges,
+        [],
+        "edge filters should be respected when no path exists",
+      );
+
+      const stats = graph.getStats();
+      assert.equal(stats.nodesByKind.contract, 2);
+      assert.equal(stats.edgesByKind.inherits, 1);
+      assert.ok((stats.edgesByKind.usesType ?? 0) >= 3);
+      assert.ok(stats.edgeCount >= graphSnapshot.edges.length);
+      assert.equal(stats.filesByTier.project, 2);
+      assert.ok(
+        typeof stats.lastRebuildDurationMs === "number",
+        "expected rebuild timing to be recorded",
+      );
+
+      const cacheDir = path.join(tmpDir, ".cache", "graph-index");
+      graph.writeCache(cacheDir);
+      const restoredGraph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      assert.equal(restoredGraph.restoreFromCache(cacheDir), true);
+      assert.equal(restoredGraph.getStats().cacheHit, true);
+      assert.equal(restoredGraph.getNodes().length, graph.getNodes().length);
+      assert.equal(restoredGraph.getEdges().length, graph.getEdges().length);
+      assert.deepEqual(
+        restoredGraph
+          .getOutgoingEdges(entry.id, "calls")
+          .map((edge) => edge.target)
+          .sort(),
+        [helper.id, inherited.id].sort(),
+        "expected cached graph to restore call edges",
+      );
+
+      const cacheFiles = fs.readdirSync(cacheDir).filter((name) => name.endsWith(".json"));
+      assert.equal(cacheFiles.length, 1);
+      const cachePath = path.join(cacheDir, cacheFiles[0]);
+      const originalCache = fs.readFileSync(cachePath, "utf-8");
+      const corruptedCache = JSON.parse(originalCache) as {
+        files?: { uri?: string; edges?: { source?: string; target?: string; kind?: string }[] }[];
+      };
+      const childEntry = corruptedCache.files?.find((file) => file.uri === childUri);
+      childEntry?.edges?.push({
+        source: entry.id,
+        target: "missing:node",
+        kind: "calls",
+      });
+      childEntry?.edges?.push({
+        source: entry.id,
+        target: helper.id,
+        kind: "notARealEdgeKind",
+      });
+      fs.writeFileSync(cachePath, JSON.stringify(corruptedCache), "utf-8");
+      const sanitizedCacheGraph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      assert.equal(sanitizedCacheGraph.restoreFromCache(cacheDir), true);
+      assert.equal(
+        sanitizedCacheGraph.getEdges().some((edge) => edge.target === "missing:node"),
+        false,
+        "cache restore should drop edges whose target node is absent",
+      );
+      assert.equal(
+        sanitizedCacheGraph.getEdges().some((edge) => String(edge.kind) === "notARealEdgeKind"),
+        false,
+        "cache restore should drop edges with unknown kinds",
+      );
+      fs.writeFileSync(cachePath, originalCache, "utf-8");
+
+      fs.writeFileSync(path.join(tmpDir, "foundry.toml"), "[profile.default]\nsrc = 'src'\n");
+      const configStaleGraph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      assert.equal(
+        configStaleGraph.restoreFromCache(cacheDir),
+        false,
+        "changed foundry.toml fingerprint should reject stale graph cache",
+      );
+      fs.rmSync(path.join(tmpDir, "foundry.toml"));
+      assert.equal(
+        new GraphIndex(parser, workspace, resolver, symbolIndex).restoreFromCache(cacheDir),
+        true,
+      );
+
+      fs.writeFileSync(path.join(tmpDir, "remappings.txt"), "@lib/=lib/\n");
+      const remappingStaleGraph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      assert.equal(
+        remappingStaleGraph.restoreFromCache(cacheDir),
+        false,
+        "changed remappings.txt fingerprint should reject stale graph cache",
+      );
+      fs.rmSync(path.join(tmpDir, "remappings.txt"));
+      assert.equal(
+        new GraphIndex(parser, workspace, resolver, symbolIndex).restoreFromCache(cacheDir),
+        true,
+      );
+
+      fs.appendFileSync(path.join(tmpDir, "src/Child.sol"), "\n// cache invalidation\n");
+      const staleGraph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      assert.equal(
+        staleGraph.restoreFromCache(cacheDir),
+        true,
+        "changed source file fingerprint should preserve cache entries for unchanged files",
+      );
+      assert.ok(staleGraph.getNode(baseId), "expected unchanged Base file to restore from cache");
+      assert.equal(
+        staleGraph.getNode(childId),
+        undefined,
+        "expected changed Child file cache entry to be dropped",
+      );
+      staleGraph.ensureWorkspaceDeclarations();
+      assert.ok(staleGraph.getNode(childId), "expected missing Child declarations to be rebuilt");
+      assert.equal(staleGraph.getStats().relationshipIndexComplete, false);
+
+      fs.writeFileSync(
+        basePath,
+        `pragma solidity ^0.8.24;
+contract Base {
+    function renamedInherited() internal {}
+}
+`,
+        "utf-8",
+      );
+      parser.parse(baseUri, fs.readFileSync(basePath, "utf-8"));
+      symbolIndex.updateFile(baseUri);
+      graph.updateFileAndDependents(baseUri);
+      assert.equal(
+        graph.getOutgoingEdges(childId, "inherits")[0]?.target,
+        baseId,
+        "dependent refresh should rebuild inheritance edges from importing files",
+      );
+      assert.equal(
+        graph.getNode(inherited.id),
+        undefined,
+        "removed base functions should disappear from the graph",
+      );
+      assert.ok(
+        !graph.getOutgoingEdges(entry.id, "calls").some((edge) => edge.target === inherited.id),
+        "dependent refresh should remove stale call edges to removed inherited functions",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves typed receiver calls without unrelated same-name contamination", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-receiver-test-"));
+    try {
+      const files = {
+        "src/PoolVault.sol": `pragma solidity ^0.8.24;
+import "./IERC4626.sol";
+abstract contract MultiAssetVault {}
+abstract contract PoolVault is MultiAssetVault {
+    mapping(uint256 => mapping(address => IERC4626)) public vaults;
+
+    function effectiveBalance(uint256 poolId) external view returns (uint256 bal) {
+        IERC4626 vault = vaults[poolId][address(0)];
+        uint256 shares = 1;
+        return vault.previewRedeem(shares);
+    }
+
+    function assetBalanceV4(uint256 poolId) external view returns (uint256 bal) {
+        IERC4626 vault = vaults[poolId][address(0)];
+        uint256 shares = 1;
+        return vault.convertToAssets(shares);
+    }
+}
+`,
+        "test/MockERC4626.sol": `pragma solidity ^0.8.24;
+contract MockERC4626 {
+    function convertToAssets(uint256 shares) external pure returns (uint256) {
+        return shares;
+    }
+
+    function previewRedeem(uint256 shares) external pure returns (uint256) {
+        return shares;
+    }
+}
+`,
+        "src/IERC4626.sol": `pragma solidity ^0.8.24;
+interface IERC4626 {
+    function convertToAssets(uint256 shares) external view returns (uint256);
+    function previewRedeem(uint256 shares) external view returns (uint256);
+}
+`,
+        "src/Comments.sol": `pragma solidity ^0.8.24;
+contract Comments {
+    function caller() external pure {
+        string memory text = "helper()";
+        // helper();
+        /* helper(); */
+    }
+
+    function helper() internal pure {}
+}
+`,
+      };
+
+      const parser = new SolidityParser();
+      const uris: string[] = [];
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const poolVaultEntry = graph
+        .getNodes()
+        .find((node) => node.name === "effectiveBalance" && node.containerName === "PoolVault");
+      const poolVaultAssetBalance = graph
+        .getNodes()
+        .find((node) => node.name === "assetBalanceV4" && node.containerName === "PoolVault");
+      const interfaceConvert = graph
+        .getNodes()
+        .find((node) => node.name === "convertToAssets" && node.containerName === "IERC4626");
+      const interfacePreview = graph
+        .getNodes()
+        .find((node) => node.name === "previewRedeem" && node.containerName === "IERC4626");
+      const mockConvert = graph
+        .getNodes()
+        .find((node) => node.name === "convertToAssets" && node.containerName === "MockERC4626");
+      const mockPreview = graph
+        .getNodes()
+        .find((node) => node.name === "previewRedeem" && node.containerName === "MockERC4626");
+      assert.ok(poolVaultEntry, "expected PoolVault.effectiveBalance node");
+      assert.ok(poolVaultAssetBalance, "expected PoolVault.assetBalanceV4 node");
+      assert.ok(interfaceConvert, "expected IERC4626.convertToAssets node");
+      assert.ok(interfacePreview, "expected IERC4626.previewRedeem node");
+      assert.ok(mockConvert, "expected unrelated MockERC4626.convertToAssets node");
+      assert.ok(mockPreview, "expected unrelated MockERC4626.previewRedeem node");
+
+      const calls = graph.getOutgoingEdges(poolVaultEntry.id, "calls");
+      assert.ok(
+        calls.some((edge) => edge.target === interfacePreview.id),
+        "expected previewRedeem receiver call to resolve to imported IERC4626",
+      );
+      assert.ok(
+        calls.every((edge) => edge.target !== mockPreview.id),
+        "did not expect previewRedeem receiver call to resolve to unrelated mock",
+      );
+
+      const assetCalls = graph.getOutgoingEdges(poolVaultAssetBalance.id, "calls");
+      assert.ok(
+        assetCalls.some((edge) => edge.target === interfaceConvert.id),
+        "expected convertToAssets receiver call to resolve to imported IERC4626",
+      );
+      assert.ok(
+        assetCalls.every((edge) => edge.target !== mockConvert.id),
+        "did not expect convertToAssets receiver call to resolve to unrelated mock",
+      );
+
+      const commentsCaller = graph
+        .getNodes()
+        .find((node) => node.name === "caller" && node.containerName === "Comments");
+      assert.ok(commentsCaller, "expected Comments.caller node");
+      assert.equal(
+        graph.getOutgoingEdges(commentsCaller.id, "calls").length,
+        0,
+        "comments and strings should not create call edges",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("classifies mapping and delete state access through raw AST expressions", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-state-access-test-"));
+    try {
+      const source = `pragma solidity ^0.8.24;
+contract Ledger {
+    mapping(address => uint256) public balances;
+    uint256 public total;
+
+    function edit(address user) external {
+        balances[user] = 1;
+        balances[user] += 2;
+        delete balances[user];
+        total = balances[user];
+    }
+}
+`;
+      const filePath = path.join(tmpDir, "src/Ledger.sol");
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, source, "utf-8");
+      const uri = URI.file(filePath).toString();
+
+      const parser = new SolidityParser();
+      parser.parse(uri, source);
+      const workspace = makeWorkspace(tmpDir, [uri]);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const edit = graph
+        .getNodes()
+        .find((node) => node.name === "edit" && node.containerName === "Ledger");
+      const balances = graph
+        .getNodes()
+        .find((node) => node.name === "balances" && node.containerName === "Ledger");
+      const total = graph
+        .getNodes()
+        .find((node) => node.name === "total" && node.containerName === "Ledger");
+      assert.ok(edit, "expected Ledger.edit node");
+      assert.ok(balances, "expected Ledger.balances node");
+      assert.ok(total, "expected Ledger.total node");
+
+      const balanceWrites = graph
+        .getOutgoingEdges(edit.id, "writes")
+        .filter((edge) => edge.target === balances.id);
+      const balanceReads = graph
+        .getOutgoingEdges(edit.id, "reads")
+        .filter((edge) => edge.target === balances.id);
+      assert.equal(balanceWrites.length, 3, "expected assignment, compound assignment, and delete");
+      assert.equal(balanceReads.length, 2, "expected compound assignment and final read");
+      assert.ok(
+        graph.getOutgoingEdges(edit.id, "writes").some((edge) => edge.target === total.id),
+        "expected assignment to scalar state variable to be classified as a write",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clears stale graph nodes when a file update has no parser result", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-stale-parse-test-"));
+    try {
+      const source = `pragma solidity ^0.8.24;
+contract Gone {
+    function oldName() external {}
+}
+`;
+      const filePath = path.join(tmpDir, "src/Gone.sol");
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, source, "utf-8");
+      const uri = URI.file(filePath).toString();
+
+      const parser = new SolidityParser();
+      parser.parse(uri, source);
+      const workspace = makeWorkspace(tmpDir, [uri]);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const oldNode = graph.getNodes().find((node) => node.name === "oldName");
+      assert.ok(oldNode, "expected old graph node before parser cache is cleared");
+
+      (parser as unknown as { cache: Map<string, unknown> }).cache.delete(uri);
+      graph.updateFile(uri);
+
+      assert.equal(
+        graph.getNode(oldNode.id),
+        undefined,
+        "expected stale nodes to be removed when no parser result is available",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("indexes modifier body calls, state access, emits, and reverts", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-modifier-body-test-"));
+    try {
+      const source = `pragma solidity ^0.8.24;
+contract Guarded {
+    event Checked(uint256 count);
+    error Closed();
+    uint256 public count;
+
+    modifier onlyOpen() {
+        count += 1;
+        emit Checked(count);
+        if (count > 10) revert Closed();
+        helper();
+        _;
+    }
+
+    function run() external onlyOpen {}
+    function helper() internal {}
+}
+`;
+      const filePath = path.join(tmpDir, "src/Guarded.sol");
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, source, "utf-8");
+      const uri = URI.file(filePath).toString();
+
+      const parser = new SolidityParser();
+      parser.parse(uri, source);
+      const workspace = makeWorkspace(tmpDir, [uri]);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const onlyOpen = graph
+        .getNodes()
+        .find((node) => node.name === "onlyOpen" && node.containerName === "Guarded");
+      const run = graph
+        .getNodes()
+        .find((node) => node.name === "run" && node.containerName === "Guarded");
+      const helper = graph
+        .getNodes()
+        .find((node) => node.name === "helper" && node.containerName === "Guarded");
+      const count = graph
+        .getNodes()
+        .find((node) => node.name === "count" && node.containerName === "Guarded");
+      const checked = graph
+        .getNodes()
+        .find((node) => node.name === "Checked" && node.containerName === "Guarded");
+      const closed = graph
+        .getNodes()
+        .find((node) => node.name === "Closed" && node.containerName === "Guarded");
+      assert.ok(onlyOpen, "expected onlyOpen modifier node");
+      assert.ok(run, "expected run function node");
+      assert.ok(helper, "expected helper function node");
+      assert.ok(count, "expected count state variable node");
+      assert.ok(checked, "expected Checked event node");
+      assert.ok(closed, "expected Closed error node");
+
+      assert.ok(
+        graph.getOutgoingEdges(run.id, "usesModifier").some((edge) => edge.target === onlyOpen.id),
+        "expected function to use onlyOpen modifier",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(onlyOpen.id, "calls").some((edge) => edge.target === helper.id),
+        "expected modifier body helper() call edge",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(onlyOpen.id, "writes").some((edge) => edge.target === count.id),
+        "expected modifier body count write edge",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(onlyOpen.id, "reads").some((edge) => edge.target === count.id),
+        "expected modifier body count read edge",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(onlyOpen.id, "emits").some((edge) => edge.target === checked.id),
+        "expected modifier body event emit edge",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(onlyOpen.id, "revertsWith")
+          .some((edge) => edge.target === closed.id),
+        "expected modifier body custom error edge",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves using-for extension methods without external-call contamination", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-using-for-test-"));
+    try {
+      const source = `pragma solidity ^0.8.24;
+struct Data {
+    uint256 value;
+}
+
+function clear(Data storage self) {
+    self.value = 0;
+}
+
+library DataLib {
+    function bump(Data storage self) internal returns (uint256) {
+        self.value += 1;
+        return self.value;
+    }
+}
+
+contract UsesUsingFor {
+    using DataLib for Data;
+    using {clear} for Data;
+    Data internal data;
+
+    function run() external {
+        data.bump();
+        data.clear();
+    }
+}
+`;
+      const filePath = path.join(tmpDir, "src/UsesUsingFor.sol");
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, source, "utf-8");
+      const uri = URI.file(filePath).toString();
+
+      const parser = new SolidityParser();
+      parser.parse(uri, source);
+      const workspace = makeWorkspace(tmpDir, [uri]);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const run = graph
+        .getNodes()
+        .find((node) => node.name === "run" && node.containerName === "UsesUsingFor");
+      const bump = graph
+        .getNodes()
+        .find((node) => node.name === "bump" && node.containerName === "DataLib");
+      const clear = graph
+        .getNodes()
+        .find((node) => node.name === "clear" && node.containerName === undefined);
+      assert.ok(run, "expected UsesUsingFor.run node");
+      assert.ok(bump, "expected DataLib.bump node");
+      assert.ok(clear, "expected free clear node");
+
+      const calls = graph.getOutgoingEdges(run.id, "calls");
+      assert.ok(
+        calls.some((edge) => edge.target === bump.id),
+        "expected data.bump() to resolve to DataLib.bump",
+      );
+      assert.ok(
+        calls.some((edge) => edge.target === clear.id),
+        "expected data.clear() to resolve to free clear function",
+      );
+      const externalCalls = graph.getOutgoingEdges(run.id, "externalCall");
+      assert.ok(
+        externalCalls.every((edge) => edge.target !== bump.id && edge.target !== clear.id),
+        "using-for extension methods should not be classified as external calls",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves using-for extension methods through imported library aliases", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-using-alias-test-"));
+    try {
+      const files = {
+        "src/DataLib.sol": `pragma solidity ^0.8.24;
+struct Data {
+    uint256 value;
+}
+
+library DataLib {
+    function bump(Data storage self, uint256 value) internal returns (uint256) {
+        self.value += value;
+        return self.value;
+    }
+}
+`,
+        "src/UsesUsingAlias.sol": `pragma solidity ^0.8.24;
+import {Data, DataLib as RenamedDataLib} from "./DataLib.sol";
+
+contract UsesUsingAlias {
+    using RenamedDataLib for Data;
+    Data internal data;
+
+    function run() external {
+        data.bump(1);
+    }
+}
+`,
+      };
+
+      const parser = new SolidityParser();
+      const uris: string[] = [];
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const run = graph
+        .getNodes()
+        .find((node) => node.name === "run" && node.containerName === "UsesUsingAlias");
+      const bump = graph
+        .getNodes()
+        .find((node) => node.name === "bump" && node.containerName === "DataLib");
+      assert.ok(run, "expected UsesUsingAlias.run node");
+      assert.ok(bump, "expected DataLib.bump node");
+      assert.ok(
+        graph.getOutgoingEdges(run.id, "calls").some((edge) => edge.target === bump.id),
+        "expected data.bump() to resolve through the imported RenamedDataLib alias",
+      );
+      assert.equal(
+        graph.getOutgoingEdges(run.id, "externalCall").length,
+        0,
+        "using-for extension methods should not be classified as external calls",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves same-file forward contract references before body indexing", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-forward-ref-test-"));
+    try {
+      const source = `pragma solidity ^0.8.24;
+contract UsesLater {
+    Later public later;
+
+    function callLater() external {
+        later.ping();
+    }
+}
+
+contract Later {
+    function ping() external {}
+}
+`;
+      const filePath = path.join(tmpDir, "src/Forward.sol");
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, source, "utf-8");
+      const uri = URI.file(filePath).toString();
+
+      const parser = new SolidityParser();
+      parser.parse(uri, source);
+      const workspace = makeWorkspace(tmpDir, [uri]);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const usesLater = graph
+        .getNodes()
+        .find((node) => node.name === "UsesLater" && node.kind === "contract");
+      const laterContract = graph
+        .getNodes()
+        .find((node) => node.name === "Later" && node.kind === "contract");
+      const laterState = graph
+        .getNodes()
+        .find((node) => node.name === "later" && node.containerName === "UsesLater");
+      const callLater = graph
+        .getNodes()
+        .find((node) => node.name === "callLater" && node.containerName === "UsesLater");
+      const ping = graph
+        .getNodes()
+        .find((node) => node.name === "ping" && node.containerName === "Later");
+      assert.ok(usesLater, "expected UsesLater contract node");
+      assert.ok(laterContract, "expected Later contract node");
+      assert.ok(laterState, "expected later state variable node");
+      assert.ok(callLater, "expected callLater function node");
+      assert.ok(ping, "expected Later.ping function node");
+
+      assert.ok(
+        graph
+          .getOutgoingEdges(laterState.id, "usesType")
+          .some((edge) => edge.target === laterContract.id),
+        "expected state variable to use forward-declared Later type",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(callLater.id, "calls").some((edge) => edge.target === ping.id),
+        "expected later.ping() to resolve to same-file forward contract member",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses argument count to disambiguate parser fallback overloads", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-overload-test-"));
+    try {
+      const source = `pragma solidity ^0.8.24;
+contract OverloadedTarget {
+    function ping() external {}
+    function ping(uint256 value) external {}
+}
+
+contract Caller {
+    OverloadedTarget public target;
+
+    function local() external {
+        one();
+        one(1);
+    }
+
+    function receiver() external {
+        target.ping();
+        target.ping(1);
+    }
+
+    function one() internal {}
+    function one(uint256 value) internal {}
+}
+`;
+      const filePath = path.join(tmpDir, "src/Overload.sol");
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, source, "utf-8");
+      const uri = URI.file(filePath).toString();
+
+      const parser = new SolidityParser();
+      parser.parse(uri, source);
+      const workspace = makeWorkspace(tmpDir, [uri]);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const local = graph
+        .getNodes()
+        .find((node) => node.name === "local" && node.containerName === "Caller");
+      const receiver = graph
+        .getNodes()
+        .find((node) => node.name === "receiver" && node.containerName === "Caller");
+      const oneNoArgs = graph
+        .getNodes()
+        .find((node) => node.detail === "one()" && node.containerName === "Caller");
+      const oneUint = graph
+        .getNodes()
+        .find((node) => node.detail === "one(uint256 value)" && node.containerName === "Caller");
+      const pingNoArgs = graph
+        .getNodes()
+        .find((node) => node.detail === "ping()" && node.containerName === "OverloadedTarget");
+      const pingUint = graph
+        .getNodes()
+        .find(
+          (node) =>
+            node.detail === "ping(uint256 value)" && node.containerName === "OverloadedTarget",
+        );
+      assert.ok(local, "expected Caller.local node");
+      assert.ok(receiver, "expected Caller.receiver node");
+      assert.ok(oneNoArgs, "expected zero-arg one overload");
+      assert.ok(oneUint, "expected uint256 one overload");
+      assert.ok(pingNoArgs, "expected zero-arg ping overload");
+      assert.ok(pingUint, "expected uint256 ping overload");
+
+      assert.ok(
+        graph.getOutgoingEdges(local.id, "calls").some((edge) => edge.target === oneNoArgs.id),
+        "expected one() to target the zero-arg overload",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(local.id, "calls").some((edge) => edge.target === oneUint.id),
+        "expected one(1) to target the uint256 overload",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(receiver.id, "calls").some((edge) => edge.target === pingNoArgs.id),
+        "expected target.ping() to target the zero-arg overload",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(receiver.id, "calls").some((edge) => edge.target === pingUint.id),
+        "expected target.ping(1) to target the uint256 overload",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves import aliases and namespace-qualified types in receiver chains", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-import-alias-test-"));
+    try {
+      const files = {
+        "src/Types.sol": `pragma solidity ^0.8.24;
+interface IBase {
+    function ping(uint256 value) external view returns (uint256);
+}
+
+interface IChild is IBase {}
+
+struct Box {
+    IChild vault;
+}
+`,
+        "src/Target.sol": `pragma solidity ^0.8.24;
+contract Target {
+    function ping() external pure returns (uint256) {
+        return 0;
+    }
+
+    function ping(uint256 value) external pure returns (uint256) {
+        return value;
+    }
+}
+`,
+        "src/UsesAliases.sol": `pragma solidity ^0.8.24;
+import {Target as RenamedTarget} from "./Target.sol";
+import {Box as RenamedBox, IChild as ChildVault} from "./Types.sol";
+import * as TypeNS from "./Types.sol";
+
+contract UsesAliases {
+    RenamedTarget public direct;
+    ChildVault public child;
+    RenamedBox internal box;
+    TypeNS.Box internal namespacedBox;
+
+    function callDirect() external view returns (uint256) {
+        return direct.ping(1);
+    }
+
+    function callInheritedInterface() external view returns (uint256) {
+        return child.ping(1);
+    }
+
+    function callStructMembers() external view returns (uint256 a, uint256 b) {
+        a = box.vault.ping(1);
+        b = namespacedBox.vault.ping(1);
+    }
+}
+`,
+      };
+
+      const parser = new SolidityParser();
+      const uris: string[] = [];
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const nodes = graph.getNodes();
+      const callDirect = nodes.find(
+        (node) => node.name === "callDirect" && node.containerName === "UsesAliases",
+      );
+      const callInheritedInterface = nodes.find(
+        (node) => node.name === "callInheritedInterface" && node.containerName === "UsesAliases",
+      );
+      const callStructMembers = nodes.find(
+        (node) => node.name === "callStructMembers" && node.containerName === "UsesAliases",
+      );
+      const direct = nodes.find(
+        (node) => node.name === "direct" && node.containerName === "UsesAliases",
+      );
+      const child = nodes.find(
+        (node) => node.name === "child" && node.containerName === "UsesAliases",
+      );
+      const boxState = nodes.find(
+        (node) => node.name === "box" && node.containerName === "UsesAliases",
+      );
+      const namespacedBox = nodes.find(
+        (node) => node.name === "namespacedBox" && node.containerName === "UsesAliases",
+      );
+      const target = nodes.find((node) => node.name === "Target" && node.kind === "contract");
+      const childInterface = nodes.find(
+        (node) => node.name === "IChild" && node.kind === "interface",
+      );
+      const basePing = nodes.find(
+        (node) =>
+          node.detail === "ping(uint256 value) returns (uint256)" && node.containerName === "IBase",
+      );
+      const targetPing = nodes.find(
+        (node) =>
+          node.detail === "ping(uint256 value) returns (uint256)" &&
+          node.containerName === "Target",
+      );
+      const box = nodes.find((node) => node.name === "Box" && node.kind === "struct");
+      assert.ok(callDirect, "expected callDirect node");
+      assert.ok(callInheritedInterface, "expected callInheritedInterface node");
+      assert.ok(callStructMembers, "expected callStructMembers node");
+      assert.ok(direct, "expected direct state variable node");
+      assert.ok(child, "expected child state variable node");
+      assert.ok(boxState, "expected box state variable node");
+      assert.ok(namespacedBox, "expected namespacedBox state variable node");
+      assert.ok(target, "expected Target contract node");
+      assert.ok(childInterface, "expected IChild interface node");
+      assert.ok(basePing, "expected inherited IBase.ping node");
+      assert.ok(targetPing, "expected overloaded Target.ping(uint256) node");
+      assert.ok(box, "expected Box struct node");
+
+      assert.ok(
+        graph.getOutgoingEdges(direct.id, "usesType").some((edge) => edge.target === target.id),
+        "expected renamed contract import to create a usesType edge to Target",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(child.id, "usesType")
+          .some((edge) => edge.target === childInterface.id),
+        "expected renamed interface import to create a usesType edge to IChild",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(boxState.id, "usesType").some((edge) => edge.target === box.id),
+        "expected renamed struct import to create a usesType edge to Box",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(namespacedBox.id, "usesType").some((edge) => edge.target === box.id),
+        "expected namespace-qualified struct type to create a usesType edge to Box",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(callDirect.id, "calls")
+          .some((edge) => edge.target === targetPing.id),
+        "expected direct.ping(1) to resolve through the renamed Target import",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(callInheritedInterface.id, "calls")
+          .some((edge) => edge.target === basePing.id),
+        "expected renamed interface receiver to resolve inherited IBase.ping",
+      );
+      assert.equal(
+        graph
+          .getOutgoingEdges(callStructMembers.id, "calls")
+          .filter((edge) => edge.target === basePing.id).length,
+        2,
+        "expected both aliased and namespace-qualified struct member receivers to resolve IBase.ping",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses explicit argument count to disambiguate using-for overloads", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-using-overload-test-"));
+    try {
+      const source = `pragma solidity ^0.8.24;
+struct Data {
+    uint256 value;
+}
+
+library DataLib {
+    function apply(Data storage self) internal {}
+    function apply(Data storage self, uint256 value) internal {}
+}
+
+contract UsesUsingOverloads {
+    using DataLib for Data;
+    Data internal data;
+
+    function run() external {
+        data.apply();
+        data.apply(1);
+    }
+}
+`;
+      const filePath = path.join(tmpDir, "src/UsingOverload.sol");
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, source, "utf-8");
+      const uri = URI.file(filePath).toString();
+
+      const parser = new SolidityParser();
+      parser.parse(uri, source);
+      const workspace = makeWorkspace(tmpDir, [uri]);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const run = graph
+        .getNodes()
+        .find((node) => node.name === "run" && node.containerName === "UsesUsingOverloads");
+      const applyNoArgs = graph
+        .getNodes()
+        .find((node) => node.detail === "apply(Data self)" && node.containerName === "DataLib");
+      const applyUint = graph
+        .getNodes()
+        .find(
+          (node) =>
+            node.detail === "apply(Data self, uint256 value)" && node.containerName === "DataLib",
+        );
+      assert.ok(run, "expected run node");
+      assert.ok(applyNoArgs, "expected receiver-only apply overload");
+      assert.ok(applyUint, "expected receiver plus uint256 apply overload");
+
+      const calls = graph.getOutgoingEdges(run.id, "calls");
+      assert.ok(
+        calls.some((edge) => edge.target === applyNoArgs.id),
+        "expected data.apply() to target the receiver-only overload",
+      );
+      assert.ok(
+        calls.some((edge) => edge.target === applyUint.id),
+        "expected data.apply(1) to target the uint256 overload",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses warm solc declaration info to retarget parser-resolved call edges", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-solc-target-test-"));
+    try {
+      const files = {
+        "src/TargetA.sol": `pragma solidity ^0.8.24;
+contract TargetA {
+    function ping() external {}
+}
+`,
+        "src/TargetB.sol": `pragma solidity ^0.8.24;
+contract TargetB {
+    function ping() external {}
+}
+`,
+        "src/Caller.sol": `pragma solidity ^0.8.24;
+import "./TargetA.sol";
+import "./TargetB.sol";
+
+contract Caller {
+    TargetA internal target;
+
+    function entry() external {
+        target.ping();
+    }
+}
+`,
+      };
+
+      const parser = new SolidityParser();
+      const uris: string[] = [];
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      const callerPath = path.join(tmpDir, "src/Caller.sol");
+      const targetBPath = path.join(tmpDir, "src/TargetB.sol");
+      const pingCallOffset = fs.readFileSync(callerPath, "utf-8").indexOf("ping");
+      graph.setSolcBridge({
+        getDeclarationInfoAt: (filePath: string, offset: number) =>
+          filePath === callerPath && offset === pingCallOffset
+            ? {
+                declarationId: 4242,
+                declarationFilePath: targetBPath,
+                declarationOffset: files["src/TargetB.sol"].indexOf("function ping"),
+                declarationLength: "function ping() external {}".length,
+                nodeType: "FunctionDefinition",
+                name: "ping",
+              }
+            : null,
+      } as unknown as SolcBridge);
+      graph.rebuildWorkspace();
+
+      const entry = graph
+        .getNodes()
+        .find((node) => node.name === "entry" && node.containerName === "Caller");
+      const targetAPing = graph
+        .getNodes()
+        .find((node) => node.name === "ping" && node.containerName === "TargetA");
+      const targetBPing = graph
+        .getNodes()
+        .find((node) => node.name === "ping" && node.containerName === "TargetB");
+      assert.ok(entry, "expected Caller.entry node");
+      assert.ok(targetAPing, "expected TargetA.ping node");
+      assert.ok(targetBPing, "expected TargetB.ping node");
+
+      const calls = graph.getOutgoingEdges(entry.id, "calls");
+      assert.ok(
+        calls.some(
+          (edge) =>
+            edge.target === targetBPing.id &&
+            edge.metadata?.resolutionConfidence === "solc" &&
+            edge.metadata?.solcDeclarationId === 4242,
+        ),
+        "expected call edge to use the compiler-resolved declaration target",
+      );
+      assert.ok(
+        calls.every((edge) => edge.target !== targetAPing.id),
+        "did not expect parser fallback target when solc declaration maps to another function",
+      );
+
+      const externalCalls = graph.getOutgoingEdges(entry.id, "externalCall");
+      assert.ok(
+        externalCalls.some((edge) => edge.target === targetBPing.id),
+        "expected paired externalCall edge to use the compiler-resolved declaration target",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses warm solc declaration info to retarget non-call relationship edges", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-solc-rich-retarget-"));
+    try {
+      const files = {
+        "src/Other.sol": `pragma solidity ^0.8.24;
+contract Other {
+    uint256 public total;
+    event Updated(uint256 value);
+    error Unauthorized();
+}
+`,
+        "src/Caller.sol": `pragma solidity ^0.8.24;
+import "./Other.sol";
+
+contract Caller {
+    uint256 public total;
+    event Updated(uint256 value);
+    error Unauthorized();
+
+    function entry() external {
+        total = 1;
+        emit Updated(total);
+        revert Unauthorized();
+    }
+}
+`,
+      };
+
+      const parser = new SolidityParser();
+      const uris: string[] = [];
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      const callerPath = path.join(tmpDir, "src/Caller.sol");
+      const otherPath = path.join(tmpDir, "src/Other.sol");
+      const callerText = files["src/Caller.sol"];
+      const otherText = files["src/Other.sol"];
+      const totalWriteOffset = callerText.indexOf("total = 1");
+      const emitOffset = callerText.indexOf("Updated(total)");
+      const revertOffset = callerText.lastIndexOf("Unauthorized();");
+      graph.setSolcBridge({
+        getDeclarationInfoAt: (filePath: string, offset: number) => {
+          if (filePath !== callerPath) return null;
+          if (offset === totalWriteOffset) {
+            return {
+              declarationId: 5101,
+              declarationFilePath: otherPath,
+              declarationOffset: otherText.indexOf("total"),
+              declarationLength: "total".length,
+              nodeType: "VariableDeclaration",
+              name: "total",
+            };
+          }
+          if (offset === emitOffset) {
+            return {
+              declarationId: 5102,
+              declarationFilePath: otherPath,
+              declarationOffset: otherText.indexOf("Updated"),
+              declarationLength: "Updated".length,
+              nodeType: "EventDefinition",
+              name: "Updated",
+            };
+          }
+          if (offset === revertOffset) {
+            return {
+              declarationId: 5103,
+              declarationFilePath: otherPath,
+              declarationOffset: otherText.indexOf("Unauthorized"),
+              declarationLength: "Unauthorized".length,
+              nodeType: "ErrorDefinition",
+              name: "Unauthorized",
+            };
+          }
+          return null;
+        },
+      } as unknown as SolcBridge);
+      graph.rebuildWorkspace();
+
+      const entry = graph
+        .getNodes()
+        .find((node) => node.name === "entry" && node.containerName === "Caller");
+      const callerTotal = graph
+        .getNodes()
+        .find((node) => node.name === "total" && node.containerName === "Caller");
+      const otherTotal = graph
+        .getNodes()
+        .find((node) => node.name === "total" && node.containerName === "Other");
+      const callerUpdated = graph
+        .getNodes()
+        .find((node) => node.name === "Updated" && node.containerName === "Caller");
+      const otherUpdated = graph
+        .getNodes()
+        .find((node) => node.name === "Updated" && node.containerName === "Other");
+      const callerUnauthorized = graph
+        .getNodes()
+        .find((node) => node.name === "Unauthorized" && node.containerName === "Caller");
+      const otherUnauthorized = graph
+        .getNodes()
+        .find((node) => node.name === "Unauthorized" && node.containerName === "Other");
+      assert.ok(entry, "expected Caller.entry node");
+      assert.ok(callerTotal, "expected Caller.total node");
+      assert.ok(otherTotal, "expected Other.total node");
+      assert.ok(callerUpdated, "expected Caller.Updated node");
+      assert.ok(otherUpdated, "expected Other.Updated node");
+      assert.ok(callerUnauthorized, "expected Caller.Unauthorized node");
+      assert.ok(otherUnauthorized, "expected Other.Unauthorized node");
+
+      const writes = graph.getOutgoingEdges(entry.id, "writes");
+      assert.ok(
+        writes.some(
+          (edge) =>
+            edge.target === otherTotal.id &&
+            edge.metadata?.resolutionConfidence === "solc" &&
+            edge.metadata?.solcDeclarationId === 5101,
+        ),
+        "expected state write edge to use compiler-resolved declaration target",
+      );
+      assert.ok(
+        writes.every((edge) => edge.target !== callerTotal.id),
+        "did not expect parser fallback state variable target when solc maps elsewhere",
+      );
+
+      const emits = graph.getOutgoingEdges(entry.id, "emits");
+      assert.ok(
+        emits.some(
+          (edge) =>
+            edge.target === otherUpdated.id &&
+            edge.metadata?.resolutionConfidence === "solc" &&
+            edge.metadata?.solcDeclarationId === 5102,
+        ),
+        "expected emit edge to use compiler-resolved event target",
+      );
+      assert.ok(
+        emits.every((edge) => edge.target !== callerUpdated.id),
+        "did not expect parser fallback event target when solc maps elsewhere",
+      );
+
+      const reverts = graph.getOutgoingEdges(entry.id, "revertsWith");
+      assert.ok(
+        reverts.some(
+          (edge) =>
+            edge.target === otherUnauthorized.id &&
+            edge.metadata?.resolutionConfidence === "solc" &&
+            edge.metadata?.solcDeclarationId === 5103,
+        ),
+        "expected revert edge to use compiler-resolved error target",
+      );
+      assert.ok(
+        reverts.every((edge) => edge.target !== callerUnauthorized.id),
+        "did not expect parser fallback error target when solc maps elsewhere",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("indexes implementation, override, creation, external-call, and delegatecall edges", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-rich-edges-"));
+    try {
+      const files = {
+        "src/IFoo.sol": `pragma solidity ^0.8.24;
+interface IFoo {
+    function run() external;
+}
+`,
+        "src/Base.sol": `pragma solidity ^0.8.24;
+contract Base {
+    function hook() public virtual {}
+}
+`,
+        "src/Created.sol": `pragma solidity ^0.8.24;
+contract Created {}
+`,
+        "src/Callable.sol": `pragma solidity ^0.8.24;
+contract Callable {
+    function call() external {}
+}
+`,
+        "src/Impl.sol": `pragma solidity ^0.8.24;
+import "./IFoo.sol";
+import "./Base.sol";
+import "./Created.sol";
+import "./Callable.sol";
+
+contract Impl is IFoo, Base {
+    IFoo public target;
+    Callable public callable;
+
+    function run() external override {
+        Created created = new Created();
+        created;
+    }
+
+    function hook() public override {}
+
+    function callTarget() external {
+        target.run();
+    }
+
+    function tryTarget() external {
+        try target.run() {} catch {}
+    }
+
+    function jump(address impl, bytes memory data) external {
+        impl.delegatecall(data);
+    }
+
+    function lowLevel(address targetAddress, bytes memory data) external {
+        targetAddress.call(data);
+        targetAddress.staticcall(data);
+    }
+
+    function typedCall() external {
+        callable.call();
+    }
+}
+`,
+      };
+
+      const parser = new SolidityParser();
+      const uris: string[] = [];
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const nodes = graph.getNodes();
+      const implRun = nodes.find((node) => node.name === "run" && node.containerName === "Impl");
+      const interfaceRun = nodes.find(
+        (node) => node.name === "run" && node.containerName === "IFoo",
+      );
+      const implHook = nodes.find((node) => node.name === "hook" && node.containerName === "Impl");
+      const baseHook = nodes.find((node) => node.name === "hook" && node.containerName === "Base");
+      const callTarget = nodes.find(
+        (node) => node.name === "callTarget" && node.containerName === "Impl",
+      );
+      const tryTarget = nodes.find(
+        (node) => node.name === "tryTarget" && node.containerName === "Impl",
+      );
+      const jump = nodes.find((node) => node.name === "jump" && node.containerName === "Impl");
+      const lowLevel = nodes.find(
+        (node) => node.name === "lowLevel" && node.containerName === "Impl",
+      );
+      const typedCall = nodes.find(
+        (node) => node.name === "typedCall" && node.containerName === "Impl",
+      );
+      const created = nodes.find((node) => node.name === "Created" && node.kind === "contract");
+      const callableCall = nodes.find(
+        (node) => node.name === "call" && node.containerName === "Callable",
+      );
+      assert.ok(implRun, "expected Impl.run node");
+      assert.ok(interfaceRun, "expected IFoo.run node");
+      assert.ok(implHook, "expected Impl.hook node");
+      assert.ok(baseHook, "expected Base.hook node");
+      assert.ok(callTarget, "expected Impl.callTarget node");
+      assert.ok(tryTarget, "expected Impl.tryTarget node");
+      assert.ok(jump, "expected Impl.jump node");
+      assert.ok(lowLevel, "expected Impl.lowLevel node");
+      assert.ok(typedCall, "expected Impl.typedCall node");
+      assert.ok(created, "expected Created contract node");
+      assert.ok(callableCall, "expected Callable.call node");
+
+      assert.ok(
+        graph
+          .getOutgoingEdges(implRun.id, "implements")
+          .some((edge) => edge.target === interfaceRun.id),
+        "expected override of interface function to create implements edge",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(implHook.id, "overrides")
+          .some((edge) => edge.target === baseHook.id),
+        "expected override of base function to create overrides edge",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(implRun.id, "creates").some((edge) => edge.target === created.id),
+        "expected new Created() to create creates edge",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(callTarget.id, "externalCall")
+          .some((edge) => edge.target === interfaceRun.id),
+        "expected receiver-typed target.run() to create externalCall edge",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(tryTarget.id, "externalCall")
+          .some((edge) => edge.target === interfaceRun.id),
+        "expected try target.run() to create externalCall edge",
+      );
+
+      const delegateCalls = graph.getOutgoingEdges(jump.id, "delegateCall");
+      assert.equal(delegateCalls.length, 1);
+      assert.equal(delegateCalls[0].target, jump.id);
+      assert.equal(delegateCalls[0].metadata?.unresolvedTarget, true);
+
+      const lowLevelExternalCalls = graph.getOutgoingEdges(lowLevel.id, "externalCall");
+      assert.equal(lowLevelExternalCalls.length, 2);
+      assert.ok(
+        lowLevelExternalCalls.every(
+          (edge) =>
+            edge.target === lowLevel.id &&
+            edge.metadata?.lowLevelCall === true &&
+            edge.metadata?.unresolvedTarget === true,
+        ),
+        "expected address.call/staticcall to create unresolved externalCall edges",
+      );
+      assert.deepEqual(lowLevelExternalCalls.map((edge) => edge.metadata?.calleeName).sort(), [
+        "call",
+        "staticcall",
+      ]);
+
+      assert.ok(
+        graph
+          .getOutgoingEdges(typedCall.id, "externalCall")
+          .some((edge) => edge.target === callableCall.id),
+        "expected contract method named call() to resolve as a typed external call",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stays within interactive performance budgets for medium workspaces", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-perf-test-"));
+    try {
+      const files: Record<string, string> = {};
+      for (let i = 0; i < 80; i++) {
+        files[`src/C${i}.sol`] = `pragma solidity ^0.8.24;
+contract C${i} {
+    uint256 public value;
+    event Updated(uint256 value);
+
+    function bump() external {
+        value += 1;
+        emit Updated(value);
+    }
+}
+`;
+      }
+
+      const parser = new SolidityParser();
+      const uris: string[] = [];
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+
+      const rebuildStarted = Date.now();
+      graph.rebuildWorkspace();
+      const rebuildMs = Date.now() - rebuildStarted;
+      assert.ok(
+        rebuildMs < 1_500,
+        `expected medium graph rebuild under 1500ms, got ${rebuildMs}ms`,
+      );
+
+      const projectStarted = Date.now();
+      const capped = graph.toProjectGraph(undefined, 120);
+      const projectMs = Date.now() - projectStarted;
+      assert.ok(projectMs < 150, `expected capped graph query under 150ms, got ${projectMs}ms`);
+      assert.equal(capped.nodes.length, 120);
+      assert.equal(capped.truncated, true);
+
+      const root = graph
+        .getNodes()
+        .find((node) => node.name === "bump" && node.containerName === "C40");
+      assert.ok(root, "expected C40.bump node");
+      const neighborhoodStarted = Date.now();
+      const neighborhood = graph.toNeighborhood({
+        rootId: root.id,
+        depth: 2,
+        direction: "both",
+        maxNodes: 120,
+      });
+      const neighborhoodMs = Date.now() - neighborhoodStarted;
+      assert.ok(
+        neighborhoodMs < 150,
+        `expected graph neighborhood query under 150ms, got ${neighborhoodMs}ms`,
+      );
+      assert.equal(neighborhood.focusId, root.id);
+
+      const updateUri = URI.file(path.join(tmpDir, "src/C40.sol")).toString();
+      const updatedText = files["src/C40.sol"].replace("value += 1;", "value += 2;");
+      fs.writeFileSync(path.join(tmpDir, "src/C40.sol"), updatedText, "utf-8");
+      parser.parse(updateUri, updatedText);
+      symbolIndex.updateFile(updateUri);
+      const updateStarted = Date.now();
+      graph.updateFileAndDependents(updateUri);
+      const updateMs = Date.now() - updateStarted;
+      assert.ok(updateMs < 250, `expected graph incremental update under 250ms, got ${updateMs}ms`);
+
+      const cacheDir = path.join(tmpDir, ".cache", "graph-index");
+      const writeStarted = Date.now();
+      graph.writeCache(cacheDir);
+      const writeMs = Date.now() - writeStarted;
+      assert.ok(writeMs < 500, `expected graph cache write under 500ms, got ${writeMs}ms`);
+
+      const restoreGraph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      const restoreStarted = Date.now();
+      assert.equal(restoreGraph.restoreFromCache(cacheDir), true);
+      const restoreMs = Date.now() - restoreStarted;
+      assert.ok(restoreMs < 500, `expected graph cache restore under 500ms, got ${restoreMs}ms`);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps large-workspace declaration indexing and relationship batches bounded", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-large-perf-test-"));
+    try {
+      const parser = new SolidityParser();
+      const uris: string[] = [];
+      for (let i = 0; i < 1_000; i++) {
+        const contents = `pragma solidity ^0.8.24;
+contract Large${i} {
+    uint256 public value;
+
+    function read() external view returns (uint256) {
+        return value;
+    }
+}
+`;
+        const filePath = path.join(tmpDir, "src", `Large${i}.sol`);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+
+      const declarationStarted = Date.now();
+      graph.rebuildWorkspaceDeclarations();
+      const declarationMs = Date.now() - declarationStarted;
+      assert.ok(
+        declarationMs < 1_000,
+        `expected large declaration graph under 1000ms, got ${declarationMs}ms`,
+      );
+
+      let stats = graph.getStats();
+      assert.equal(stats.relationshipIndexComplete, false);
+      assert.equal(stats.relationshipFilesTotal, 1_000);
+      assert.equal(stats.relationshipFilesIndexed, 0);
+      assert.equal(graph.getNodes().length, 4_000);
+
+      const firstBatch = graph.indexRelationshipBatch(20, 10);
+      assert.equal(firstBatch.filesIndexed, 10);
+      assert.equal(firstBatch.complete, false);
+      assert.ok(
+        firstBatch.durationMs < 100,
+        `expected first relationship batch under 100ms, got ${firstBatch.durationMs}ms`,
+      );
+
+      const root = graph
+        .getNodes()
+        .find((node) => node.name === "read" && node.containerName === "Large999");
+      assert.ok(root, "expected Large999.read node");
+      const ensureStarted = Date.now();
+      graph.ensureFileRelationships(root.uri);
+      const ensureMs = Date.now() - ensureStarted;
+      assert.ok(
+        ensureMs < 100,
+        `expected focused relationship indexing under 100ms, got ${ensureMs}ms`,
+      );
+      assert.ok(graph.getOutgoingEdges(root.id, "reads").length >= 1);
+
+      stats = graph.getStats();
+      assert.equal(stats.relationshipIndexComplete, false);
+      assert.ok((stats.relationshipFilesIndexed ?? 0) >= 11);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps Foundry-shaped project graph indexing bounded", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-foundry-perf-test-"));
+    try {
+      const parser = new SolidityParser();
+      const uris: string[] = [];
+      const files: Record<string, string> = {};
+
+      for (let i = 0; i < 40; i++) {
+        files[`interfaces/IAsset${i}.sol`] = `pragma solidity ^0.8.24;
+interface IAsset${i} {
+    function balanceOf(address account) external view returns (uint256);
+    function transfer(address to, uint256 amount) external returns (bool);
+}
+`;
+      }
+
+      for (let i = 0; i < 24; i++) {
+        files[`lib/Math${i}.sol`] = `pragma solidity ^0.8.24;
+library Math${i} {
+    function add(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a + b;
+    }
+}
+`;
+      }
+
+      for (let i = 0; i < 24; i++) {
+        files[`src/base/Base${i}.sol`] = `pragma solidity ^0.8.24;
+abstract contract Base${i} {
+    uint256 internal baseValue;
+
+    function baseRead() public view returns (uint256) {
+        return baseValue;
+    }
+}
+`;
+      }
+
+      for (let i = 0; i < 160; i++) {
+        const asset = i % 40;
+        const math = i % 24;
+        const base = i % 24;
+        const previousImport = i > 0 ? `import "./Vault${i - 1}.sol";\n` : "";
+        const previousType = i > 0 ? `Vault${i - 1} previous` : "Base0 previous";
+        files[`src/Vault${i}.sol`] = `pragma solidity ^0.8.24;
+import "../interfaces/IAsset${asset}.sol";
+import "../lib/Math${math}.sol";
+import "./base/Base${base}.sol";
+${previousImport}
+contract Vault${i} is Base${base} {
+    using Math${math} for uint256;
+
+    IAsset${asset} internal asset;
+    uint256 public totalAssets;
+    event Deposited(address indexed account, uint256 amount);
+    error TransferFailed();
+
+    function deposit(uint256 amount) external {
+        totalAssets = totalAssets.add(amount);
+        baseValue = baseValue.add(amount);
+        if (!asset.transfer(address(this), amount)) revert TransferFailed();
+        emit Deposited(msg.sender, amount);
+    }
+
+    function preview(${previousType}) external view returns (uint256) {
+        return asset.balanceOf(address(this)) + totalAssets + previous.baseRead();
+    }
+}
+`;
+      }
+
+      for (let i = 0; i < 40; i++) {
+        const vault = i * 4;
+        files[`test/Vault${vault}.t.sol`] = `pragma solidity ^0.8.24;
+import "../src/Vault${vault}.sol";
+
+contract Vault${vault}Test {
+    Vault${vault} internal vault;
+
+    function test_deposit_smoke() external {
+        vault.deposit(1);
+    }
+}
+`;
+      }
+
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+
+      const declarationStarted = Date.now();
+      graph.rebuildWorkspaceDeclarations();
+      const declarationMs = Date.now() - declarationStarted;
+      assert.ok(
+        declarationMs < 3_000,
+        `expected Foundry-shaped declarations under 3000ms, got ${declarationMs}ms`,
+      );
+
+      let stats = graph.getStats();
+      assert.equal(stats.relationshipFilesTotal, 264);
+      assert.equal(stats.relationshipIndexComplete, false);
+      assert.equal(stats.filesByTier.project, 224);
+      assert.equal(stats.filesByTier.deps ?? 0, 0);
+      assert.equal(stats.filesByTier.tests, 40);
+
+      const firstBatch = graph.indexRelationshipBatch(35, 20);
+      assert.equal(firstBatch.filesIndexed, 20);
+      assert.equal(firstBatch.complete, false);
+      assert.ok(
+        firstBatch.durationMs < 500,
+        `expected Foundry-shaped relationship batch under 500ms, got ${firstBatch.durationMs}ms`,
+      );
+
+      const vaultUri = URI.file(path.join(tmpDir, "src/Vault159.sol")).toString();
+      const focusedStarted = Date.now();
+      graph.ensureFileRelationships(vaultUri);
+      const focusedMs = Date.now() - focusedStarted;
+      assert.ok(
+        focusedMs < 500,
+        `expected focused Foundry-shaped indexing under 500ms, got ${focusedMs}ms`,
+      );
+
+      const deposit = graph
+        .getNodes()
+        .find((node) => node.name === "deposit" && node.containerName === "Vault159");
+      assert.ok(deposit, "expected Vault159.deposit node");
+      assert.ok(
+        graph.getOutgoingEdges(deposit.id, "externalCall").some((edge) => {
+          const target = graph.getNode(edge.target);
+          return target?.name === "transfer" && target.containerName === "IAsset39";
+        }),
+        "expected receiver-typed IAsset.transfer externalCall edge",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(deposit.id, "writes").some((edge) => {
+          const target = graph.getNode(edge.target);
+          return target?.name === "totalAssets" && target.containerName === "Vault159";
+        }),
+        "expected state write edge for totalAssets",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(deposit.id, "emits").some((edge) => {
+          const target = graph.getNode(edge.target);
+          return target?.name === "Deposited" && target.containerName === "Vault159";
+        }),
+        "expected event emission edge",
+      );
+
+      const cacheDir = path.join(tmpDir, ".cache", "graph-index");
+      const writeStarted = Date.now();
+      graph.writeCache(cacheDir);
+      const writeMs = Date.now() - writeStarted;
+      assert.ok(
+        writeMs < 1_500,
+        `expected Foundry-shaped cache write under 1500ms, got ${writeMs}ms`,
+      );
+
+      const restored = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      const restoreStarted = Date.now();
+      assert.equal(restored.restoreFromCache(cacheDir), true);
+      const restoreMs = Date.now() - restoreStarted;
+      assert.ok(
+        restoreMs < 1_500,
+        `expected Foundry-shaped cache restore under 1500ms, got ${restoreMs}ms`,
+      );
+
+      const baseUri = URI.file(path.join(tmpDir, "src/base/Base15.sol")).toString();
+      const updatedBase = files["src/base/Base15.sol"].replace(
+        "return baseValue;",
+        "return baseValue + 1;",
+      );
+      parser.parse(baseUri, updatedBase);
+      symbolIndex.updateFile(baseUri);
+      const updateStarted = Date.now();
+      const updatedUris = graph.updateFileAndDependents(baseUri);
+      const updateMs = Date.now() - updateStarted;
+      assert.ok(
+        updateMs < 1_000,
+        `expected shared-base incremental update under 1000ms, got ${updateMs}ms`,
+      );
+      assert.ok(updatedUris.length > 1, "expected shared base update to refresh dependents");
+
+      stats = graph.getStats();
+      assert.equal(stats.relationshipIndexComplete, false);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps dependency relationship indexing opt-in while preserving dependency declarations", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-deps-test-"));
+    try {
+      const files = {
+        "src/App.sol": `pragma solidity ^0.8.24;
+import "../lib/Dep.sol";
+
+contract App {
+    Dep internal dep;
+
+    function run() external view returns (uint256) {
+        return dep.read();
+    }
+}
+`,
+        "lib/Dep.sol": `pragma solidity ^0.8.24;
+
+contract Dep {
+    uint256 internal total;
+
+    function read() external view returns (uint256) {
+        return total;
+    }
+}
+`,
+      };
+      const parser = new SolidityParser();
+      const uris: string[] = [];
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+
+      const defaultDepsDisabled = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      defaultDepsDisabled.rebuildWorkspaceDeclarations();
+      let stats = defaultDepsDisabled.getStats();
+      assert.equal(stats.filesByTier.project, 1);
+      assert.equal(stats.filesByTier.deps ?? 0, 0);
+      assert.equal(stats.relationshipFilesTotal, 1);
+      assert.equal(
+        defaultDepsDisabled.getNodes().some((node) => node.containerName === "Dep"),
+        false,
+        "expected dependency declarations to be omitted by default",
+      );
+
+      const declarationsOnlyDeps = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      assert.equal(declarationsOnlyDeps.setDependencyIndexing("declarations"), true);
+      declarationsOnlyDeps.rebuildWorkspaceDeclarations();
+      stats = declarationsOnlyDeps.getStats();
+      assert.equal(stats.filesByTier.project, 1);
+      assert.equal(stats.filesByTier.deps, 1);
+      assert.equal(stats.relationshipFilesTotal, 1);
+      assert.equal(stats.pendingRelationshipFiles, 1);
+
+      const depRead = declarationsOnlyDeps
+        .getNodes()
+        .find((node) => node.name === "read" && node.containerName === "Dep");
+      const depTotal = declarationsOnlyDeps
+        .getNodes()
+        .find((node) => node.name === "total" && node.containerName === "Dep");
+      assert.ok(depRead, "expected dependency function declaration node");
+      assert.ok(depTotal, "expected dependency state declaration node");
+
+      while (!declarationsOnlyDeps.indexRelationshipBatch(10, 10).complete) {
+        // Drain project/test relationship work.
+      }
+      stats = declarationsOnlyDeps.getStats();
+      assert.equal(stats.relationshipIndexComplete, true);
+      assert.equal(stats.relationshipFilesIndexed, 1);
+      assert.equal(declarationsOnlyDeps.getOutgoingEdges(depRead.id, "reads").length, 0);
+
+      const fullDeps = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      assert.equal(fullDeps.setDependencyIndexing("relationships"), true);
+      fullDeps.rebuildWorkspace();
+      stats = fullDeps.getStats();
+      assert.equal(stats.relationshipFilesTotal, 2);
+      assert.equal(stats.relationshipIndexComplete, true);
+      const fullDepRead = fullDeps
+        .getNodes()
+        .find((node) => node.name === "read" && node.containerName === "Dep");
+      const fullDepTotal = fullDeps
+        .getNodes()
+        .find((node) => node.name === "total" && node.containerName === "Dep");
+      assert.ok(fullDepRead, "expected dependency read node");
+      assert.ok(fullDepTotal, "expected dependency total node");
+      assert.ok(
+        fullDeps
+          .getOutgoingEdges(fullDepRead.id, "reads")
+          .some((edge) => edge.target === fullDepTotal.id),
+        "expected dependency relationship edge only when dependency relationships are enabled",
+      );
+
+      assert.equal(declarationsOnlyDeps.setDependencyIndexing("disabled"), true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("tolerates skipped tuple slots while indexing local variables", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-test-"));
+    try {
+      const contents = `pragma solidity ^0.8.24;
+contract TupleLocals {
+    uint256 internal total;
+
+    function pair() internal pure returns (uint256, uint256) {
+        return (1, 2);
+    }
+
+    function readSecond() external returns (uint256) {
+        (, uint256 value) = pair();
+        total = value;
+        return total;
+    }
+}
+`;
+      const filePath = path.join(tmpDir, "src/TupleLocals.sol");
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, contents, "utf-8");
+      const uri = URI.file(filePath).toString();
+      const parser = new SolidityParser();
+      parser.parse(uri, contents);
+      const workspace = makeWorkspace(tmpDir, [uri]);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+
+      assert.doesNotThrow(() => graph.rebuildWorkspace());
+      const readSecond = graph
+        .getNodes()
+        .find((node) => node.name === "readSecond" && node.containerName === "TupleLocals");
+      const total = graph
+        .getNodes()
+        .find((node) => node.name === "total" && node.containerName === "TupleLocals");
+      assert.ok(readSecond, "expected readSecond function node");
+      assert.ok(total, "expected total state variable node");
+      assert.ok(
+        graph
+          .getOutgoingEdges(readSecond.id, "writes")
+          .some((edge) => edge.target === total.id && edge.metadata?.variableName === "total"),
+        "expected write edge for total",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("supports declaration-only rebuilds with chunked relationship indexing", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-test-"));
+    try {
+      const files = {
+        "src/A.sol": `pragma solidity ^0.8.24;
+import "./B.sol";
+
+contract A {
+    B internal b;
+
+    function run() external {
+        b.ping();
+    }
+}
+`,
+        "src/B.sol": `pragma solidity ^0.8.24;
+
+contract B {
+    function ping() external {}
+}
+`,
+      };
+      const uris: string[] = [];
+      const parser = new SolidityParser();
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+
+      graph.rebuildWorkspaceDeclarations();
+
+      const run = graph
+        .getNodes()
+        .find((node) => node.name === "run" && node.containerName === "A");
+      const ping = graph
+        .getNodes()
+        .find((node) => node.name === "ping" && node.containerName === "B");
+      assert.ok(run, "expected A.run declaration node");
+      assert.ok(ping, "expected B.ping declaration node");
+      assert.equal(graph.getOutgoingEdges(run.id, "calls").length, 0);
+
+      let stats = graph.getStats();
+      assert.equal(stats.relationshipIndexComplete, false);
+      assert.equal(stats.relationshipFilesIndexed, 0);
+      assert.equal(stats.pendingRelationshipFiles, 2);
+
+      const partialCacheDir = path.join(tmpDir, ".cache", "partial");
+      graph.writeCache(partialCacheDir);
+      const partialRestore = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      assert.equal(partialRestore.restoreFromCache(partialCacheDir), true);
+      assert.equal(partialRestore.getStats().relationshipIndexComplete, false);
+      partialRestore.ensureWorkspaceDeclarations();
+      assert.equal(partialRestore.getStats().pendingRelationshipFiles, 2);
+
+      const firstBatch = graph.indexRelationshipBatch(1, 1);
+      assert.equal(firstBatch.filesIndexed, 1);
+      assert.equal(firstBatch.complete, false);
+
+      graph.ensureFileRelationships(URI.file(path.join(tmpDir, "src/A.sol")).toString());
+      assert.ok(
+        graph.getOutgoingEdges(run.id, "calls").some((edge) => edge.target === ping.id),
+        "expected forced relationship indexing to add A.run -> B.ping",
+      );
+
+      while (!graph.indexRelationshipBatch(5, 5).complete) {
+        // Drain remaining work.
+      }
+
+      stats = graph.getStats();
+      assert.equal(stats.relationshipIndexComplete, true);
+      assert.equal(stats.pendingRelationshipFiles, 0);
+
+      const fullCacheDir = path.join(tmpDir, ".cache", "full");
+      graph.writeCache(fullCacheDir);
+      const restored = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      assert.equal(restored.restoreFromCache(fullCacheDir), true);
+      assert.equal(restored.getStats().relationshipIndexComplete, true);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+function makeWorkspace(tmpDir: string, uris: string[]): WorkspaceManager {
+  return {
+    getAllFileUris: () => uris.slice(),
+    getFileTier: (uri: string) => {
+      const fsPath = URI.parse(uri).fsPath;
+      if (fsPath.includes("/lib/")) return "deps";
+      if (fsPath.includes("/test/")) return "tests";
+      return "project";
+    },
+    resolveImport: (importPath: string, fromFile: string) => {
+      const target = path.resolve(path.dirname(fromFile), importPath);
+      return fs.existsSync(target) ? target : null;
+    },
+    uriToPath: (uri: string) => URI.parse(uri).fsPath,
+    root: tmpDir,
+  } as unknown as WorkspaceManager;
+}

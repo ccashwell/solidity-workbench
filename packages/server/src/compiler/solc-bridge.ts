@@ -1,5 +1,8 @@
 import { keccak256 } from "js-sha3";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { LineIndex } from "@solidity-workbench/common";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
 /**
@@ -15,8 +18,8 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
  * - Gas estimates
  *
  * Compilation strategy:
- * - `forge build --json` for full project compilation (on save)
- * - `forge build --json --match-path` for single-file quick checks (on demand)
+ * - `forge build --json --ast --build-info` for full project compilation (on save)
+ * - `forge build --json <file>` for single-file quick checks (on demand)
  *
  * The solc standard JSON I/O format is documented at:
  * https://docs.soliditylang.org/en/latest/using-the-compiler.html#compiler-input-and-output-json-description
@@ -24,6 +27,8 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 export class SolcBridge {
   private cachedAst: Map<string, SolcSourceUnit> = new Map();
   private declarationsById: Map<number, { filePath: string; node: unknown }> = new Map();
+  private sourceTexts: Map<string, string | null> = new Map();
+  private lineIndexes: Map<string, LineIndex | null> = new Map();
 
   /**
    * Canonical method identifiers keyed by bare contract name.
@@ -54,14 +59,20 @@ export class SolcBridge {
    * Run a full forge build and extract ASTs + method identifiers.
    */
   async buildAndExtractAst(): Promise<Map<string, SolcSourceUnit>> {
+    const buildInfoPath = mkdtempSync(path.join(tmpdir(), "solidity-workbench-build-info-"));
     const result = await this.workspace.runForge([
       "build",
       "--json",
       "--force", // Force recompile to get fresh AST
+      "--ast",
+      "--build-info",
+      "--build-info-path",
+      buildInfoPath,
     ]);
 
     if (result.exitCode !== 0) {
       // Build failed — still try to parse partial output
+      rmSync(buildInfoPath, { recursive: true, force: true });
       return this.cachedAst;
     }
 
@@ -69,8 +80,11 @@ export class SolcBridge {
       const output = JSON.parse(result.stdout);
       this.extractAsts(output);
       this.extractSelectors(output);
+      this.extractBuildInfoOutputs(buildInfoPath);
     } catch {
       // Non-JSON output
+    } finally {
+      rmSync(buildInfoPath, { recursive: true, force: true });
     }
 
     return this.cachedAst;
@@ -81,7 +95,7 @@ export class SolcBridge {
    */
   async compileSingle(filePath: string): Promise<SolcOutput | null> {
     // Use forge to get the right solc version
-    const result = await this.workspace.runForge(["build", "--json", "--match-path", filePath]);
+    const result = await this.workspace.runForge(["build", "--json", filePath]);
 
     if (result.exitCode !== 0) return null;
 
@@ -100,14 +114,14 @@ export class SolcBridge {
   }
 
   /**
-   * Get type information for a node at a given byte offset.
+   * Get type information for a node at a given document offset.
    */
   getTypeAtOffset(filePath: string, offset: number): SolcTypeDescription | null {
     const ast = this.cachedAst.get(filePath);
     if (!ast) return null;
 
-    // Walk the AST to find the node at the given offset
-    const node = this.findNodeAtOffset(ast.ast, offset);
+    // Walk the AST to find the node at the given offset.
+    const node = this.findNodeAtOffset(ast.ast, this.documentOffsetToSolcOffset(filePath, offset));
     if (!node) return null;
 
     return node.typeDescriptions ?? null;
@@ -124,17 +138,69 @@ export class SolcBridge {
     const ast = this.cachedAst.get(filePath);
     if (!ast) return null;
 
-    const node = this.findNodeAtOffset(ast.ast, offset);
+    const node = this.findNodeAtOffset(ast.ast, this.documentOffsetToSolcOffset(filePath, offset));
     if (!node?.referencedDeclaration) return null;
 
     const cachedDecl = this.declarationsById.get(node.referencedDeclaration);
     const cachedDeclSrc = this.nodeSrc(cachedDecl?.node);
     if (cachedDecl && cachedDeclSrc) {
-      const [start, length] = this.parseSourceRange(cachedDeclSrc);
-      return { filePath: cachedDecl.filePath, offset: start, length };
+      const range = this.solcRangeToDocumentRange(cachedDecl.filePath, cachedDeclSrc);
+      return { filePath: cachedDecl.filePath, offset: range.offset, length: range.length };
     }
 
     return null;
+  }
+
+  /**
+   * Return the solc declaration identity for the node under `filePath:offset`.
+   *
+   * This is intentionally metadata-only: callers can keep their existing
+   * fallback resolution but tag graph edges / hovers / reports with the
+   * compiler's canonical declaration id when the rich AST cache is warm.
+   */
+  getDeclarationInfoAt(
+    filePath: string,
+    offset: number,
+  ): {
+    declarationId: number;
+    declarationFilePath?: string;
+    declarationOffset?: number;
+    declarationLength?: number;
+    nodeType?: string;
+    name?: string;
+  } | null {
+    const ast = this.cachedAst.get(filePath);
+    if (!ast) return null;
+
+    const node = this.findNodeAtOffset(ast.ast, this.documentOffsetToSolcOffset(filePath, offset));
+    if (!node) return null;
+
+    let declarationId: number | null = null;
+    if (typeof node.referencedDeclaration === "number") {
+      declarationId = node.referencedDeclaration;
+    } else if (typeof node.id === "number" && this.isDeclarationNode(node)) {
+      declarationId = node.id;
+    }
+    if (declarationId === null) return null;
+
+    const cachedDecl = this.declarationsById.get(declarationId);
+    const cachedDeclSrc = this.nodeSrc(cachedDecl?.node);
+    if (cachedDecl && cachedDeclSrc) {
+      const { offset: declarationOffset, length: declarationLength } =
+        this.solcRangeToDocumentRange(cachedDecl.filePath, cachedDeclSrc);
+      const name = (cachedDecl.node as { name?: unknown } | undefined)?.name;
+      const nodeType = (cachedDecl.node as { nodeType?: unknown } | undefined)?.nodeType;
+      return {
+        declarationId,
+        declarationFilePath: cachedDecl.filePath,
+        declarationOffset,
+        declarationLength,
+        nodeType: typeof nodeType === "string" ? nodeType : undefined,
+        name: typeof name === "string" ? name : undefined,
+      };
+    }
+
+    return { declarationId };
   }
 
   /**
@@ -153,7 +219,7 @@ export class SolcBridge {
     const ast = this.cachedAst.get(filePath);
     if (!ast) return null;
 
-    const node = this.findNodeAtOffset(ast.ast, offset);
+    const node = this.findNodeAtOffset(ast.ast, this.documentOffsetToSolcOffset(filePath, offset));
     if (!node) return null;
 
     let declId: number | null = null;
@@ -170,16 +236,16 @@ export class SolcBridge {
     const cachedDecl = this.declarationsById.get(declId);
     const cachedDeclSrc = this.nodeSrc(cachedDecl?.node);
     if (cachedDecl && cachedDeclSrc) {
-      const [declOffset, declLength] = this.parseSourceRange(cachedDeclSrc);
-      declaration = { filePath: cachedDecl.filePath, offset: declOffset, length: declLength };
+      const range = this.solcRangeToDocumentRange(cachedDecl.filePath, cachedDeclSrc);
+      declaration = { filePath: cachedDecl.filePath, offset: range.offset, length: range.length };
     }
 
     for (const [fp, su] of this.cachedAst) {
       if (!declaration) {
         const decl = this.findNodeById(su.ast, declId);
         if (decl?.src) {
-          const [declOffset, declLength] = this.parseSourceRange(decl.src);
-          declaration = { filePath: fp, offset: declOffset, length: declLength };
+          const range = this.solcRangeToDocumentRange(fp, decl.src);
+          declaration = { filePath: fp, offset: range.offset, length: range.length };
         }
       }
       this.collectReferencesTo(su.ast, declId, references, fp);
@@ -195,7 +261,7 @@ export class SolcBridge {
    * Given a file + offset, resolve the declaration (whether the
    * cursor is on the declaration itself or on a reference site) and
    * return:
-   *   - the declaration's own byte range
+   *   - the declaration's own editor range
    *   - every reference site in the same file whose
    *     `referencedDeclaration` matches
    *
@@ -224,7 +290,7 @@ export class SolcBridge {
     const ast = this.cachedAst.get(filePath);
     if (!ast) return null;
 
-    const node = this.findNodeAtOffset(ast.ast, offset);
+    const node = this.findNodeAtOffset(ast.ast, this.documentOffsetToSolcOffset(filePath, offset));
     if (!node) return null;
 
     // Resolve to a declaration: either the node itself *is* a
@@ -253,14 +319,17 @@ export class SolcBridge {
       return null;
     }
 
-    const [declStart, declLength] = this.parseSourceRange(decl.src);
+    const { offset: declStart, length: declLength } = this.solcRangeToDocumentRange(
+      filePath,
+      decl.src,
+    );
     const name = typeof decl.name === "string" ? decl.name : "";
     if (!name) return null;
 
     // Walk the file's AST collecting every Identifier whose
     // referencedDeclaration matches.
     const references: { offset: number; length: number }[] = [];
-    this.collectReferencesTo(ast.ast, declId, references);
+    this.collectReferencesTo(ast.ast, declId, references, filePath);
 
     return {
       declarationOffset: declStart,
@@ -295,8 +364,10 @@ export class SolcBridge {
       node.referencedDeclaration === declId &&
       typeof node.src === "string"
     ) {
-      const [start, length] = this.parseSourceRange(node.src);
-      out.push(filePath ? { filePath, offset: start, length } : { offset: start, length });
+      const range = filePath
+        ? this.solcRangeToDocumentRange(filePath, node.src)
+        : this.parseSourceRangeObject(node.src);
+      out.push(filePath ? { filePath, offset: range.offset, length: range.length } : range);
     }
 
     for (const key of Object.keys(node)) {
@@ -400,13 +471,17 @@ export class SolcBridge {
 
   // ── Private helpers ────────────────────────────────────────────────
 
-  private extractAsts(output: any): void {
-    if (!output.sources) return;
-
+  private extractAsts(output: SolcOutput): void {
     this.cachedAst.clear();
     this.declarationsById.clear();
+    this.sourceTexts.clear();
+    this.lineIndexes.clear();
+    this.addAsts(output);
+  }
 
-    for (const [filePath, source] of Object.entries(output.sources) as [string, any][]) {
+  private addAsts(output: SolcOutput): void {
+    if (!output.sources) return;
+    for (const [filePath, source] of Object.entries(output.sources)) {
       if (source.ast) {
         const absolute = this.absolutePath(filePath);
         this.cachedAst.set(absolute, {
@@ -416,6 +491,25 @@ export class SolcBridge {
         });
         this.indexDeclarationsById(source.ast, absolute);
       }
+    }
+  }
+
+  private extractBuildInfoOutputs(buildInfoPath: string): void {
+    try {
+      for (const entry of readdirSync(buildInfoPath, { withFileTypes: true })) {
+        if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+        try {
+          const buildInfo = JSON.parse(readFileSync(path.join(buildInfoPath, entry.name), "utf-8"));
+          const output = buildInfo?.output;
+          if (!output) continue;
+          this.addAsts(output);
+          this.extractSelectors(output);
+        } catch {
+          // Ignore malformed build-info files. They are cache warmers only.
+        }
+      }
+    } catch {
+      // Missing build-info is recoverable; parser-only features keep working.
     }
   }
 
@@ -500,21 +594,40 @@ export class SolcBridge {
     const [start, length] = this.parseSourceRange(node.src);
     if (offset < start || offset >= start + length) return null;
 
-    // Check children for a more specific match.
+    // Check all children and keep the narrowest containing match. Solc AST
+    // object key order is not a semantic ordering guarantee; returning the
+    // first child can incorrectly pick a broad ContractDefinition before the
+    // Identifier or MemberAccess under the cursor.
+    let best = node;
+    let bestLength = length;
     for (const key of Object.keys(node)) {
       if (key === "src" || key === "typeDescriptions") continue;
       const child = node[key];
       if (Array.isArray(child)) {
         for (const item of child) {
           const found = this.findNodeAtOffset(item, offset);
-          if (found) return found;
+          if (found) {
+            const foundSrc = this.nodeSrc(found);
+            const foundLength = foundSrc ? this.parseSourceRange(foundSrc)[1] : bestLength;
+            if (foundLength < bestLength) {
+              best = found;
+              bestLength = foundLength;
+            }
+          }
         }
       } else if (typeof child === "object" && child !== null) {
         const found = this.findNodeAtOffset(child, offset);
-        if (found) return found;
+        if (found) {
+          const foundSrc = this.nodeSrc(found);
+          const foundLength = foundSrc ? this.parseSourceRange(foundSrc)[1] : bestLength;
+          if (foundLength < bestLength) {
+            best = found;
+            bestLength = foundLength;
+          }
+        }
       }
     }
-    return node; // This node is the best match
+    return best;
   }
 
   private findNodeById(node: any, id: number): any | null {
@@ -570,6 +683,75 @@ export class SolcBridge {
 
   private absolutePath(filePath: string): string {
     return path.isAbsolute(filePath) ? filePath : path.join(this.workspace.root, filePath);
+  }
+
+  private sourceText(filePath: string): string | null {
+    const absolute = this.absolutePath(filePath);
+    if (this.sourceTexts.has(absolute)) return this.sourceTexts.get(absolute) ?? null;
+    try {
+      const text = readFileSync(absolute, "utf-8");
+      this.sourceTexts.set(absolute, text);
+      return text;
+    } catch {
+      this.sourceTexts.set(absolute, null);
+      return null;
+    }
+  }
+
+  private lineIndex(filePath: string): LineIndex | null {
+    const absolute = this.absolutePath(filePath);
+    if (this.lineIndexes.has(absolute)) return this.lineIndexes.get(absolute) ?? null;
+    const text = this.sourceText(absolute);
+    const index = text === null ? null : LineIndex.fromText(text);
+    this.lineIndexes.set(absolute, index);
+    return index;
+  }
+
+  private documentOffsetToSolcOffset(filePath: string, offset: number): number {
+    const text = this.sourceText(filePath);
+    if (text === null) return offset;
+    return Buffer.byteLength(text.slice(0, Math.max(0, Math.min(offset, text.length))), "utf8");
+  }
+
+  private solcRangeToDocumentRange(
+    filePath: string,
+    src: string,
+  ): { offset: number; length: number } {
+    const [byteOffset, byteLength] = this.parseSourceRange(src);
+    const offset = this.solcOffsetToDocumentOffset(filePath, byteOffset);
+    const end = this.solcOffsetToDocumentOffset(filePath, byteOffset + byteLength);
+    return { offset, length: Math.max(0, end - offset) };
+  }
+
+  private parseSourceRangeObject(src: string): { offset: number; length: number } {
+    const [offset, length] = this.parseSourceRange(src);
+    return { offset, length };
+  }
+
+  private solcOffsetToDocumentOffset(filePath: string, byteOffset: number): number {
+    const text = this.sourceText(filePath);
+    const index = this.lineIndex(filePath);
+    if (text === null || index === null) return byteOffset;
+    return this.offsetAtPosition(text, index.positionAt(byteOffset));
+  }
+
+  private offsetAtPosition(text: string, position: { line: number; character: number }): number {
+    if (position.line <= 0) return Math.max(0, Math.min(position.character, text.length));
+    let line = 0;
+    let i = 0;
+    while (i < text.length && line < position.line) {
+      const ch = text[i];
+      if (ch === "\r") {
+        line++;
+        i += i + 1 < text.length && text[i + 1] === "\n" ? 2 : 1;
+      } else if (ch === "\n") {
+        line++;
+        i++;
+      } else {
+        i++;
+      }
+    }
+    return Math.max(0, Math.min(i + position.character, text.length));
   }
 }
 

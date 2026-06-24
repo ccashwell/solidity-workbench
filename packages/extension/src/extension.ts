@@ -30,6 +30,7 @@ import { AbiPanel } from "./views/abi-panel.js";
 import { GasDiffProvider } from "./views/gas-diff.js";
 import { RemoteChainPanel } from "./views/remote-chain.js";
 import { IrViewerPanel } from "./views/ir-viewer.js";
+import { ProjectGraphExporter } from "./views/project-graph.js";
 
 let client: LanguageClient;
 
@@ -61,6 +62,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ],
     },
     outputChannelName: "Solidity Workbench",
+    initializationOptions: {
+      graphCacheUri: vscode.Uri.joinPath(context.globalStorageUri, "graph-index").toString(),
+    },
   };
 
   client = new LanguageClient(
@@ -178,6 +182,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const inheritanceGraph = new InheritanceGraphPanel(client);
   inheritanceGraph.activate(context);
+
+  const projectGraph = new ProjectGraphExporter(client);
+  projectGraph.activate(context);
 
   // ── ABI Explorer ─────────────────────────────────────────────────
 

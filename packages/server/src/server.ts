@@ -9,6 +9,7 @@ import {
   Hover,
   DidChangeConfigurationNotification,
   CodeAction,
+  CancellationToken,
   FileChangeType,
   WorkspaceFoldersChangeEvent,
 } from "vscode-languageserver/node.js";
@@ -21,6 +22,7 @@ import { WorkspaceManager } from "./workspace/workspace-manager.js";
 import { SolidityParser } from "./parser/solidity-parser.js";
 import { ParserPool } from "./parser/parser-pool.js";
 import { SymbolIndex } from "./analyzer/symbol-index.js";
+import { GraphIndex, type GraphDependencyIndexingMode } from "./analyzer/graph-index.js";
 import { CompletionProvider } from "./providers/completion.js";
 import { DefinitionProvider } from "./providers/definition.js";
 import { HoverProvider } from "./providers/hover.js";
@@ -48,14 +50,26 @@ import { SemanticResolver } from "./analyzer/semantic-resolver.js";
 import { listTests } from "./providers/list-tests.js";
 import {
   GetInheritanceGraph,
+  GetProjectGraph,
+  GetProjectGraphNeighborhood,
+  GetProjectGraphPath,
+  GetProjectGraphStats,
+  RebuildProjectGraph,
   SolSemanticTokenTypes,
   SolSemanticTokenModifiers,
   ServerStateNotification,
   ListTests,
   type GetInheritanceGraphParams,
+  type GetProjectGraphParams,
+  type GetProjectGraphNeighborhoodParams,
+  type GetProjectGraphPathParams,
   type InheritanceGraphResult,
   type ListTestsParams,
   type ListTestsResult,
+  type ProjectGraphPathResult,
+  type ProjectGraphResult,
+  type ProjectGraphStatsResult,
+  type RebuildProjectGraphParams,
   type ServerStateParams,
 } from "@solidity-workbench/common";
 
@@ -66,7 +80,11 @@ const documents = new TextDocuments(TextDocument);
 let workspaceManager: WorkspaceManager;
 let parser: SolidityParser;
 let symbolIndex: SymbolIndex;
+let graphIndex: GraphIndex;
+let graphCacheDir: string | undefined;
 let parserPool: ParserPool | null = null;
+let graphRelationshipIndexTimer: ReturnType<typeof setTimeout> | null = null;
+let graphRelationshipIndexGeneration = 0;
 
 // Providers
 let completionProvider: CompletionProvider;
@@ -111,6 +129,10 @@ interface ServerSettings {
   gasEstimates?: {
     enabled?: boolean;
   };
+  projectGraph?: {
+    relationshipIndexing?: "auto" | "manual" | "disabled";
+    dependencyIndexing?: GraphDependencyIndexingMode;
+  };
 }
 
 let currentSettings: ServerSettings = {};
@@ -123,10 +145,86 @@ function pushServerState(params: ServerStateParams): void {
   connection.sendNotification(ServerStateNotification, params);
 }
 
+function cancelGraphRelationshipIndex(): void {
+  graphRelationshipIndexGeneration++;
+  if (graphRelationshipIndexTimer) {
+    clearTimeout(graphRelationshipIndexTimer);
+    graphRelationshipIndexTimer = null;
+  }
+}
+
+function scheduleGraphRelationshipIndex(): void {
+  if (!shouldRunBackgroundGraphRelationshipIndex()) return;
+  const generation = ++graphRelationshipIndexGeneration;
+  let batchesSinceCacheWrite = 0;
+  if (graphRelationshipIndexTimer) clearTimeout(graphRelationshipIndexTimer);
+
+  const runBatch = (): void => {
+    if (generation !== graphRelationshipIndexGeneration) return;
+    const batch = graphIndex.indexRelationshipBatch(35, 20);
+    batchesSinceCacheWrite++;
+    pushServerState({
+      phase: "indexing",
+      filesIndexed: batch.filesIndexed,
+      filesTotal: batch.filesTotal,
+    });
+
+    if (batch.complete) {
+      graphRelationshipIndexTimer = null;
+      graphIndex.writeCache(graphCacheDir);
+      pushServerState({
+        phase: "idle",
+        rootCount: workspaceManager.rootCount,
+        fileCount: workspaceManager.getAllFileUris().length,
+      });
+      return;
+    }
+
+    if (batchesSinceCacheWrite >= 10) {
+      batchesSinceCacheWrite = 0;
+      graphIndex.writeCache(graphCacheDir);
+    }
+
+    graphRelationshipIndexTimer = setTimeout(runBatch, 0);
+  };
+
+  graphRelationshipIndexTimer = setTimeout(runBatch, 0);
+}
+
+function graphRelationshipIndexingMode(): "auto" | "manual" | "disabled" {
+  const mode = currentSettings.projectGraph?.relationshipIndexing;
+  return mode === "manual" || mode === "disabled" ? mode : "auto";
+}
+
+function graphDependencyIndexingMode(): GraphDependencyIndexingMode {
+  const mode = currentSettings.projectGraph?.dependencyIndexing;
+  return mode === "declarations" || mode === "relationships" ? mode : "disabled";
+}
+
+function shouldRunBackgroundGraphRelationshipIndex(): boolean {
+  return graphRelationshipIndexingMode() === "auto";
+}
+
+function shouldRunExplicitGraphRelationshipIndex(params: RebuildProjectGraphParams): boolean {
+  return params.relationships === "blocking" && graphRelationshipIndexingMode() !== "disabled";
+}
+
+function graphCacheDirFromInitializationOptions(options: unknown): string | undefined {
+  if (!options || typeof options !== "object") return undefined;
+  const graphCacheUri = (options as { graphCacheUri?: unknown }).graphCacheUri;
+  if (typeof graphCacheUri !== "string" || graphCacheUri.trim().length === 0) return undefined;
+  try {
+    return URI.parse(graphCacheUri).fsPath;
+  } catch {
+    return undefined;
+  }
+}
+
 connection.onInitialize((params: InitializeParams): InitializeResult => {
   const initialFolder = params.workspaceFolders?.[0]?.uri ?? params.rootUri ?? "";
 
   workspaceManager = new WorkspaceManager(initialFolder, connection);
+  graphCacheDir = graphCacheDirFromInitializationOptions(params.initializationOptions);
 
   // Register every additional workspace folder the client sent.
   for (const folder of params.workspaceFolders ?? []) {
@@ -149,7 +247,13 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   if (parserPool) parser.setPool(parserPool);
 
   semanticResolver = new SemanticResolver(parser, workspaceManager, symbolIndex);
-  completionProvider = new CompletionProvider(symbolIndex, parser, workspaceManager);
+  graphIndex = new GraphIndex(parser, workspaceManager, semanticResolver, symbolIndex);
+  completionProvider = new CompletionProvider(
+    symbolIndex,
+    parser,
+    workspaceManager,
+    semanticResolver,
+  );
   definitionProvider = new DefinitionProvider(
     symbolIndex,
     parser,
@@ -163,8 +267,8 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   codeActionsProvider = new CodeActionsProvider(symbolIndex, parser);
   formattingProvider = new FormattingProvider(workspaceManager);
   documentSymbolProvider = new DocumentSymbolProvider(parser);
-  inlayHintsProvider = new InlayHintsProvider(symbolIndex, parser);
-  signatureHelpProvider = new SignatureHelpProvider(symbolIndex, parser);
+  inlayHintsProvider = new InlayHintsProvider(symbolIndex, parser, semanticResolver);
+  signatureHelpProvider = new SignatureHelpProvider(symbolIndex, parser, semanticResolver);
   renameProvider = new RenameProvider(symbolIndex, workspaceManager, documents);
   codeLensProvider = new CodeLensProvider(symbolIndex, parser, workspaceManager);
   referencesProvider = new ReferencesProvider(symbolIndex, workspaceManager, parser, documents);
@@ -174,19 +278,22 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
     workspaceManager,
     parser,
     semanticResolver,
+    graphIndex,
   );
   typeHierarchyProvider = new TypeHierarchyProvider(symbolIndex, parser, semanticResolver);
   documentHighlightProvider = new DocumentHighlightProvider(symbolIndex, parser);
   foldingRangesProvider = new FoldingRangesProvider(parser);
   selectionRangesProvider = new SelectionRangesProvider(parser);
   documentLinksProvider = new DocumentLinksProvider(parser, workspaceManager);
-  implementationProvider = new ImplementationProvider(symbolIndex);
+  implementationProvider = new ImplementationProvider(symbolIndex, semanticResolver);
   inheritanceGraphProvider = new InheritanceGraphProvider(
     parser,
     workspaceManager,
     semanticResolver,
+    graphIndex,
   );
   solcBridge = new SolcBridge(workspaceManager);
+  graphIndex.setSolcBridge(solcBridge);
 
   // Make the type-resolved AST cache available to providers that want it
   // for overload disambiguation, member resolution, canonical selector
@@ -279,6 +386,10 @@ connection.onInitialized(async () => {
   await refreshConfiguration();
 
   await workspaceManager.initialize();
+  const graphRestored = graphIndex.restoreFromCache(graphCacheDir);
+  if (graphRestored) {
+    connection.console.log("Project graph restored from cache");
+  }
   pushServerState({
     phase: "indexing",
     filesIndexed: 0,
@@ -288,6 +399,11 @@ connection.onInitialized(async () => {
   await symbolIndex.indexWorkspace((filesIndexed, filesTotal) => {
     pushServerState({ phase: "indexing", filesIndexed, filesTotal });
   });
+  graphIndex.ensureWorkspaceDeclarations();
+  graphIndex.writeCache(graphCacheDir);
+  if (!graphIndex.isRelationshipIndexComplete() && shouldRunBackgroundGraphRelationshipIndex()) {
+    scheduleGraphRelationshipIndex();
+  }
 
   pushServerState({
     phase: "idle",
@@ -303,7 +419,8 @@ connection.onInitialized(async () => {
 
 // ── Configuration ───────────────────────────────────────────────────
 
-async function refreshConfiguration(): Promise<void> {
+async function refreshConfiguration(): Promise<boolean> {
+  let dependencyModeChanged = false;
   try {
     const [config] = (await connection.workspace.getConfiguration([
       { section: "solidity-workbench" },
@@ -312,13 +429,27 @@ async function refreshConfiguration(): Promise<void> {
     currentSettings = config ?? {};
     workspaceManager.setForgePath(currentSettings.foundryPath);
     diagnosticsProvider.setDebounceMs(currentSettings.diagnostics?.debounceMs ?? 300);
+    dependencyModeChanged = graphIndex.setDependencyIndexing(graphDependencyIndexingMode());
   } catch (err) {
     connection.console.warn(`workspace/configuration unavailable: ${err}`);
   }
+  return dependencyModeChanged;
 }
 
 connection.onDidChangeConfiguration(async () => {
-  await refreshConfiguration();
+  const dependencyModeChanged = await refreshConfiguration();
+  if (dependencyModeChanged) {
+    cancelGraphRelationshipIndex();
+    graphIndex.rebuildWorkspaceDeclarations();
+    graphIndex.writeCache(graphCacheDir);
+  }
+  if (!shouldRunBackgroundGraphRelationshipIndex()) {
+    cancelGraphRelationshipIndex();
+    return;
+  }
+  if (!graphIndex.isRelationshipIndexComplete()) {
+    scheduleGraphRelationshipIndex();
+  }
 });
 
 // ── Workspace folders ───────────────────────────────────────────────
@@ -335,11 +466,9 @@ async function handleWorkspaceFoldersChanged(event: WorkspaceFoldersChangeEvent)
 
   // Rebuild the symbol + reference index over the new root set.
   await symbolIndex.indexWorkspace();
-  pushServerState({
-    phase: "idle",
-    rootCount: workspaceManager.rootCount,
-    fileCount: workspaceManager.getAllFileUris().length,
-  });
+  cancelGraphRelationshipIndex();
+  graphIndex.rebuildWorkspaceDeclarations();
+  if (shouldRunBackgroundGraphRelationshipIndex()) scheduleGraphRelationshipIndex();
 }
 
 // ── File System Watching ────────────────────────────────────────────
@@ -373,23 +502,28 @@ connection.onDidChangeWatchedFiles(async (params) => {
     await workspaceManager.initialize();
     semanticResolver.invalidate();
     await symbolIndex.indexWorkspace();
-    pushServerState({
-      phase: "idle",
-      rootCount: workspaceManager.rootCount,
-      fileCount: workspaceManager.getAllFileUris().length,
-    });
+    cancelGraphRelationshipIndex();
+    graphIndex.rebuildWorkspaceDeclarations();
+    if (shouldRunBackgroundGraphRelationshipIndex()) scheduleGraphRelationshipIndex();
     return;
   }
 
   for (const uri of removedSolFiles) {
     symbolIndex.onFileClosed(uri);
+    graphIndex.removeFile(uri);
     callHierarchyProvider.invalidateFile(uri);
     connection.sendDiagnostics({ uri, diagnostics: [] });
   }
 
   for (const uri of touchedSolFiles) {
     await symbolIndex.indexFile(uri);
-    callHierarchyProvider.invalidateFile(uri);
+    semanticResolver.invalidate();
+    for (const refreshedUri of graphIndex.updateFileAndDependents(uri)) {
+      callHierarchyProvider.invalidateFile(refreshedUri);
+    }
+  }
+  if (removedSolFiles.length > 0 || touchedSolFiles.length > 0) {
+    graphIndex.writeCache(graphCacheDir);
   }
 });
 
@@ -401,16 +535,21 @@ documents.onDidChangeContent(async (change) => {
 
   parser.parse(uri, text);
   symbolIndex.updateFile(uri);
-  callHierarchyProvider.invalidateFile(uri);
+  semanticResolver.invalidate();
+  for (const refreshedUri of graphIndex.updateFileAndDependents(uri)) {
+    callHierarchyProvider.invalidateFile(refreshedUri);
+  }
 
   // Eagerly index the document's transitive import graph so hover,
   // inlay hints, definition, etc. can resolve symbols across the
   // import tree without waiting for the bulk workspace sweep to
   // reach `lib/`. Fire-and-forget — the diagnostics path below
   // shouldn't block on dep-tree indexing.
-  void symbolIndex.ensureImportsIndexed(uri).catch((err) => {
-    connection.console.warn(`ensureImportsIndexed(${uri}) failed: ${err}`);
-  });
+  void symbolIndex
+    .ensureImportsIndexed(uri, new Set(), (indexedUri) => graphIndex.updateFile(indexedUri))
+    .catch((err) => {
+      connection.console.warn(`ensureImportsIndexed(${uri}) failed: ${err}`);
+    });
 
   await diagnosticsProvider.provideFastDiagnostics(uri, text);
 });
@@ -434,6 +573,7 @@ documents.onDidSave(async (event) => {
   solcBridge.buildAndExtractAst().catch((err) => {
     connection.console.error(`solc AST extraction failed: ${err}`);
   });
+  graphIndex.writeCache(graphCacheDir);
 });
 
 documents.onDidClose((event) => {
@@ -658,9 +798,77 @@ connection.onRequest(
   },
 );
 
+connection.onRequest(
+  GetProjectGraph,
+  async (params: GetProjectGraphParams = {}): Promise<ProjectGraphResult> => {
+    return graphIndex.toProjectGraph(params.edgeKinds, params.maxNodes);
+  },
+);
+
+connection.onRequest(
+  GetProjectGraphNeighborhood,
+  async (params: GetProjectGraphNeighborhoodParams): Promise<ProjectGraphResult> => {
+    if (params.uri) graphIndex.ensureFileRelationships(params.uri);
+    return graphIndex.toNeighborhood(params);
+  },
+);
+
+connection.onRequest(
+  GetProjectGraphPath,
+  async (params: GetProjectGraphPathParams): Promise<ProjectGraphPathResult> => {
+    if (params.from.uri) graphIndex.ensureFileRelationships(params.from.uri);
+    if (params.to.uri) graphIndex.ensureFileRelationships(params.to.uri);
+    return graphIndex.toShortestPath(params);
+  },
+);
+
+connection.onRequest(GetProjectGraphStats, async (): Promise<ProjectGraphStatsResult> => {
+  return graphIndex.getStats();
+});
+
+connection.onRequest(
+  RebuildProjectGraph,
+  async (
+    params: RebuildProjectGraphParams = {},
+    token?: CancellationToken,
+  ): Promise<ProjectGraphStatsResult> => {
+    cancelGraphRelationshipIndex();
+    await workspaceManager.initialize();
+    semanticResolver.invalidate();
+    await symbolIndex.indexWorkspace();
+    graphIndex.rebuildWorkspaceDeclarations();
+
+    if (shouldRunExplicitGraphRelationshipIndex(params)) {
+      let complete = false;
+      let canceled = false;
+      while (!complete) {
+        if (token?.isCancellationRequested) {
+          canceled = true;
+          break;
+        }
+        complete = graphIndex.indexRelationshipBatch(50, 50).complete;
+        // Drain the relationship queue for explicit, user-triggered rebuilds.
+      }
+      graphIndex.writeCache(graphCacheDir);
+      return { ...graphIndex.getStats(), rebuildCanceled: canceled };
+    }
+
+    graphIndex.writeCache(graphCacheDir);
+    if (
+      params.relationships !== "declarationsOnly" &&
+      !graphIndex.isRelationshipIndexComplete() &&
+      shouldRunBackgroundGraphRelationshipIndex()
+    ) {
+      scheduleGraphRelationshipIndex();
+    }
+    return graphIndex.getStats();
+  },
+);
+
 // ── Shutdown ────────────────────────────────────────────────────────
 
 connection.onShutdown(async () => {
+  cancelGraphRelationshipIndex();
   if (parserPool) {
     await parserPool.terminate();
     parserPool = null;

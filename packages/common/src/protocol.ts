@@ -3,6 +3,8 @@
  * These extend the standard LSP with Solidity/Foundry-specific notifications and requests.
  */
 
+import type { SourceRange } from "./types.js";
+
 // ── Custom Notifications (server → client) ───────────────────────────
 
 /** Notification sent when forge build completes */
@@ -171,6 +173,161 @@ export interface InheritanceGraphResult {
     missing?: boolean;
   }[];
   edges: { from: string; to: string; baseName: string }[];
+}
+
+/** Request a workspace-wide semantic graph snapshot. */
+export const GetProjectGraph = "solidity-workbench/getProjectGraph";
+
+export type ProjectGraphNodeKind =
+  | "file"
+  | "contract"
+  | "interface"
+  | "library"
+  | "function"
+  | "constructor"
+  | "receive"
+  | "fallback"
+  | "modifier"
+  | "event"
+  | "error"
+  | "stateVariable"
+  | "fileConstant"
+  | "struct"
+  | "enum"
+  | "userDefinedValueType";
+
+export type ProjectGraphEdgeKind =
+  | "contains"
+  | "imports"
+  | "inherits"
+  | "implements"
+  | "overrides"
+  | "calls"
+  | "externalCall"
+  | "delegateCall"
+  | "creates"
+  | "usesModifier"
+  | "reads"
+  | "writes"
+  | "emits"
+  | "revertsWith"
+  | "usesType";
+
+export interface GetProjectGraphParams {
+  /** Optional edge-kind filter. Omit to return every known edge kind. */
+  edgeKinds?: ProjectGraphEdgeKind[];
+  /** Optional node cap for interactive views. Omit for full export/report payloads. */
+  maxNodes?: number;
+}
+
+/** Request a focused project graph neighborhood around a symbol or source position. */
+export const GetProjectGraphNeighborhood = "solidity-workbench/getProjectGraphNeighborhood";
+
+export interface GetProjectGraphNeighborhoodParams {
+  /** Explicit graph node id to focus. Takes precedence over uri/position. */
+  rootId?: string;
+  /** Source file URI used with `position` to find the innermost graph node. */
+  uri?: string;
+  /** Source position used with `uri` to find the innermost graph node. */
+  position?: SourceRange["start"];
+  /** Number of edge hops to include. Defaults to 2. */
+  depth?: number;
+  /** Direction to traverse from the root. Defaults to both. */
+  direction?: "incoming" | "outgoing" | "both";
+  /** Optional edge-kind filter. Omit to traverse every known edge kind. */
+  edgeKinds?: ProjectGraphEdgeKind[];
+  /** Maximum nodes to return. Defaults to 240. */
+  maxNodes?: number;
+  /** Include containing declarations for context. Defaults to true. */
+  includeContainers?: boolean;
+}
+
+/** Request the shortest graph path between two nodes or source positions. */
+export const GetProjectGraphPath = "solidity-workbench/getProjectGraphPath";
+
+export interface ProjectGraphEndpoint {
+  /** Explicit graph node id. Takes precedence over uri/position. */
+  nodeId?: string;
+  /** Source file URI used with `position` to find the innermost graph node. */
+  uri?: string;
+  /** Source position used with `uri` to find the innermost graph node. */
+  position?: SourceRange["start"];
+}
+
+export interface GetProjectGraphPathParams {
+  from: ProjectGraphEndpoint;
+  to: ProjectGraphEndpoint;
+  /** Direction to traverse from the source. Defaults to outgoing. */
+  direction?: "incoming" | "outgoing" | "both";
+  /** Optional edge-kind filter. Omit to traverse every known edge kind. */
+  edgeKinds?: ProjectGraphEdgeKind[];
+  /** Maximum hops to search. Defaults to 16. */
+  maxDepth?: number;
+}
+
+export interface ProjectGraphNode {
+  id: string;
+  kind: ProjectGraphNodeKind;
+  name: string;
+  qualifiedName: string;
+  uri: string;
+  filePath: string;
+  tier: "project" | "tests" | "deps" | "unknown";
+  range: SourceRange;
+  selectionRange: SourceRange;
+  containerId?: string;
+  containerName?: string;
+  detail?: string;
+}
+
+export interface ProjectGraphEdge {
+  source: string;
+  target: string;
+  kind: ProjectGraphEdgeKind;
+  range?: SourceRange;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ProjectGraphResult {
+  nodes: ProjectGraphNode[];
+  edges: ProjectGraphEdge[];
+  focusId?: string;
+  truncated?: boolean;
+}
+
+export interface ProjectGraphPathResult extends ProjectGraphResult {
+  fromId?: string;
+  toId?: string;
+  found: boolean;
+}
+
+/** Request lightweight project graph size and timing stats. */
+export const GetProjectGraphStats = "solidity-workbench/getProjectGraphStats";
+
+/** Request a fresh project graph declaration rebuild, with relationship edges queued or indexed. */
+export const RebuildProjectGraph = "solidity-workbench/rebuildProjectGraph";
+
+export interface RebuildProjectGraphParams {
+  /** Relationship indexing mode. Defaults to background. */
+  relationships?: "background" | "blocking" | "declarationsOnly";
+}
+
+export interface ProjectGraphStatsResult {
+  nodeCount: number;
+  edgeCount: number;
+  nodesByKind: Partial<Record<ProjectGraphNodeKind, number>>;
+  edgesByKind: Partial<Record<ProjectGraphEdgeKind, number>>;
+  filesByTier: Partial<Record<"project" | "tests" | "deps" | "unknown", number>>;
+  lastRebuildDurationMs: number | null;
+  lastUpdateDurationMs: number | null;
+  cacheHit?: boolean;
+  lastCacheRestoreDurationMs?: number | null;
+  lastCacheWriteDurationMs?: number | null;
+  relationshipFilesIndexed?: number;
+  relationshipFilesTotal?: number;
+  pendingRelationshipFiles?: number;
+  relationshipIndexComplete?: boolean;
+  rebuildCanceled?: boolean;
 }
 
 // ── Semantic Token Types ─────────────────────────────────────────────

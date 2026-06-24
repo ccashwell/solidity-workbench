@@ -3,6 +3,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import type { ProjectGraphResult, ProjectGraphStatsResult } from "@solidity-workbench/common";
+import {
+  serializeProjectGraphForExport,
+  summarizeProjectGraphRelationshipStatus,
+} from "../../views/project-graph";
 
 /**
  * End-to-end coverage of the feature surface that landed across the
@@ -151,6 +156,12 @@ describe("Feature coverage — webview commands", () => {
       "solidity-workbench.remoteChain.open",
       "solidity-workbench.viewIR",
       "solidity-workbench.chisel.start",
+      "solidity-workbench.projectGraph",
+      "solidity-workbench.projectGraphCursor",
+      "solidity-workbench.exportProjectGraph",
+      "solidity-workbench.projectGraphStats",
+      "solidity-workbench.rebuildProjectGraph",
+      "solidity-workbench.clearProjectGraphCache",
     ];
     for (const cmd of expected) {
       assert.ok(all.includes(cmd), `expected '${cmd}' to be registered`);
@@ -167,6 +178,211 @@ describe("Feature coverage — webview commands", () => {
     ]) {
       assert.ok(all.includes(cmd), `expected '${cmd}' to be registered`);
     }
+  });
+});
+
+describe("Feature coverage — project graph export", () => {
+  const sampleGraph: ProjectGraphResult = {
+    focusId: "file:///workspace/src/Vault.sol#Vault:function:deposit:4:13",
+    truncated: true,
+    nodes: [
+      {
+        id: "file:///workspace/src/Vault.sol#Vault:function:deposit:4:13",
+        kind: "function",
+        name: "deposit",
+        qualifiedName: "Vault.deposit",
+        uri: "file:///workspace/src/Vault.sol",
+        filePath: "/workspace/src/Vault.sol",
+        tier: "project",
+        range: { start: { line: 4, character: 4 }, end: { line: 6, character: 5 } },
+        selectionRange: { start: { line: 4, character: 13 }, end: { line: 4, character: 20 } },
+        containerName: "Vault",
+      },
+    ],
+    edges: [
+      {
+        source: "file:///workspace/src/Vault.sol#Vault:function:deposit:4:13",
+        target: "external:IERC20",
+        kind: "usesType",
+        metadata: { resolutionConfidence: "parser" },
+      },
+    ],
+  };
+
+  it("serializes graph exports as JSON, DOT, GraphML, and CodeGraph JSON", () => {
+    const stats: ProjectGraphStatsResult = {
+      nodeCount: 2,
+      edgeCount: 1,
+      nodesByKind: Object.assign(Object.create(null), { function: 1 }),
+      edgesByKind: Object.assign(Object.create(null), { usesType: 1 }),
+      filesByTier: Object.assign(Object.create(null), { project: 1 }),
+      lastRebuildDurationMs: 12,
+      lastUpdateDurationMs: 3,
+      relationshipFilesIndexed: 7,
+      relationshipFilesTotal: 10,
+      pendingRelationshipFiles: 3,
+      relationshipIndexComplete: false,
+    };
+
+    const json = serializeProjectGraphForExport(sampleGraph, "json", stats);
+    assert.equal(json.language, "json");
+    const parsedJson = JSON.parse(json.content);
+    assert.equal(parsedJson.truncated, true);
+    assert.equal(parsedJson.stats.relationshipIndexComplete, false);
+    assert.equal(parsedJson.stats.pendingRelationshipFiles, 3);
+    assert.equal(parsedJson.relationshipStatus.state, "partial");
+    assert.equal(parsedJson.relationshipStatus.pending, 3);
+    assert.ok(
+      parsedJson.nodes.some(
+        (node: { id?: string; kind?: string }) =>
+          node.id === "external:IERC20" && node.kind === "external",
+      ),
+      "expected JSON export to include synthetic nodes for missing edge endpoints",
+    );
+
+    const dot = serializeProjectGraphForExport(sampleGraph, "dot");
+    assert.equal(dot.language, "dot");
+    assert.match(dot.content, /digraph SolidityProjectGraph/);
+    assert.match(dot.content, /external:IERC20/);
+
+    const graphMl = serializeProjectGraphForExport(sampleGraph, "graphml");
+    assert.equal(graphMl.language, "xml");
+    assert.match(graphMl.content, /<graphml/);
+    assert.match(
+      graphMl.content,
+      /source="file:\/\/\/workspace\/src\/Vault.sol#Vault:function:deposit:4:13"/,
+    );
+
+    const codeGraph = serializeProjectGraphForExport(sampleGraph, "codegraph-json", stats);
+    assert.equal(codeGraph.language, "json");
+    const parsed = JSON.parse(codeGraph.content);
+    assert.equal(parsed.schema, "solidity-workbench-codegraph-export");
+    assert.equal(parsed.graph.truncated, true);
+    assert.equal(parsed.graph.relationshipIndexComplete, false);
+    assert.equal(parsed.graph.relationshipFilesIndexed, 7);
+    assert.equal(parsed.graph.relationshipStatus.state, "partial");
+    assert.match(parsed.graph.relationshipStatus.detail, /full-workspace edges may be partial/);
+    assert.ok(
+      parsed.nodes.some(
+        (node: { id?: string; kind?: string }) =>
+          node.id === "external:IERC20" && node.kind === "external",
+      ),
+      "expected missing edge endpoints to be exported as synthetic external nodes",
+    );
+  });
+
+  it("summarizes project graph relationship indexing status", () => {
+    assert.equal(summarizeProjectGraphRelationshipStatus().state, "unknown");
+
+    const partial = summarizeProjectGraphRelationshipStatus({
+      nodeCount: 10,
+      edgeCount: 20,
+      nodesByKind: {},
+      edgesByKind: {},
+      filesByTier: {},
+      lastRebuildDurationMs: 4,
+      lastUpdateDurationMs: null,
+      relationshipFilesIndexed: 2,
+      relationshipFilesTotal: 5,
+      pendingRelationshipFiles: 3,
+      relationshipIndexComplete: false,
+    });
+    assert.equal(partial.state, "partial");
+    assert.equal(partial.indexed, 2);
+    assert.equal(partial.total, 5);
+    assert.equal(partial.pending, 3);
+    assert.match(partial.label, /2\/5/);
+
+    const complete = summarizeProjectGraphRelationshipStatus({
+      nodeCount: 10,
+      edgeCount: 20,
+      nodesByKind: {},
+      edgesByKind: {},
+      filesByTier: {},
+      lastRebuildDurationMs: 4,
+      lastUpdateDurationMs: null,
+      relationshipFilesIndexed: 5,
+      relationshipFilesTotal: 5,
+      pendingRelationshipFiles: 0,
+      relationshipIndexComplete: true,
+    });
+    assert.equal(complete.state, "complete");
+    assert.equal(complete.pending, 0);
+    assert.equal(complete.label, "edges ready");
+  });
+
+  it("serializes large graph exports without dropping nodes, edges, or truncation metadata", () => {
+    const largeGraph = makeLargeProjectGraph(420);
+
+    const json = serializeProjectGraphForExport(largeGraph, "json");
+    const parsedJson = JSON.parse(json.content);
+    assert.equal(parsedJson.truncated, true);
+    assert.equal(parsedJson.nodes.length, largeGraph.nodes.length);
+    assert.equal(parsedJson.edges.length, largeGraph.edges.length);
+
+    const codeGraph = serializeProjectGraphForExport(largeGraph, "codegraph-json");
+    const parsedCodeGraph = JSON.parse(codeGraph.content);
+    assert.equal(parsedCodeGraph.graph.nodeCount, largeGraph.nodes.length);
+    assert.equal(parsedCodeGraph.graph.edgeCount, largeGraph.edges.length);
+    assert.equal(parsedCodeGraph.graph.truncated, true);
+    assert.equal(parsedCodeGraph.nodes[0].line, 1);
+
+    const dot = serializeProjectGraphForExport(largeGraph, "dot");
+    assert.match(dot.content, /digraph SolidityProjectGraph/);
+    assert.match(dot.content, /Escaped\\"Vault/);
+    assert.match(dot.content, /line\\nbreak/);
+
+    const graphMl = serializeProjectGraphForExport(largeGraph, "graphml");
+    assert.match(graphMl.content, /<graphml/);
+    assert.match(graphMl.content, /Escaped&quot;Vault/);
+    assert.match(graphMl.content, /line\nbreak/);
+  });
+});
+
+describe("Feature coverage — live project graph", () => {
+  before(async function () {
+    this.timeout(60_000);
+    const ext = vscode.extensions.getExtension(EXTENSION_ID);
+    assert.ok(ext);
+    await ext!.activate();
+    await new Promise((r) => setTimeout(r, 3_000));
+  });
+
+  it("rebuilds the live LSP graph and opens graph stats", async function () {
+    this.timeout(60_000);
+
+    await vscode.commands.executeCommand("solidity-workbench.rebuildProjectGraph");
+    await vscode.commands.executeCommand("solidity-workbench.projectGraphStats");
+
+    const editor = vscode.window.activeTextEditor;
+    assert.ok(editor, "expected project graph stats to open a JSON document");
+    const stats = JSON.parse(editor.document.getText()) as ProjectGraphStatsResult & {
+      requestDurationMs?: number;
+    };
+
+    assert.ok(stats.nodeCount > 0, `expected live graph nodes; got ${stats.nodeCount}`);
+    assert.ok(stats.edgeCount > 0, `expected live graph edges; got ${stats.edgeCount}`);
+    assert.ok(
+      stats.nodesByKind.contract || stats.nodesByKind.function,
+      "expected contract/function nodes in live graph stats",
+    );
+    assert.ok(
+      typeof stats.relationshipFilesIndexed === "number" &&
+        typeof stats.relationshipFilesTotal === "number" &&
+        typeof stats.pendingRelationshipFiles === "number" &&
+        typeof stats.relationshipIndexComplete === "boolean",
+      "expected relationship indexing progress fields in live graph stats",
+    );
+    assert.equal(
+      stats.relationshipIndexComplete,
+      true,
+      "explicit rebuild should complete relationship indexing for the sample workspace",
+    );
+    assert.notEqual(stats.rebuildCanceled, true, "explicit sample rebuild should not be canceled");
+
+    await vscode.window.showTextDocument(
+      await vscode.workspace.openTextDocument(findSampleFile("src/Counter.sol")),
+    );
   });
 });
 
@@ -288,6 +504,57 @@ async function retry<T>(fn: () => Thenable<T>, attempts = 10, delayMs = 500): Pr
   }
   if (lastErr) throw lastErr;
   return (await fn()) as T;
+}
+
+function makeLargeProjectGraph(count: number): ProjectGraphResult {
+  const nodes: ProjectGraphResult["nodes"] = [];
+  const edges: ProjectGraphResult["edges"] = [];
+
+  for (let i = 0; i < count; i++) {
+    const uri = `file:///workspace/src/Vault${i}.sol`;
+    const contractId = `${uri}#Vault${i}`;
+    const functionId = `${uri}#Vault${i}:function:deposit${i}:8:13`;
+    nodes.push({
+      id: contractId,
+      kind: "contract",
+      name: i === 0 ? 'Escaped"Vault line\nbreak' : `Vault${i}`,
+      qualifiedName: i === 0 ? 'Escaped"Vault line\nbreak' : `Vault${i}`,
+      uri,
+      filePath: `/workspace/src/Vault${i}.sol`,
+      tier: "project",
+      range: { start: { line: 0, character: 0 }, end: { line: 20, character: 1 } },
+      selectionRange: { start: { line: 0, character: 9 }, end: { line: 0, character: 15 } },
+    });
+    nodes.push({
+      id: functionId,
+      kind: "function",
+      name: `deposit${i}`,
+      qualifiedName: `Vault${i}.deposit${i}`,
+      uri,
+      filePath: `/workspace/src/Vault${i}.sol`,
+      tier: "project",
+      containerId: contractId,
+      containerName: `Vault${i}`,
+      range: { start: { line: 8, character: 4 }, end: { line: 12, character: 5 } },
+      selectionRange: { start: { line: 8, character: 13 }, end: { line: 8, character: 21 } },
+    });
+    edges.push({ source: contractId, target: functionId, kind: "contains" });
+    if (i > 0) {
+      edges.push({
+        source: functionId,
+        target: `file:///workspace/src/Vault${i - 1}.sol#Vault${i - 1}:function:deposit${i - 1}:8:13`,
+        kind: "calls",
+        metadata: { resolutionConfidence: "parser" },
+      });
+    }
+  }
+
+  return {
+    focusId: nodes[1]?.id,
+    truncated: true,
+    nodes,
+    edges,
+  };
 }
 
 /**

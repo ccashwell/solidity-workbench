@@ -22,6 +22,10 @@ export interface WorkbenchConfig {
   gasEstimates: {
     enabled: boolean;
   };
+  projectGraph: {
+    relationshipIndexing: "auto" | "manual" | "disabled";
+    dependencyIndexing: "disabled" | "declarations" | "relationships";
+  };
   test: {
     verbosity: number;
   };
@@ -48,10 +52,28 @@ export function getConfig(): WorkbenchConfig {
     gasEstimates: {
       enabled: config.get<boolean>("gasEstimates.enabled") ?? true,
     },
+    projectGraph: {
+      relationshipIndexing: graphRelationshipIndexingMode(
+        config.get<string>("projectGraph.relationshipIndexing"),
+      ),
+      dependencyIndexing: graphDependencyIndexingMode(
+        config.get<string>("projectGraph.dependencyIndexing"),
+      ),
+    },
     test: {
       verbosity: config.get<number>("test.verbosity") ?? 2,
     },
   };
+}
+
+function graphRelationshipIndexingMode(value: string | undefined): "auto" | "manual" | "disabled" {
+  return value === "manual" || value === "disabled" ? value : "auto";
+}
+
+function graphDependencyIndexingMode(
+  value: string | undefined,
+): "disabled" | "declarations" | "relationships" {
+  return value === "declarations" || value === "relationships" ? value : "disabled";
 }
 
 // Forge CLI helpers live in `@solidity-workbench/common/foundry-cli`

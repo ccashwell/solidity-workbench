@@ -145,6 +145,36 @@
           "default": true,
           "description": "Show gas estimate code lens on functions."
         },
+        "solidity-workbench.projectGraph.relationshipIndexing": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "manual",
+            "disabled"
+          ],
+          "enumDescriptions": [
+            "Index relationship edges in bounded background batches.",
+            "Index declarations automatically, but only index relationship edges during explicit graph rebuilds.",
+            "Index declaration nodes only; skip relationship edges."
+          ],
+          "description": "Controls Project Graph relationship-edge indexing for large workspaces."
+        },
+        "solidity-workbench.projectGraph.dependencyIndexing": {
+          "type": "string",
+          "default": "disabled",
+          "enum": [
+            "disabled",
+            "declarations",
+            "relationships"
+          ],
+          "enumDescriptions": [
+            "Exclude dependency files from the Project Graph.",
+            "Index dependency declarations, but skip dependency relationship edges.",
+            "Index dependency declarations and relationship edges."
+          ],
+          "description": "Controls how Project Graph indexes Solidity files under configured Foundry library directories."
+        },
         "solidity-workbench.test.verbosity": {
           "type": "number",
           "default": 2,
@@ -360,6 +390,30 @@
         "title": "Solidity Workbench: Show Inheritance Graph"
       },
       {
+        "command": "solidity-workbench.projectGraph",
+        "title": "Solidity Workbench: Show Project Graph"
+      },
+      {
+        "command": "solidity-workbench.projectGraphCursor",
+        "title": "Solidity Workbench: Show Project Graph Neighborhood at Cursor"
+      },
+      {
+        "command": "solidity-workbench.exportProjectGraph",
+        "title": "Solidity Workbench: Export Project Graph"
+      },
+      {
+        "command": "solidity-workbench.projectGraphStats",
+        "title": "Solidity Workbench: Show Project Graph Stats"
+      },
+      {
+        "command": "solidity-workbench.rebuildProjectGraph",
+        "title": "Solidity Workbench: Rebuild Project Graph Index"
+      },
+      {
+        "command": "solidity-workbench.clearProjectGraphCache",
+        "title": "Solidity Workbench: Clear Project Graph Cache"
+      },
+      {
         "command": "solidity-workbench.showAbi",
         "title": "Solidity Workbench: Show ABI Explorer"
       },
@@ -456,9 +510,19 @@
           "group": "solidity-workbench@5"
         },
         {
-          "command": "solidity-workbench.viewIR",
+          "command": "solidity-workbench.projectGraph",
           "when": "resourceLangId == solidity",
           "group": "solidity-workbench@5a"
+        },
+        {
+          "command": "solidity-workbench.projectGraphCursor",
+          "when": "resourceLangId == solidity",
+          "group": "solidity-workbench@5b"
+        },
+        {
+          "command": "solidity-workbench.viewIR",
+          "when": "resourceLangId == solidity",
+          "group": "solidity-workbench@5c"
         },
         {
           "command": "solidity-workbench.chisel.sendSelection",

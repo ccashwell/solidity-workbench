@@ -55,6 +55,7 @@ runtime.
 | Code actions | Add SPDX, pin pragma, add visibility, constant/immutable hints, replace `tx.origin`, implement interface, NatSpec stub, auto-import |
 | Code lens | Run Test / Debug, function selectors, event `topic0`, reference counts, gas estimates |
 | Call hierarchy | Incoming/outgoing with receiver-qualifier disambiguation |
+| Project graph | Workspace-wide semantic graph for declarations, inheritance, calls, state access, emits, reverts, and type usage |
 | Type hierarchy | Supertypes and subtypes across the `is` graph |
 | Implementation lookup | Interface / virtual method implementations across inheritance trees |
 | Folding / selection ranges | AST-backed declaration folds and smart selection expansion |
@@ -109,12 +110,28 @@ Suppressible with `// solidity-workbench-disable-next-line [rule]`:
 | Flatten | `forge flatten` |
 | Storage Layout | Interactive webview via `forge inspect` |
 | Inheritance Graph | Webview rendering of the contract `is`-graph |
+| Project Graph | Interactive workspace graph with cursor neighborhoods, path finding, filters, rebuild/cache controls, and JSON / DOT / GraphML / CodeGraph export |
 | ABI Explorer | Webview for an artifact's functions, events, and errors |
 | IR Viewer | Yul (raw / optimized) and EVM assembly via `forge inspect`, with a function-level TOC, cursor-aware open, auto-refresh on save, and pinned-baseline per-function deltas for iterative optimization |
 | Script: Simulate / Broadcast / Resume | `forge script` with Ledger / Keystore / Interactive signing |
 | Deploy Contract | Guided `forge create` with typed constructor args and verification |
 | Verify / Check Verification | `forge verify-contract` / `forge verify-check` |
 | Debug Test / Script / Transaction | `forge test --debug` / `forge debug` in terminal |
+
+Project Graph indexes typed calls, unresolved low-level `call` / `staticcall`
+edges, state reads/writes, inheritance, imports, emits, reverts, modifiers, and
+type usage. Its cache tracks Solidity files independently, while Foundry config
+and remapping changes invalidate the workspace graph configuration.
+When relationship indexing is still running, the graph view shows a partial
+index banner and graph exports include a normalized `relationshipStatus` object.
+Dependency files under configured Foundry `libs` are excluded from Project Graph
+by default; set `solidity-workbench.projectGraph.dependencyIndexing` to
+`declarations` or `relationships` to opt into dependency declarations or full
+dependency edge indexing.
+For very large workspaces, set
+`solidity-workbench.projectGraph.relationshipIndexing` to `manual` to build
+relationship edges only when you explicitly rebuild the graph, or `disabled` to
+keep the graph declaration-only.
 
 ### Cast, Anvil, and Chisel
 

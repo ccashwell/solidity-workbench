@@ -127,7 +127,7 @@ export class RenameProvider {
   ): Promise<WorkspaceEdit | null> {
     // Two rename paths:
     //   1. Scope-aware (SolcBridge): local variable / parameter inside a
-    //      function — rewrite only the byte ranges the solc AST attributes
+    //      function — rewrite only the ranges the solc AST attributes
     //      to this declaration, in a single file.
     //   2. Workspace-wide (symbol index): top-level symbol — scan every
     //      workspace file for word-boundary matches, excluding `lib/`.
@@ -294,14 +294,13 @@ export class RenameProvider {
    * Single-file scope-aware rename for a local variable or parameter
    * via the solc-resolved AST.
    *
-   * The solc AST gives us precise byte ranges for:
+   * The solc AST gives us precise editor ranges for:
    *   - the declaration site
    *   - every reference to that declaration (only within this file,
    *     since locals don't cross files)
    *
-   * We convert each byte range to an LSP (line, character) pair using
-   * the document's own `positionAt` — this handles CRLF and UTF-8
-   * multibyte characters correctly without needing LineIndex.
+   * SolcBridge normalizes compiler byte offsets back to document offsets,
+   * so the document's own `positionAt` can produce correct LSP ranges.
    */
   private provideLocalRename(
     document: TextDocument,
@@ -318,7 +317,7 @@ export class RenameProvider {
     // Gather every rewrite site: the declaration itself + every reference.
     // We replace just the IDENTIFIER portion, not the full declaration
     // range (which includes the type + optional storage location). The
-    // name is always the last `info.nameLength` bytes of the identifier
+    // name is always at the end of the identifier
     // — but for VariableDeclarations, solc's `src` actually covers the
     // whole `uint256 memory foo` chunk. The cleanest portable approach
     // is to find the `name` string starting from the end of the decl
