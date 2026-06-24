@@ -4,6 +4,7 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
+import { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { CompletionProvider } from "../providers/completion.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
@@ -27,6 +28,38 @@ function setup(uri: string, text: string) {
     doc: TextDocument.create(uri, "solidity", 1, text),
     provider: new CompletionProvider(idx, parser, makeFakeWorkspace()),
   };
+}
+
+function setupFiles(currentUri: string, files: Record<string, string>) {
+  const uris = Object.keys(files);
+  const workspace = makeWorkspace(uris);
+  const parser = new SolidityParser();
+  const idx = new SymbolIndex(parser, workspace);
+  for (const [uri, text] of Object.entries(files)) {
+    parser.parse(uri, text);
+    idx.updateFile(uri);
+  }
+  const resolver = new SemanticResolver(parser, workspace, idx);
+  return {
+    doc: TextDocument.create(currentUri, "solidity", 1, files[currentUri]),
+    provider: new CompletionProvider(idx, parser, workspace, resolver),
+  };
+}
+
+function makeWorkspace(uris: string[]): WorkspaceManager {
+  return {
+    getAllFileUris: () => uris.slice(),
+    uriToPath: (uri: string) => URI.parse(uri).fsPath,
+    resolveImport: (importPath: string, fromFile: string) => {
+      const from = URI.file(fromFile);
+      const fromPath = from.fsPath;
+      const slash = fromPath.lastIndexOf("/");
+      const base = slash >= 0 ? fromPath.slice(0, slash + 1) : "";
+      const normalized = new URL(importPath, URI.file(base).toString()).toString();
+      return uris.includes(normalized) ? URI.parse(normalized).fsPath : null;
+    },
+    getRemappings: () => [],
+  } as unknown as WorkspaceManager;
 }
 
 function labels(items: { label: string }[]): Set<string> {
@@ -198,6 +231,117 @@ contract User {
       const items = provider.provideCompletions(doc, { line: 6, character: 22 });
       const ls = labels(items);
       assert.ok(ls.has("transfer"), "cast receiver should expose IERC20.transfer");
+    });
+
+    it("resolves member completions through import aliases and namespace-qualified structs", () => {
+      const targetUri = "file:///w/src/Target.sol";
+      const typesUri = "file:///w/src/Types.sol";
+      const currentUri = "file:///w/src/UsesAliases.sol";
+      const current = `pragma solidity ^0.8.24;
+import {Target as RenamedTarget} from "./Target.sol";
+import {Box as RenamedBox, IChild as ChildVault} from "./Types.sol";
+import * as TypeNS from "./Types.sol";
+
+contract UsesAliases {
+    RenamedTarget public direct;
+    RenamedBox internal box;
+    TypeNS.Box internal namespacedBox;
+
+    function f() external view {
+        direct.ping(1);
+        box.vault;
+        namespacedBox.vault;
+        box.vault.preview(1);
+        namespacedBox.vault.preview(1);
+    }
+}`;
+      const { doc, provider } = setupFiles(currentUri, {
+        [targetUri]: `pragma solidity ^0.8.24;
+contract Target {
+    function ping(uint256 value) external pure returns (uint256) {
+        return value;
+    }
+}
+`,
+        [typesUri]: `pragma solidity ^0.8.24;
+interface IBase {
+    function preview(uint256 value) external view returns (uint256);
+}
+interface IChild is IBase {}
+struct Box {
+    IChild vault;
+}
+`,
+        [currentUri]: current,
+      });
+
+      const lines = current.split("\n");
+      const completionsAfter = (needle: string) => {
+        const line = lines.findIndex((candidate) => candidate.includes(needle));
+        const character = lines[line].indexOf(needle) + needle.length;
+        return labels(provider.provideCompletions(doc, { line, character }));
+      };
+
+      assert.ok(
+        completionsAfter("direct.").has("ping"),
+        "renamed contract-typed receiver should expose Target.ping",
+      );
+      assert.ok(
+        completionsAfter("box.").has("vault"),
+        "renamed struct-typed receiver should expose Box.vault",
+      );
+      assert.ok(
+        completionsAfter("namespacedBox.").has("vault"),
+        "namespace-qualified struct receiver should expose Box.vault",
+      );
+      assert.ok(
+        completionsAfter("box.vault.").has("preview"),
+        "struct member receiver should resolve inherited interface members",
+      );
+      assert.ok(
+        completionsAfter("namespacedBox.vault.").has("preview"),
+        "namespace-qualified struct member receiver should resolve inherited interface members",
+      );
+    });
+
+    it("resolves using-for completions through imported library aliases", () => {
+      const libUri = "file:///w/src/DataLib.sol";
+      const currentUri = "file:///w/src/UsesUsingAlias.sol";
+      const current = `pragma solidity ^0.8.24;
+import {Data, DataLib as RenamedDataLib} from "./DataLib.sol";
+
+contract UsesUsingAlias {
+    using RenamedDataLib for Data;
+    Data internal data;
+
+    function f() external {
+        data.bump(1);
+    }
+}`;
+      const { doc, provider } = setupFiles(currentUri, {
+        [libUri]: `pragma solidity ^0.8.24;
+struct Data {
+    uint256 value;
+}
+
+library DataLib {
+    function bump(Data storage self, uint256 value) internal returns (uint256) {
+        self.value += value;
+        return self.value;
+    }
+}
+`,
+        [currentUri]: current,
+      });
+
+      const lines = current.split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("data.bump"));
+      const character = lines[line].indexOf("data.") + "data.".length;
+      const ls = labels(provider.provideCompletions(doc, { line, character }));
+      assert.ok(
+        ls.has("bump"),
+        "aliased using-for library should contribute extension-method completions",
+      );
     });
   });
 });

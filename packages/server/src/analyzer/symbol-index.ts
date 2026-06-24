@@ -153,7 +153,11 @@ export class SymbolIndex {
    * immediately, which also prevents the bulk loop from
    * double-indexing them later.
    */
-  async ensureImportsIndexed(uri: string, visited: Set<string> = new Set()): Promise<void> {
+  async ensureImportsIndexed(
+    uri: string,
+    visited: Set<string> = new Set(),
+    onIndexed?: (uri: string) => void,
+  ): Promise<void> {
     if (visited.has(uri)) return;
     visited.add(uri);
 
@@ -164,6 +168,7 @@ export class SymbolIndex {
     if (!this.symbolsByFile.has(uri)) {
       this.pending.delete(uri);
       await this.indexFile(uri);
+      onIndexed?.(uri);
     }
 
     const result = this.parser.get(uri);
@@ -174,7 +179,7 @@ export class SymbolIndex {
       const targetPath = this.workspace.resolveImport(imp.path, fsPath);
       if (!targetPath) continue;
       const targetUri = URI.file(targetPath).toString();
-      await this.ensureImportsIndexed(targetUri, visited);
+      await this.ensureImportsIndexed(targetUri, visited, onIndexed);
     }
   }
 
@@ -554,6 +559,21 @@ export class SymbolIndex {
     const su = this.parser.get(uri)?.sourceUnit;
     if (!su) return undefined;
 
+    const local = this.findStructInSourceUnit(uri, structName);
+    if (local) return local;
+
+    const imported = this.resolveImportedSymbolName(uri, structName);
+    if (imported) {
+      return this.findStructInSourceUnit(imported.uri, imported.name);
+    }
+
+    return undefined;
+  }
+
+  private findStructInSourceUnit(uri: string, structName: string): StructDefinition | undefined {
+    const su = this.parser.get(uri)?.sourceUnit;
+    if (!su) return undefined;
+
     const fileLevel = su.structs.find((s) => s.name === structName);
     if (fileLevel) return fileLevel;
 
@@ -561,6 +581,45 @@ export class SymbolIndex {
       const nested = contract.structs.find((s) => s.name === structName);
       if (nested) return nested;
     }
+    return undefined;
+  }
+
+  private resolveImportedSymbolName(
+    fromUri: string,
+    name: string,
+  ): { name: string; uri: string } | undefined {
+    const su = this.parser.get(fromUri)?.sourceUnit;
+    if (!su) return undefined;
+
+    let fromPath: string;
+    try {
+      fromPath = this.workspace.uriToPath(fromUri);
+    } catch {
+      return undefined;
+    }
+
+    const scoped = name.includes(".") ? name.split(".") : null;
+    for (const imp of su.imports) {
+      let targetPath: string | null;
+      try {
+        targetPath = this.workspace.resolveImport(imp.path, fromPath);
+      } catch {
+        targetPath = null;
+      }
+      if (!targetPath) continue;
+      const targetUri = URI.file(targetPath).toString();
+
+      if (scoped && imp.unitAlias === scoped[0] && scoped[1]) {
+        return { name: scoped[1], uri: targetUri };
+      }
+
+      if (scoped) continue;
+      for (const alias of imp.symbolAliases ?? []) {
+        const visibleName = alias.alias ?? alias.symbol;
+        if (visibleName === name) return { name: alias.symbol, uri: targetUri };
+      }
+    }
+
     return undefined;
   }
 

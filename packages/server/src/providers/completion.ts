@@ -1,11 +1,12 @@
 import type { CompletionItem, Position } from "vscode-languageserver/node.js";
 import { CompletionItemKind, InsertTextFormat, MarkupKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
-import type { SymbolKind } from "@solidity-workbench/common";
+import type { ContractDefinition, SymbolKind } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
+import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { resolveReceiverTypeName, isSameTypeName } from "../utils/receiver-type.js";
 import { collectUsingForDirectives, findUsingForFunction } from "../utils/using-for.js";
 import { getEnclosingContract } from "../utils/scope.js";
@@ -27,6 +28,7 @@ export class CompletionProvider {
     private symbolIndex: SymbolIndex,
     private parser: SolidityParser,
     private workspace: WorkspaceManager,
+    private resolver?: SemanticResolver,
   ) {}
 
   /**
@@ -154,9 +156,9 @@ export class CompletionProvider {
     const target = dottedPath ?? dotMatch?.[1] ?? castMatch?.[1] ?? "";
 
     // 1. Known contract / interface / library name (static member access)
-    const contract = this.symbolIndex.getContract(target);
+    const contract = this.resolveContract(target, document.uri);
     if (contract) {
-      return this.contractMemberCompletions(target);
+      return this.contractMemberCompletions(target, document.uri);
     }
 
     const structItems = this.structMemberCompletions(target, document.uri);
@@ -170,9 +172,9 @@ export class CompletionProvider {
       dottedPath ? { dottedPath } : { simpleName: target },
     );
     if (parserResolvedType) {
-      const viaParserContract = this.symbolIndex.getContract(parserResolvedType);
+      const viaParserContract = this.resolveContract(parserResolvedType, document.uri);
       if (viaParserContract) {
-        return this.contractMemberCompletions(parserResolvedType);
+        return this.contractMemberCompletions(parserResolvedType, document.uri);
       }
       const viaParserStruct = this.structMemberCompletions(parserResolvedType, document.uri);
       const usingForItems = this.usingForMemberCompletions(
@@ -188,9 +190,9 @@ export class CompletionProvider {
     // 2. Variable of a contract/interface/library/struct type, resolved via solc
     const resolvedType = this.resolveVariableTypeName(document, position, target);
     if (resolvedType) {
-      const viaType = this.symbolIndex.getContract(resolvedType);
+      const viaType = this.resolveContract(resolvedType, document.uri);
       if (viaType) {
-        return this.contractMemberCompletions(resolvedType);
+        return this.contractMemberCompletions(resolvedType, document.uri);
       }
       const viaSolcStruct = this.structMemberCompletions(resolvedType, document.uri);
       if (viaSolcStruct.length > 0) return viaSolcStruct;
@@ -266,9 +268,11 @@ export class CompletionProvider {
     return s;
   }
 
-  private contractMemberCompletions(contractName: string): CompletionItem[] {
+  private contractMemberCompletions(contractName: string, fromUri?: string): CompletionItem[] {
     const items: CompletionItem[] = [];
-    const chain = this.symbolIndex.getInheritanceChain(contractName);
+    const chain =
+      this.resolver?.getInheritanceChain(contractName, fromUri).map((entry) => entry.contract) ??
+      this.symbolIndex.getInheritanceChain(contractName);
     for (const c of chain) {
       for (const func of c.functions) {
         if (func.name && func.visibility !== "private") {
@@ -308,6 +312,23 @@ export class CompletionProvider {
 
   private structMemberCompletions(structName: string, fromUri?: string): CompletionItem[] {
     const items: CompletionItem[] = [];
+    if (fromUri) {
+      const importedOrLocalStruct = this.symbolIndex.getStruct(fromUri, structName);
+      if (importedOrLocalStruct) {
+        return importedOrLocalStruct.members.flatMap((member) =>
+          member.name
+            ? [
+                {
+                  label: member.name,
+                  kind: CompletionItemKind.Field,
+                  detail: member.typeName,
+                },
+              ]
+            : [],
+        );
+      }
+    }
+
     const structSymbols = this.symbolIndex
       .findSymbols(structName)
       .filter((s) => s.kind === "struct")
@@ -330,6 +351,15 @@ export class CompletionProvider {
     return items;
   }
 
+  private resolveContract(
+    contractName: string,
+    fromUri?: string,
+  ): { uri: string; contract: ContractDefinition } | undefined {
+    const resolved = this.resolver?.resolveContract(contractName, fromUri);
+    if (resolved) return resolved;
+    return this.symbolIndex.getContract(contractName);
+  }
+
   private usingForMemberCompletions(
     receiverType: string,
     uri: string,
@@ -350,8 +380,7 @@ export class CompletionProvider {
       const names =
         directive.functionNames ??
         (directive.libraryName
-          ? (this.symbolIndex
-              .getContract(directive.libraryName)
+          ? (this.resolveContract(directive.libraryName, uri)
               ?.contract.functions.map((f) => f.name)
               .filter((n): n is string => !!n) ?? [])
           : []);
@@ -365,6 +394,8 @@ export class CompletionProvider {
           contract,
           receiverType,
           name,
+          undefined,
+          this.resolver,
         );
         if (!hit?.fn.name) continue;
         seen.add(name);

@@ -327,19 +327,43 @@ export class SolidityParser {
       imp.unitAlias = node.unitAlias;
     }
     if (node.symbolAliases) {
-      imp.symbolAliases = node.symbolAliases.map((a: [string, string | null]) => ({
-        symbol: a[0],
-        alias: a[1] ?? undefined,
-      }));
+      imp.symbolAliases = node.symbolAliases.map((a: unknown) => this.mapImportAliasEntry(a));
     }
     if (node.symbolAliasesIdentifiers) {
-      imp.symbolAliases = node.symbolAliasesIdentifiers.map((a: any) => ({
-        symbol: a.id ?? a[0],
-        alias: a.alias ?? a[1] ?? undefined,
-      }));
+      imp.symbolAliases = node.symbolAliasesIdentifiers.map((a: unknown) =>
+        this.mapImportAliasEntry(a, "id"),
+      );
     }
 
     return imp;
+  }
+
+  private mapImportAliasEntry(
+    value: unknown,
+    symbolKey: "symbol" | "id" = "symbol",
+  ): { symbol: string; alias?: string } {
+    const entry = value as {
+      symbol?: unknown;
+      id?: unknown;
+      alias?: unknown;
+      0?: unknown;
+      1?: unknown;
+    };
+    return {
+      symbol: this.importAliasName(entry[symbolKey] ?? entry[0]) ?? "",
+      alias: this.importAliasName(entry.alias ?? entry[1]) ?? undefined,
+    };
+  }
+
+  private importAliasName(value: unknown): string | undefined {
+    if (typeof value === "string") return value;
+    if (value && typeof value === "object") {
+      const name = (value as { name?: unknown }).name;
+      if (typeof name === "string") return name;
+      const id = (value as { id?: unknown }).id;
+      if (typeof id === "string") return id;
+    }
+    return undefined;
   }
 
   private mapContract(node: any): ContractDefinition {

@@ -18,7 +18,6 @@ import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { URI } from "vscode-uri";
 import { readFileSync } from "node:fs";
 import {
-  isSameTypeName,
   normalizeTypeName,
   resolveReceiverTypeName,
   type ReceiverExpression,
@@ -502,6 +501,8 @@ export class HoverProvider {
       contract,
       receiverType,
       member,
+      undefined,
+      this.resolver,
     );
     if (!hit) return null;
 
@@ -521,9 +522,30 @@ export class HoverProvider {
       position,
       receiver,
     );
-    if (!receiverType) return null;
+    const fallbackReceiverType =
+      receiver.simpleName ?? receiver.explicitTypeName ?? receiver.dottedPath;
+    if (!receiverType && !fallbackReceiverType) return null;
 
-    const typeName = normalizeTypeName(receiverType);
+    const typeName = normalizeTypeName(receiverType ?? fallbackReceiverType ?? "");
+    const resolvedContract = this.resolver?.resolveContract(typeName, fromUri);
+    if (resolvedContract) {
+      if (
+        resolvedContract.contract.kind === "contract" ||
+        resolvedContract.contract.kind === "interface" ||
+        resolvedContract.contract.kind === "abstract"
+      ) {
+        const hit = this.findMemberInInheritanceChain(typeName, member, fromUri);
+        if (hit) return this.buildHover(hit);
+      } else if (resolvedContract.contract.kind === "library") {
+        const hit = this.findMemberInContract(typeName, member, fromUri);
+        if (hit) return this.buildHover(hit);
+      }
+    }
+
+    const struct = this.symbolIndex.getStruct(fromUri, typeName);
+    const field = struct?.members.find((m) => m.name === member);
+    if (field) return this.buildStructMemberHover(typeName, member, field.typeName);
+
     const typeSymbols = this.symbolIndex.findSymbols(typeName);
     const udvt = typeSymbols.find((s) => s.kind === "userDefinedValueType");
     if (udvt) return this.getUdvtBuiltinHover(udvt, member);
@@ -542,6 +564,16 @@ export class HoverProvider {
     }
 
     return null;
+  }
+
+  private buildStructMemberHover(structName: string, member: string, typeName: string): Hover {
+    const declaration = `${typeName} ${member}`.trim();
+    return {
+      contents: {
+        kind: MarkupKind.Markdown,
+        value: `\`\`\`solidity\n${declaration}\n\`\`\`\n\n*Struct member of* \`${structName}\``,
+      },
+    };
   }
 
   private getEnclosingContract(uri: string, lineNum: number): ContractDefinition | undefined {
@@ -564,9 +596,8 @@ export class HoverProvider {
     const ref = this.solcBridge.resolveReference(fsPath, offset);
     if (!ref) return null;
 
-    // solc emits byte offsets. For our purposes we only need a coarse
-    // filename + ~line pinpoint, so read the referenced file to compute
-    // (line, character) from the offset.
+    // SolcBridge normalizes compiler byte offsets back to editor offsets.
+    // Read the referenced file to compute a filename + line/character pinpoint.
     try {
       const text = readFileSync(ref.filePath, "utf-8");
       const prefix = text.slice(0, ref.offset);

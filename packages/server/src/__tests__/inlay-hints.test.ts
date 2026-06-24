@@ -4,6 +4,7 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
+import { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { InlayHintsProvider } from "../providers/inlay-hints.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
@@ -22,6 +23,31 @@ function setup(uri: string, text: string) {
   return {
     doc: TextDocument.create(uri, "solidity", 1, text),
     provider: new InlayHintsProvider(idx, parser),
+  };
+}
+
+function setupFiles(currentUri: string, files: Record<string, string>) {
+  const uris = Object.keys(files);
+  const workspace = {
+    getAllFileUris: () => uris.slice(),
+    uriToPath: (uri: string) => URI.parse(uri).fsPath,
+    resolveImport: (importPath: string, fromFile: string) => {
+      const slash = fromFile.lastIndexOf("/");
+      const base = slash >= 0 ? fromFile.slice(0, slash + 1) : "";
+      const normalized = new URL(importPath, URI.file(base).toString()).toString();
+      return uris.includes(normalized) ? URI.parse(normalized).fsPath : null;
+    },
+  } as unknown as WorkspaceManager;
+  const parser = new SolidityParser();
+  const idx = new SymbolIndex(parser, workspace);
+  for (const [uri, text] of Object.entries(files)) {
+    parser.parse(uri, text);
+    idx.updateFile(uri);
+  }
+  const resolver = new SemanticResolver(parser, workspace, idx);
+  return {
+    doc: TextDocument.create(currentUri, "solidity", 1, files[currentUri]),
+    provider: new InlayHintsProvider(idx, parser, resolver),
   };
 }
 
@@ -348,6 +374,51 @@ contract C {
       assert.ok(
         labels.includes("value:"),
         `expected "value:" from SafeERC20.safeTransfer; got ${JSON.stringify(labels)}`,
+      );
+    });
+
+    it("resolves using-for parameter hints through imported library aliases", () => {
+      const libUri = "file:///w/src/DataLib.sol";
+      const currentUri = "file:///w/src/UsesUsingAlias.sol";
+      const current = `pragma solidity ^0.8.24;
+import {Data, DataLib as RenamedDataLib} from "./DataLib.sol";
+
+contract UsesUsingAlias {
+    using RenamedDataLib for Data;
+    Data internal data;
+
+    function f(uint256 amount) external {
+        data.bump(amount);
+    }
+}`;
+      const { doc, provider } = setupFiles(currentUri, {
+        [libUri]: `pragma solidity ^0.8.24;
+struct Data {
+    uint256 value;
+}
+
+library DataLib {
+    function bump(Data storage self, uint256 value) internal returns (uint256) {
+        self.value += value;
+        return self.value;
+    }
+}
+`,
+        [currentUri]: current,
+      });
+
+      const hints = provider.provideInlayHints(doc, {
+        start: { line: 0, character: 0 },
+        end: { line: current.split("\n").length, character: 0 },
+      });
+      const labels = hints.map((h) => h.label);
+      assert.ok(
+        !labels.includes("self:"),
+        `implicit receiver should be skipped; got ${JSON.stringify(labels)}`,
+      );
+      assert.ok(
+        labels.includes("value:"),
+        `expected "value:" from aliased DataLib.bump; got ${JSON.stringify(labels)}`,
       );
     });
 

@@ -2,6 +2,7 @@ import type { InlayHint, Range } from "vscode-languageserver/node.js";
 import { InlayHintKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import { resolveReceiverTypeName, type ReceiverExpression } from "../utils/receiver-type.js";
 import { usingForParameterNames } from "../utils/using-for.js";
@@ -29,6 +30,7 @@ export class InlayHintsProvider {
   constructor(
     private symbolIndex: SymbolIndex,
     private parser: SolidityParser,
+    private resolver?: SemanticResolver,
   ) {}
 
   provideInlayHints(document: TextDocument, range: Range): InlayHint[] {
@@ -325,6 +327,7 @@ export class InlayHintsProvider {
           receiver,
         ) ?? "",
         funcName,
+        this.resolver,
       );
       if (usingForParams.length > 0) return usingForParams;
 

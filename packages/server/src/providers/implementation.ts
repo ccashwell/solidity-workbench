@@ -5,7 +5,9 @@ import type {
   ContractDefinition,
   FunctionDefinition,
   ParameterDeclaration,
+  SolSymbol,
 } from "@solidity-workbench/common";
+import type { ResolvedContract, SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import { getWordAtPosition } from "../utils/text.js";
 
@@ -16,33 +18,53 @@ import { getWordAtPosition } from "../utils/text.js";
  * to unrelated same-named functions.
  */
 export class ImplementationProvider {
-  constructor(private symbolIndex: SymbolIndex) {}
+  constructor(
+    private symbolIndex: SymbolIndex,
+    private resolver?: SemanticResolver,
+  ) {}
 
   provideImplementation(document: TextDocument, position: Position): Definition | null {
-    const word = getWordAtPosition(document.getText(), position)?.text ?? null;
+    const wordAtPosition = getWordAtPosition(document.getText(), position);
+    const word = wordAtPosition?.text ?? null;
     if (!word) return null;
-
-    const symbols = this.symbolIndex
-      .findSymbols(word)
-      .filter((sym) => sym.filePath === document.uri || sym.name === word);
 
     const locations: Location[] = [];
 
+    const resolvedContract = this.resolver?.resolveContract(word, document.uri);
+    if (resolvedContract) {
+      locations.push(...this.contractImplementationsForResolved(resolvedContract));
+    }
+
+    const symbols = this.selectSymbols(word, document.uri, position);
+
     for (const sym of symbols) {
       if (sym.kind === "contract" || sym.kind === "interface") {
-        const entry = this.symbolIndex.getContract(sym.name);
-        if (entry) {
-          locations.push(...this.contractImplementations(entry.contract));
+        const resolved = this.resolver?.resolveContract(sym.name, sym.filePath);
+        if (resolved) {
+          locations.push(...this.contractImplementationsForResolved(resolved));
+        } else {
+          const entry = this.symbolIndex.getContract(sym.name);
+          if (entry) {
+            locations.push(...this.contractImplementations(entry.contract));
+          }
         }
       }
 
       if (sym.kind === "function" && sym.containerName) {
-        const container = this.symbolIndex.getContract(sym.containerName);
-        const sourceFn = container?.contract.functions.find(
+        const resolved = this.resolver?.resolveContract(sym.containerName, sym.filePath);
+        const sourceFn = resolved?.contract.functions.find(
           (fn) => fn.name === sym.name && this.sameRange(fn.nameRange, sym.nameRange),
         );
-        if (container && sourceFn) {
-          locations.push(...this.functionImplementations(container.contract.name, sourceFn));
+        if (resolved && sourceFn) {
+          locations.push(...this.functionImplementationsForResolved(resolved, sourceFn));
+        } else {
+          const container = this.symbolIndex.getContract(sym.containerName);
+          const fallbackFn = container?.contract.functions.find(
+            (fn) => fn.name === sym.name && this.sameRange(fn.nameRange, sym.nameRange),
+          );
+          if (container && fallbackFn) {
+            locations.push(...this.functionImplementations(container.contract.name, fallbackFn));
+          }
         }
       }
     }
@@ -50,6 +72,28 @@ export class ImplementationProvider {
     const deduped = this.dedupe(locations);
     if (deduped.length === 0) return null;
     return deduped;
+  }
+
+  private selectSymbols(word: string, documentUri: string, position: Position): SolSymbol[] {
+    let symbols = this.symbolIndex.findSymbols(word);
+    const underCursor = symbols.filter(
+      (sym) => sym.filePath === documentUri && this.rangeContains(sym.nameRange, position),
+    );
+    if (underCursor.length > 0) return underCursor;
+
+    if (this.resolver) {
+      symbols = this.resolver.filterVisibleSymbols(documentUri, symbols);
+    }
+    return symbols;
+  }
+
+  private contractImplementationsForResolved(target: ResolvedContract): Location[] {
+    const out: Location[] = [];
+    for (const entry of this.getAllSemanticSubtypes(target)) {
+      if (entry.contract.kind === "interface") continue;
+      out.push(LspLocation.create(entry.uri, entry.contract.nameRange));
+    }
+    return out;
   }
 
   private contractImplementations(contract: ContractDefinition): Location[] {
@@ -79,6 +123,40 @@ export class ImplementationProvider {
     return out;
   }
 
+  private functionImplementationsForResolved(
+    baseContract: ResolvedContract,
+    sourceFn: FunctionDefinition,
+  ): Location[] {
+    const out: Location[] = [];
+    for (const entry of this.getAllSemanticSubtypes(baseContract)) {
+      if (entry.contract.kind === "interface") continue;
+
+      for (const candidate of entry.contract.functions) {
+        if (!candidate.name || candidate.name !== sourceFn.name) continue;
+        if (!this.sameParameters(candidate.parameters, sourceFn.parameters)) continue;
+        out.push(LspLocation.create(entry.uri, candidate.nameRange));
+      }
+    }
+    return out;
+  }
+
+  private getAllSemanticSubtypes(target: ResolvedContract): ResolvedContract[] {
+    if (!this.resolver) return [];
+
+    const out: ResolvedContract[] = [];
+    const visited = new Set<string>();
+    const walk = (entry: ResolvedContract): void => {
+      for (const subtype of this.resolver?.getSubtypes(entry) ?? []) {
+        if (visited.has(subtype.id)) continue;
+        visited.add(subtype.id);
+        out.push(subtype);
+        walk(subtype);
+      }
+    };
+    walk(target);
+    return out;
+  }
+
   private inheritsFrom(contractName: string, baseName: string): boolean {
     return this.symbolIndex
       .getInheritanceChain(contractName)
@@ -100,6 +178,17 @@ export class ImplementationProvider {
       a.end.line === b.end.line &&
       a.end.character === b.end.character
     );
+  }
+
+  private rangeContains(range: FunctionDefinition["nameRange"], position: Position): boolean {
+    if (position.line < range.start.line || position.line > range.end.line) return false;
+    if (position.line === range.start.line && position.character < range.start.character) {
+      return false;
+    }
+    if (position.line === range.end.line && position.character > range.end.character) {
+      return false;
+    }
+    return true;
   }
 
   private dedupe(locations: Location[]): Location[] {

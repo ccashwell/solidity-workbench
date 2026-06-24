@@ -6,6 +6,7 @@ import type {
   UsingForDirective,
 } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import { isSameTypeName } from "./receiver-type.js";
 
@@ -35,6 +36,8 @@ export function findUsingForFunction(
   contract: ContractDefinition | undefined,
   receiverType: string,
   memberName: string,
+  argumentCount?: number,
+  resolver?: SemanticResolver,
 ): { fn: FunctionDefinition; filePath: string; containerName?: string } | null {
   const sourceUnit = parser.get(uri)?.sourceUnit;
   if (!sourceUnit) return null;
@@ -45,26 +48,37 @@ export function findUsingForFunction(
     }
 
     if (directive.libraryName) {
-      const library = symbolIndex.getContract(directive.libraryName)?.contract;
-      const fn = library?.functions.find((f) => f.name === memberName);
+      const libraryEntry =
+        resolver?.resolveContract(directive.libraryName, uri) ??
+        symbolIndex.getContract(directive.libraryName);
+      const library = libraryEntry?.contract;
+      const fn = selectUsingForFunction(library?.functions ?? [], memberName, argumentCount);
       if (!library || !fn || fn.parameters.length === 0) continue;
       if (!isSameTypeName(fn.parameters[0].typeName, receiverType)) continue;
-      const entry = symbolIndex.getContract(library.name);
-      if (!entry) continue;
-      return { fn, filePath: entry.uri, containerName: library.name };
+      return { fn, filePath: libraryEntry.uri, containerName: library.name };
     }
 
     if (directive.functionNames && !directive.functionNames.includes(memberName)) {
       continue;
     }
 
-    const fn = sourceUnit.freeFunctions.find((f) => f.name === memberName);
+    const fn = selectUsingForFunction(sourceUnit.freeFunctions, memberName, argumentCount);
     if (!fn || fn.parameters.length === 0) continue;
     if (!isSameTypeName(fn.parameters[0].typeName, receiverType)) continue;
     return { fn, filePath: uri };
   }
 
   return null;
+}
+
+function selectUsingForFunction(
+  functions: FunctionDefinition[],
+  memberName: string,
+  argumentCount: number | undefined,
+): FunctionDefinition | undefined {
+  const candidates = functions.filter((fn) => fn.name === memberName);
+  if (argumentCount === undefined) return candidates[0];
+  return candidates.find((fn) => fn.parameters.length === argumentCount + 1) ?? candidates[0];
 }
 
 export function usingForFunctionToSymbol(hit: {
@@ -92,8 +106,18 @@ export function usingForParameterNames(
   contract: ContractDefinition | undefined,
   receiverType: string,
   memberName: string,
+  resolver?: SemanticResolver,
 ): string[] {
-  const hit = findUsingForFunction(parser, symbolIndex, uri, contract, receiverType, memberName);
+  const hit = findUsingForFunction(
+    parser,
+    symbolIndex,
+    uri,
+    contract,
+    receiverType,
+    memberName,
+    undefined,
+    resolver,
+  );
   if (!hit) return [];
   return hit.fn.parameters
     .slice(1)

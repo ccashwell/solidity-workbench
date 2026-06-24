@@ -260,6 +260,148 @@ contract C {
       assert.ok("uri" in loc);
       assert.equal(loc.range.start.line, 1);
     });
+
+    it("resolves aliased and namespace-qualified receiver definitions", () => {
+      const targetUri = "file:///w/src/Target.sol";
+      const typesUri = "file:///w/src/Types.sol";
+      const currentUri = "file:///w/src/UsesAliases.sol";
+      const files = {
+        [targetUri]: `pragma solidity ^0.8.24;
+contract Target {
+    function ping(uint256 value) external pure returns (uint256) {
+        return value;
+    }
+}
+`,
+        [typesUri]: `pragma solidity ^0.8.24;
+interface IBase {
+    function preview(uint256 value) external view returns (uint256);
+}
+interface IChild is IBase {}
+struct Box {
+    IChild vault;
+}
+`,
+        [currentUri]: `pragma solidity ^0.8.24;
+import {Target as RenamedTarget} from "./Target.sol";
+import * as TypeNS from "./Types.sol";
+
+contract UsesAliases {
+    RenamedTarget public direct;
+    TypeNS.Box internal box;
+
+    function f() external view {
+        direct.ping(1);
+        box.vault.preview(1);
+    }
+}`,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, fromFile: string) => {
+          const slash = fromFile.lastIndexOf("/");
+          const base = slash >= 0 ? fromFile.slice(0, slash + 1) : "";
+          const normalized = new URL(importPath, URI.file(base).toString()).toString();
+          return normalized in files ? URI.parse(normalized).fsPath : null;
+        },
+      } as unknown as WorkspaceManager;
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, workspace);
+      const docs: Record<string, TextDocument> = {};
+      for (const [uri, text] of Object.entries(files)) {
+        parser.parse(uri, text);
+        idx.updateFile(uri);
+        docs[uri] = doc(uri, text);
+      }
+      const resolver = new SemanticResolver(parser, workspace, idx);
+      const provider = new DefinitionProvider(idx, parser, workspace, resolver);
+      const lines = files[currentUri].split("\n");
+
+      const pingLine = lines.findIndex((line) => line.includes("direct.ping"));
+      const pingDef = provider.provideDefinition(docs[currentUri], {
+        line: pingLine,
+        character: lines[pingLine].indexOf("ping") + 1,
+      });
+      assert.ok(pingDef, "expected definition for aliased Target.ping receiver");
+      const pingLoc = Array.isArray(pingDef) ? pingDef[0] : pingDef;
+      assert.ok("uri" in pingLoc);
+      assert.equal(pingLoc.uri, targetUri);
+      assert.equal(pingLoc.range.start.line, 2);
+
+      const previewLine = lines.findIndex((line) => line.includes("box.vault.preview"));
+      const previewDef = provider.provideDefinition(docs[currentUri], {
+        line: previewLine,
+        character: lines[previewLine].indexOf("preview") + 1,
+      });
+      assert.ok(previewDef, "expected definition for namespace-qualified struct member receiver");
+      const previewLoc = Array.isArray(previewDef) ? previewDef[0] : previewDef;
+      assert.ok("uri" in previewLoc);
+      assert.equal(previewLoc.uri, typesUri);
+      assert.equal(previewLoc.range.start.line, 2);
+    });
+
+    it("resolves using-for definitions through imported library aliases", () => {
+      const libUri = "file:///w/src/DataLib.sol";
+      const currentUri = "file:///w/src/UsesUsingAlias.sol";
+      const files = {
+        [libUri]: `pragma solidity ^0.8.24;
+struct Data {
+    uint256 value;
+}
+
+library DataLib {
+    function bump(Data storage self, uint256 value) internal returns (uint256) {
+        self.value += value;
+        return self.value;
+    }
+}
+`,
+        [currentUri]: `pragma solidity ^0.8.24;
+import {Data, DataLib as RenamedDataLib} from "./DataLib.sol";
+
+contract UsesUsingAlias {
+    using RenamedDataLib for Data;
+    Data internal data;
+
+    function f() external {
+        data.bump(1);
+    }
+}`,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, fromFile: string) => {
+          const slash = fromFile.lastIndexOf("/");
+          const base = slash >= 0 ? fromFile.slice(0, slash + 1) : "";
+          const normalized = new URL(importPath, URI.file(base).toString()).toString();
+          return normalized in files ? URI.parse(normalized).fsPath : null;
+        },
+      } as unknown as WorkspaceManager;
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, workspace);
+      const docs: Record<string, TextDocument> = {};
+      for (const [uri, text] of Object.entries(files)) {
+        parser.parse(uri, text);
+        idx.updateFile(uri);
+        docs[uri] = doc(uri, text);
+      }
+      const resolver = new SemanticResolver(parser, workspace, idx);
+      const provider = new DefinitionProvider(idx, parser, workspace, resolver);
+      const lines = files[currentUri].split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("data.bump"));
+      const def = provider.provideDefinition(docs[currentUri], {
+        line,
+        character: lines[line].indexOf("bump") + 1,
+      });
+
+      assert.ok(def, "expected definition for aliased using-for method");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc);
+      assert.equal(loc.uri, libUri);
+      assert.equal(loc.range.start.line, 6);
+    });
   });
 
   describe("file-level declarations", () => {

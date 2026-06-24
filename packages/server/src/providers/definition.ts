@@ -293,6 +293,8 @@ export class DefinitionProvider {
         contract,
         typeName,
         memberName,
+        undefined,
+        this.resolver,
       );
       if (hit) {
         return Location.create(hit.filePath, hit.fn.nameRange);

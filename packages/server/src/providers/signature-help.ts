@@ -3,13 +3,17 @@ import { ParameterInformation, MarkupKind } from "vscode-languageserver/node.js"
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type {
   FunctionDefinition,
+  ContractDefinition,
   NatspecComment,
   EventDefinition,
   ErrorDefinition,
 } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { ResolvedContract, SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { resolveEffectiveNatspec } from "../utils/natspec.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
+import { resolveDottedReceiverTypeName } from "../utils/receiver-type.js";
+import { findUsingForFunction } from "../utils/using-for.js";
 
 /**
  * Provides signature help — the parameter hints shown while typing
@@ -28,6 +32,7 @@ export class SignatureHelpProvider {
   constructor(
     private symbolIndex: SymbolIndex,
     private parser: SolidityParser,
+    private resolver?: SemanticResolver,
   ) {}
 
   provideSignatureHelp(document: TextDocument, position: Position): SignatureHelp | null {
@@ -41,7 +46,7 @@ export class SignatureHelpProvider {
     const { functionName, activeParameter, containerName } = callContext;
 
     // Look up function definitions
-    const signatures = this.findSignatures(functionName, containerName);
+    const signatures = this.findSignatures(functionName, containerName, document.uri, position);
     if (signatures.length === 0) {
       // Try built-in functions
       const builtinSig = this.getBuiltinSignature(functionName);
@@ -105,7 +110,7 @@ export class SignatureHelpProvider {
     if (nameStart > 1 && text[nameStart - 1] === ".") {
       const containerEnd = nameStart - 2;
       let containerStart = containerEnd;
-      while (containerStart > 0 && /[\w$]/.test(text[containerStart - 1])) containerStart--;
+      while (containerStart > 0 && /[\w$.]/.test(text[containerStart - 1])) containerStart--;
       containerName = text.slice(containerStart, containerEnd + 1);
     }
 
@@ -118,12 +123,49 @@ export class SignatureHelpProvider {
   private findSignatures(
     funcName: string,
     containerName: string | undefined,
+    documentUri: string,
+    position: Position,
   ): SignatureInformation[] {
     const signatures: SignatureInformation[] = [];
 
     // If we have a container, resolve through that contract
     if (containerName) {
-      const chain = this.symbolIndex.getInheritanceChain(containerName);
+      const receiverTypeName =
+        resolveDottedReceiverTypeName(
+          this.parser,
+          this.symbolIndex,
+          documentUri,
+          position,
+          containerName,
+        ) ?? containerName;
+      const usingForHit = findUsingForFunction(
+        this.parser,
+        this.symbolIndex,
+        documentUri,
+        this.findEnclosingContract(documentUri, position),
+        receiverTypeName,
+        funcName,
+        undefined,
+        this.resolver,
+      );
+      if (usingForHit) {
+        signatures.push(
+          this.buildSignature(usingForHit.fn, usingForHit.containerName ?? "", {
+            skipFirstParameter: true,
+          }),
+        );
+        return signatures;
+      }
+
+      const resolvedChain = this.resolver?.getInheritanceChain(receiverTypeName, documentUri) ?? [];
+      if (resolvedChain.length > 0) {
+        for (const entry of resolvedChain) {
+          this.addContractSignatures(signatures, entry, funcName);
+        }
+        return signatures;
+      }
+
+      const chain = this.symbolIndex.getInheritanceChain(receiverTypeName);
       for (const contract of chain) {
         for (const func of contract.functions) {
           if (func.name === funcName) {
@@ -135,25 +177,46 @@ export class SignatureHelpProvider {
     }
 
     // Otherwise search globally
-    const symbols = this.symbolIndex.findSymbols(funcName);
+    let symbols = this.symbolIndex.findSymbols(funcName);
+    if (this.resolver) {
+      symbols = this.resolver.filterVisibleSymbols(documentUri, symbols);
+    }
     for (const sym of symbols) {
       if (sym.kind === "function" || sym.kind === "event" || sym.kind === "error") {
         if (sym.containerName) {
-          const entry = this.symbolIndex.getContract(sym.containerName);
-          if (entry) {
-            const func = entry.contract.functions.find((f) => f.name === funcName);
+          const resolved = this.resolver?.resolveContract(sym.containerName, sym.filePath);
+          if (resolved) {
+            const func = resolved.contract.functions.find((f) => f.name === funcName);
             if (func) {
-              signatures.push(this.buildSignature(func, sym.containerName));
+              signatures.push(this.buildSignature(func, resolved.contract.name));
               continue;
             }
-            const event = entry.contract.events.find((e) => e.name === funcName);
+            const event = resolved.contract.events.find((e) => e.name === funcName);
             if (event) {
               signatures.push(this.buildEventSignature(event));
               continue;
             }
-            const error = entry.contract.errors.find((e) => e.name === funcName);
+            const error = resolved.contract.errors.find((e) => e.name === funcName);
             if (error) {
               signatures.push(this.buildErrorSignature(error));
+            }
+          } else {
+            const entry = this.symbolIndex.getContract(sym.containerName);
+            if (entry) {
+              const func = entry.contract.functions.find((f) => f.name === funcName);
+              if (func) {
+                signatures.push(this.buildSignature(func, sym.containerName));
+                continue;
+              }
+              const event = entry.contract.events.find((e) => e.name === funcName);
+              if (event) {
+                signatures.push(this.buildEventSignature(event));
+                continue;
+              }
+              const error = entry.contract.errors.find((e) => e.name === funcName);
+              if (error) {
+                signatures.push(this.buildErrorSignature(error));
+              }
             }
           }
         } else if (sym.kind === "function") {
@@ -175,7 +238,41 @@ export class SignatureHelpProvider {
     return signatures;
   }
 
-  private buildSignature(func: FunctionDefinition, containerName: string): SignatureInformation {
+  private addContractSignatures(
+    signatures: SignatureInformation[],
+    entry: ResolvedContract,
+    funcName: string,
+  ): void {
+    for (const func of entry.contract.functions) {
+      if (func.name === funcName) {
+        signatures.push(this.buildSignature(func, entry.contract.name));
+      }
+    }
+  }
+
+  private findEnclosingContract(
+    documentUri: string,
+    position: Position,
+  ): ContractDefinition | undefined {
+    const sourceUnit = this.parser.get(documentUri)?.sourceUnit;
+    return sourceUnit?.contracts.find((contract) => this.positionInRange(position, contract.range));
+  }
+
+  private positionInRange(position: Position, range: { start: Position; end: Position }): boolean {
+    const afterStart =
+      position.line > range.start.line ||
+      (position.line === range.start.line && position.character >= range.start.character);
+    const beforeEnd =
+      position.line < range.end.line ||
+      (position.line === range.end.line && position.character <= range.end.character);
+    return afterStart && beforeEnd;
+  }
+
+  private buildSignature(
+    func: FunctionDefinition,
+    containerName: string,
+    options: { skipFirstParameter?: boolean } = {},
+  ): SignatureInformation {
     const sym =
       func.name && containerName
         ? this.symbolIndex
@@ -184,14 +281,16 @@ export class SignatureHelpProvider {
         : undefined;
     const effective = sym ? resolveEffectiveNatspec(sym, this.symbolIndex) : func.natspec;
 
-    const params: ParameterInformation[] = func.parameters.map((p) => {
-      const label = `${p.typeName}${p.storageLocation ? " " + p.storageLocation : ""}${p.name ? " " + p.name : ""}`;
-      const doc = effective?.params?.[p.name ?? ""];
-      return {
-        label,
-        documentation: doc ? { kind: MarkupKind.Markdown, value: doc } : undefined,
-      };
-    });
+    const params: ParameterInformation[] = func.parameters
+      .slice(options.skipFirstParameter ? 1 : 0)
+      .map((p) => {
+        const label = `${p.typeName}${p.storageLocation ? " " + p.storageLocation : ""}${p.name ? " " + p.name : ""}`;
+        const doc = effective?.params?.[p.name ?? ""];
+        return {
+          label,
+          documentation: doc ? { kind: MarkupKind.Markdown, value: doc } : undefined,
+        };
+      });
 
     const paramStr = params.map((p) => p.label).join(", ");
     const returnsStr =

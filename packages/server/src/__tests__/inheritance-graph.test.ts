@@ -4,6 +4,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { URI } from "vscode-uri";
+import { GraphIndex } from "../analyzer/graph-index.js";
+import { SemanticResolver } from "../analyzer/semantic-resolver.js";
+import { SymbolIndex } from "../analyzer/symbol-index.js";
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { InheritanceGraphProvider } from "../providers/inheritance-graph.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
@@ -50,7 +53,22 @@ contract Base {}
         uriToPath: (uri: string) => URI.parse(uri).fsPath,
       };
 
-      const provider = new InheritanceGraphProvider(parser, workspace as WorkspaceManager);
+      const symbolIndex = new SymbolIndex(parser, workspace as WorkspaceManager);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace as WorkspaceManager, symbolIndex);
+      const graphIndex = new GraphIndex(
+        parser,
+        workspace as WorkspaceManager,
+        resolver,
+        symbolIndex,
+      );
+      graphIndex.rebuildWorkspace();
+      const provider = new InheritanceGraphProvider(
+        parser,
+        workspace as WorkspaceManager,
+        resolver,
+        graphIndex,
+      );
       const childPath = path.join(tmpDir, "src/Child.sol");
       const graph = provider.provideInheritanceGraph({
         contractPath: childPath,

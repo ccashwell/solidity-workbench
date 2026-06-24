@@ -17,6 +17,7 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
 import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
+import type { GraphIndex, SolidityGraphNode } from "../analyzer/graph-index.js";
 import { getWordAtPosition, CALL_LIKE_KEYWORDS, isSolidityBuiltinType } from "../utils/text.js";
 
 const CALL_HIERARCHY_INDEX_BATCH_SIZE = 24;
@@ -107,6 +108,7 @@ export class CallHierarchyProvider {
     private workspace: WorkspaceManager,
     private parser: SolidityParser,
     private resolver?: SemanticResolver,
+    private graphIndex?: GraphIndex,
   ) {}
 
   setSolcBridge(bridge: SolcBridge): void {
@@ -157,6 +159,9 @@ export class CallHierarchyProvider {
     item: CallHierarchyItem,
     token?: CancellationToken,
   ): Promise<CallHierarchyIncomingCall[]> {
+    const graphCalls = this.getGraphIncomingCalls(item);
+    if (graphCalls) return graphCalls;
+
     await this.ensureIndexedForItem(item, "incoming", token);
     if (token?.isCancellationRequested) return [];
 
@@ -217,6 +222,9 @@ export class CallHierarchyProvider {
     item: CallHierarchyItem,
     token?: CancellationToken,
   ): Promise<CallHierarchyOutgoingCall[]> {
+    const graphCalls = this.getGraphOutgoingCalls(item);
+    if (graphCalls) return graphCalls;
+
     await this.ensureIndexedForItem(item, "outgoing", token);
     if (token?.isCancellationRequested) return [];
 
@@ -258,6 +266,99 @@ export class CallHierarchyProvider {
       to: entry.item,
       fromRanges: entry.ranges,
     }));
+  }
+
+  private getGraphIncomingCalls(item: CallHierarchyItem): CallHierarchyIncomingCall[] | null {
+    if (!this.graphIndex?.isRelationshipIndexComplete()) return null;
+    const target = this.findGraphCallableNode(item);
+    if (!target) return null;
+
+    const callerMap = new Map<string, { item: CallHierarchyItem; ranges: Range[] }>();
+    for (const edge of this.graphIndex!.getIncomingEdges(target.id, "calls")) {
+      if (!edge.range) continue;
+      const source = this.graphIndex!.getNode(edge.source);
+      if (!source || !this.isCallableGraphNode(source)) continue;
+
+      const existing = callerMap.get(source.id);
+      if (existing) {
+        existing.ranges.push(edge.range);
+        continue;
+      }
+
+      callerMap.set(source.id, {
+        item: this.graphNodeToCallHierarchyItem(source),
+        ranges: [edge.range],
+      });
+    }
+
+    return Array.from(callerMap.values()).map((entry) => ({
+      from: entry.item,
+      fromRanges: entry.ranges,
+    }));
+  }
+
+  private getGraphOutgoingCalls(item: CallHierarchyItem): CallHierarchyOutgoingCall[] | null {
+    this.graphIndex?.ensureFileRelationships(item.uri);
+    const source = this.findGraphCallableNode(item);
+    if (!source) return null;
+
+    const calleeMap = new Map<string, { item: CallHierarchyItem; ranges: Range[] }>();
+    for (const edge of this.graphIndex!.getOutgoingEdges(source.id, "calls")) {
+      if (!edge.range) continue;
+      const target = this.graphIndex!.getNode(edge.target);
+      if (!target || !this.isCallableGraphNode(target)) continue;
+
+      const existing = calleeMap.get(target.id);
+      if (existing) {
+        existing.ranges.push(edge.range);
+        continue;
+      }
+
+      calleeMap.set(target.id, {
+        item: this.graphNodeToCallHierarchyItem(target),
+        ranges: [edge.range],
+      });
+    }
+
+    return Array.from(calleeMap.values()).map((entry) => ({
+      to: entry.item,
+      fromRanges: entry.ranges,
+    }));
+  }
+
+  private findGraphCallableNode(item: CallHierarchyItem): SolidityGraphNode | undefined {
+    if (!this.graphIndex) return undefined;
+    return this.graphIndex
+      .getNodes()
+      .find(
+        (node) =>
+          this.isCallableGraphNode(node) &&
+          node.uri === item.uri &&
+          node.name === item.name &&
+          (!item.detail || node.containerName === item.detail),
+      );
+  }
+
+  private graphNodeToCallHierarchyItem(node: SolidityGraphNode): CallHierarchyItem {
+    return {
+      name: node.name,
+      kind: node.kind === "modifier" ? SymbolKind.Method : SymbolKind.Function,
+      uri: node.uri,
+      range: node.range,
+      selectionRange: node.selectionRange,
+      detail: node.containerName,
+      data: this.makeKey(node.uri, node.name, node.containerName),
+    };
+  }
+
+  private isCallableGraphNode(node: SolidityGraphNode): boolean {
+    return (
+      node.kind === "function" ||
+      node.kind === "constructor" ||
+      node.kind === "receive" ||
+      node.kind === "fallback" ||
+      node.kind === "modifier"
+    );
   }
 
   /**

@@ -1,4 +1,3 @@
-import type { SoliditySourceUnit } from "@solidity-workbench/common";
 import type { Position } from "vscode-languageserver/node.js";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";

@@ -483,6 +483,22 @@ contract DiskOnly {
       fs.rmSync(tmp, { recursive: true, force: true });
     });
 
+    it("notifies callers when ensureImportsIndexed pulls in a new file", async () => {
+      const { tmp, projUri, depUri, ws } = makeImportFixture();
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, ws);
+      const indexed: string[] = [];
+
+      parser.parse(projUri, fs.readFileSync(URI.parse(projUri).fsPath, "utf-8"));
+      idx.updateFile(projUri);
+
+      await idx.ensureImportsIndexed(projUri, new Set(), (uri) => indexed.push(uri));
+
+      assert.deepEqual(indexed, [depUri]);
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
     it("removes imported targets from the bulk-sweep pending queue", async () => {
       const { tmp, projUri, depUri, ws } = makeImportFixture();
       const parser = new SolidityParser();

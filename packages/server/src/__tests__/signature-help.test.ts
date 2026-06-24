@@ -1,10 +1,12 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
+import * as path from "node:path";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
 import { SignatureHelpProvider } from "../providers/signature-help.js";
+import { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
 function makeFakeWorkspace() {
@@ -22,6 +24,35 @@ function setup(uri: string, text: string) {
   return {
     doc: TextDocument.create(uri, "solidity", 1, text),
     provider: new SignatureHelpProvider(idx, parser),
+  };
+}
+
+function setupFiles(files: Record<string, string>) {
+  const parser = new SolidityParser();
+  const filePaths = new Set(Object.keys(files).map((name) => path.join("/w", name)));
+  const uris = Object.keys(files).map((name) => URI.file(path.join("/w", name)).toString());
+  const workspace = {
+    getAllFileUris: () => uris.slice(),
+    uriToPath: (uri: string) => URI.parse(uri).fsPath,
+    resolveImport: (importPath: string, fromFile: string) => {
+      const target = path.resolve(path.dirname(fromFile), importPath);
+      return filePaths.has(target) ? target : null;
+    },
+  } as unknown as WorkspaceManager;
+  const idx = new SymbolIndex(parser, workspace);
+  const docs: Record<string, TextDocument> = {};
+
+  for (const [name, text] of Object.entries(files)) {
+    const uri = URI.file(path.join("/w", name)).toString();
+    parser.parse(uri, text);
+    idx.updateFile(uri);
+    docs[name] = TextDocument.create(uri, "solidity", 1, text);
+  }
+
+  const resolver = new SemanticResolver(parser, workspace, idx);
+  return {
+    docs,
+    provider: new SignatureHelpProvider(idx, parser, resolver),
   };
 }
 
@@ -111,6 +142,39 @@ contract C {
       const sig = provider.provideSignatureHelp(doc, { line: callLine, character: col });
       assert.ok(sig, "expected signature help for free function");
       assert.match(sig!.signatures[0].label, /add\(uint256 a, uint256 b\)/);
+    });
+
+    it("resolves receiver variables declared with imported interface aliases", () => {
+      const files = {
+        "src/IVault.sol": `pragma solidity ^0.8.24;
+interface IVault {
+    function convertToAssets(uint256 shares) external view returns (uint256 assets);
+}`,
+        "test/IVault.sol": `pragma solidity ^0.8.24;
+interface IVault {
+    function convertToAssets(address account) external view returns (uint256 assets);
+}`,
+        "src/Pool.sol": `pragma solidity ^0.8.24;
+import { IVault as RenamedVault } from "./IVault.sol";
+contract Pool {
+    function f(RenamedVault vault, uint256 shares) external view {
+        vault.convertToAssets(shares);
+    }
+}`,
+      };
+      const { docs, provider } = setupFiles(files);
+      const text = files["src/Pool.sol"];
+      const lines = text.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("convertToAssets"));
+      const col = lines[callLine].indexOf("convertToAssets(") + "convertToAssets(".length;
+      const sig = provider.provideSignatureHelp(docs["src/Pool.sol"], {
+        line: callLine,
+        character: col,
+      });
+
+      assert.ok(sig, "expected signature help for aliased receiver type");
+      assert.equal(sig!.signatures.length, 1);
+      assert.match(sig!.signatures[0].label, /convertToAssets\(uint256 shares\)/);
     });
   });
 

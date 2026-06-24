@@ -4,6 +4,7 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
+import { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { HoverProvider } from "../providers/hover.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
@@ -11,6 +12,7 @@ function makeFakeWorkspace() {
   return {
     getAllFileUris: () => [],
     uriToPath: (uri: string) => URI.parse(uri).fsPath,
+    resolveImport: () => null,
   } as unknown as WorkspaceManager;
 }
 
@@ -36,9 +38,10 @@ function setupFiles(
     parser.parse(uri, text);
     idx.updateFile(uri);
   }
+  const resolver = new SemanticResolver(parser, workspace ?? makeFakeWorkspace(), idx);
   return {
     doc: TextDocument.create(currentUri, "solidity", 1, files[currentUri]),
-    provider: new HoverProvider(idx, parser, workspace),
+    provider: new HoverProvider(idx, parser, workspace, resolver),
   };
 }
 
@@ -264,6 +267,130 @@ contract ImportedType {}`;
       assert.ok(h, "expected hover for imported symbol");
       const value = (h!.contents as any).value as string;
       assert.match(value, /contract ImportedType/);
+    });
+
+    it("resolves dotted hovers through import aliases and namespace-qualified structs", () => {
+      const targetUri = "file:///w/src/Target.sol";
+      const typesUri = "file:///w/src/Types.sol";
+      const currentUri = "file:///w/src/UsesAliases.sol";
+      const current = `pragma solidity ^0.8.24;
+import {Target as RenamedTarget} from "./Target.sol";
+import * as TypeNS from "./Types.sol";
+
+contract UsesAliases {
+    RenamedTarget public direct;
+    TypeNS.Box internal box;
+
+    function f() external view {
+        direct.ping(1);
+        box.vault.preview(1);
+    }
+}`;
+      const files = {
+        [targetUri]: `pragma solidity ^0.8.24;
+contract Target {
+    function ping(uint256 value) external pure returns (uint256) {
+        return value;
+    }
+}
+`,
+        [typesUri]: `pragma solidity ^0.8.24;
+interface IBase {
+    function preview(uint256 value) external view returns (uint256);
+}
+interface IChild is IBase {}
+struct Box {
+    IChild vault;
+}
+`,
+        [currentUri]: current,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, fromFile: string) => {
+          const fromPath = fromFile;
+          const slash = fromPath.lastIndexOf("/");
+          const base = slash >= 0 ? fromPath.slice(0, slash + 1) : "";
+          const normalized = new URL(importPath, URI.file(base).toString()).toString();
+          return normalized in files ? URI.parse(normalized).fsPath : null;
+        },
+      } as unknown as WorkspaceManager;
+      const { doc, provider } = setupFiles(currentUri, files, workspace);
+      const lines = current.split("\n");
+
+      const pingLine = lines.findIndex((line) => line.includes("direct.ping"));
+      const pingHover = provider.provideHover(doc, {
+        line: pingLine,
+        character: lines[pingLine].indexOf("ping") + 1,
+      });
+      assert.ok(pingHover, "expected hover on aliased Target.ping receiver");
+      assert.ok(!Array.isArray(pingHover.contents) && typeof pingHover.contents !== "string");
+      assert.match(pingHover.contents.value, /function ping/);
+      assert.match(pingHover.contents.value, /Defined in.*Target/);
+
+      const previewLine = lines.findIndex((line) => line.includes("box.vault.preview"));
+      const previewHover = provider.provideHover(doc, {
+        line: previewLine,
+        character: lines[previewLine].indexOf("preview") + 1,
+      });
+      assert.ok(previewHover, "expected hover on namespace-qualified struct member receiver");
+      assert.ok(!Array.isArray(previewHover.contents) && typeof previewHover.contents !== "string");
+      assert.match(previewHover.contents.value, /function preview/);
+      assert.match(previewHover.contents.value, /Defined in.*IBase/);
+    });
+
+    it("resolves using-for hovers through imported library aliases", () => {
+      const libUri = "file:///w/src/DataLib.sol";
+      const currentUri = "file:///w/src/UsesUsingAlias.sol";
+      const current = `pragma solidity ^0.8.24;
+import {Data, DataLib as RenamedDataLib} from "./DataLib.sol";
+
+contract UsesUsingAlias {
+    using RenamedDataLib for Data;
+    Data internal data;
+
+    function f() external {
+        data.bump(1);
+    }
+}`;
+      const files = {
+        [libUri]: `pragma solidity ^0.8.24;
+struct Data {
+    uint256 value;
+}
+
+library DataLib {
+    function bump(Data storage self, uint256 value) internal returns (uint256) {
+        self.value += value;
+        return self.value;
+    }
+}
+`,
+        [currentUri]: current,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, fromFile: string) => {
+          const slash = fromFile.lastIndexOf("/");
+          const base = slash >= 0 ? fromFile.slice(0, slash + 1) : "";
+          const normalized = new URL(importPath, URI.file(base).toString()).toString();
+          return normalized in files ? URI.parse(normalized).fsPath : null;
+        },
+      } as unknown as WorkspaceManager;
+      const { doc, provider } = setupFiles(currentUri, files, workspace);
+      const lines = current.split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("data.bump"));
+      const hover = provider.provideHover(doc, {
+        line,
+        character: lines[line].indexOf("bump") + 1,
+      });
+
+      assert.ok(hover, "expected hover on aliased using-for method");
+      assert.ok(!Array.isArray(hover.contents) && typeof hover.contents !== "string");
+      assert.match(hover.contents.value, /function bump/);
+      assert.match(hover.contents.value, /Defined in.*DataLib/);
     });
   });
 

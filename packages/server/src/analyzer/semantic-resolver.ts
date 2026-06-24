@@ -29,6 +29,11 @@ export interface ResolvedContract {
  */
 export class SemanticResolver {
   private reachableCache = new Map<string, Set<string>>();
+  private allContractsCache: ResolvedContract[] | null = null;
+  private contractsByNameCache = new Map<string, ResolvedContract[]>();
+  private contractsByIdCache = new Map<string, ResolvedContract>();
+  private inheritanceChainCache = new Map<string, ResolvedContract[]>();
+  private importedSymbolCache = new Map<string, { name: string; uri: string } | undefined>();
 
   constructor(
     private parser: SolidityParser,
@@ -39,6 +44,11 @@ export class SemanticResolver {
   invalidate(uri?: string): void {
     if (uri) this.reachableCache.delete(uri);
     else this.reachableCache.clear();
+    this.allContractsCache = null;
+    this.contractsByNameCache.clear();
+    this.contractsByIdCache.clear();
+    this.inheritanceChainCache.clear();
+    this.importedSymbolCache.clear();
   }
 
   contractId(uri: string, name: string): string {
@@ -55,6 +65,8 @@ export class SemanticResolver {
   }
 
   getAllContracts(): ResolvedContract[] {
+    if (this.allContractsCache) return this.allContractsCache.slice();
+
     const contracts: ResolvedContract[] = [];
     for (const uri of this.workspace.getAllFileUris()) {
       const result = this.parser.get(uri);
@@ -63,14 +75,34 @@ export class SemanticResolver {
         contracts.push(this.toResolvedContract(uri, contract));
       }
     }
-    return contracts;
+    this.allContractsCache = contracts;
+    this.contractsByNameCache.clear();
+    this.contractsByIdCache.clear();
+    for (const entry of contracts) {
+      const byName = this.contractsByNameCache.get(entry.contract.name) ?? [];
+      byName.push(entry);
+      this.contractsByNameCache.set(entry.contract.name, byName);
+      this.contractsByIdCache.set(entry.id, entry);
+    }
+    return contracts.slice();
   }
 
   getContractsByName(name: string): ResolvedContract[] {
-    return this.getAllContracts().filter((entry) => entry.contract.name === name);
+    if (!this.allContractsCache) this.getAllContracts();
+    return (this.contractsByNameCache.get(name) ?? []).slice();
   }
 
   resolveContract(name: string, fromUri?: string): ResolvedContract | undefined {
+    if (fromUri) {
+      const imported = this.resolveImportedSymbol(name, fromUri);
+      if (imported) {
+        const exact = this.getAllContracts().find(
+          (entry) => entry.uri === imported.uri && entry.contract.name === imported.name,
+        );
+        if (exact) return exact;
+      }
+    }
+
     const candidates = this.getContractsByName(name);
     if (candidates.length === 0) return undefined;
     if (candidates.length === 1) return candidates[0];
@@ -91,11 +123,62 @@ export class SemanticResolver {
   }
 
   resolveContractById(id: string): ResolvedContract | undefined {
-    return this.getAllContracts().find((entry) => entry.id === id);
+    if (!this.allContractsCache) this.getAllContracts();
+    return this.contractsByIdCache.get(id);
   }
 
   resolveBaseContract(fromUri: string, baseName: string): ResolvedContract | undefined {
     return this.resolveContract(baseName, fromUri);
+  }
+
+  resolveImportedSymbol(name: string, fromUri: string): { name: string; uri: string } | undefined {
+    const cacheKey = `${fromUri}\0${name}`;
+    if (this.importedSymbolCache.has(cacheKey)) return this.importedSymbolCache.get(cacheKey);
+
+    const result = this.parser.get(fromUri);
+    if (!result) {
+      this.importedSymbolCache.set(cacheKey, undefined);
+      return undefined;
+    }
+
+    let fsPath: string;
+    try {
+      fsPath = this.workspace.uriToPath(fromUri);
+    } catch {
+      this.importedSymbolCache.set(cacheKey, undefined);
+      return undefined;
+    }
+
+    const scoped = name.includes(".") ? name.split(".") : null;
+    for (const imp of result.sourceUnit.imports) {
+      let targetPath: string | null;
+      try {
+        targetPath = this.workspace.resolveImport(imp.path, fsPath);
+      } catch {
+        targetPath = null;
+      }
+      if (!targetPath) continue;
+      const targetUri = URI.file(targetPath).toString();
+
+      if (scoped && imp.unitAlias === scoped[0] && scoped[1]) {
+        const resolved = { name: scoped[1], uri: targetUri };
+        this.importedSymbolCache.set(cacheKey, resolved);
+        return resolved;
+      }
+
+      if (scoped) continue;
+      for (const alias of imp.symbolAliases ?? []) {
+        const visibleName = alias.alias ?? alias.symbol;
+        if (visibleName === name) {
+          const resolved = { name: alias.symbol, uri: targetUri };
+          this.importedSymbolCache.set(cacheKey, resolved);
+          return resolved;
+        }
+      }
+    }
+
+    this.importedSymbolCache.set(cacheKey, undefined);
+    return undefined;
   }
 
   getInheritanceChain(name: string, fromUri?: string): ResolvedContract[] {
@@ -105,6 +188,9 @@ export class SemanticResolver {
   }
 
   getInheritanceChainFor(root: ResolvedContract): ResolvedContract[] {
+    const cached = this.inheritanceChainCache.get(root.id);
+    if (cached) return cached.slice();
+
     const chain: ResolvedContract[] = [];
     const visited = new Set<string>();
 
@@ -120,7 +206,8 @@ export class SemanticResolver {
     };
 
     walk(root);
-    return chain;
+    this.inheritanceChainCache.set(root.id, chain);
+    return chain.slice();
   }
 
   getSubtypes(target: ResolvedContract): ResolvedContract[] {

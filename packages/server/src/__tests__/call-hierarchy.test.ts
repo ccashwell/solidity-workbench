@@ -8,6 +8,8 @@ import { SymbolKind } from "vscode-languageserver/node.js";
 import type { CallHierarchyItem } from "vscode-languageserver/node.js";
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
+import { GraphIndex } from "../analyzer/graph-index.js";
+import { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { CallHierarchyProvider } from "../providers/call-hierarchy.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
@@ -71,6 +73,7 @@ interface Fixture {
   provider: CallHierarchyProvider;
   parser: SolidityParser;
   symbolIndex: SymbolIndex;
+  workspace: WorkspaceManager;
 }
 
 function setupFixture(files: Record<string, string>): Fixture {
@@ -117,6 +120,7 @@ function setupFixture(files: Record<string, string>): Fixture {
     provider,
     parser,
     symbolIndex,
+    workspace: workspace as WorkspaceManager,
   };
 }
 
@@ -251,6 +255,172 @@ describe("CallHierarchyProvider", () => {
       );
     });
 
+    it("serves outgoing calls from the graph index when available", async () => {
+      const graphBacked = setupFixture({
+        "A.sol": A_SOL,
+        "B.sol": B_SOL,
+        "C.sol": C_SOL,
+      });
+      try {
+        const resolver = new SemanticResolver(
+          graphBacked.parser,
+          graphBacked.workspace,
+          graphBacked.symbolIndex,
+        );
+        const graphIndex = new GraphIndex(
+          graphBacked.parser,
+          graphBacked.workspace,
+          resolver,
+          graphBacked.symbolIndex,
+        );
+        graphIndex.rebuildWorkspace();
+        const provider = new CallHierarchyProvider(
+          graphBacked.symbolIndex,
+          graphBacked.workspace,
+          graphBacked.parser,
+          resolver,
+          graphIndex,
+        );
+
+        const calls = await provider.getOutgoingCalls({
+          name: "useB",
+          kind: SymbolKind.Function,
+          uri: graphBacked.bUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "B",
+        });
+
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].to.name, "transfer");
+        assert.equal(calls[0].to.detail, "A");
+        assert.equal(calls[0].fromRanges.length, 1);
+      } finally {
+        teardownFixture(graphBacked);
+      }
+    });
+
+    it("uses focused graph indexing for outgoing calls while graph relationships are partial", async () => {
+      const graphBacked = setupFixture({
+        "A.sol": A_SOL,
+        "B.sol": B_SOL,
+        "C.sol": C_SOL,
+      });
+      try {
+        const resolver = new SemanticResolver(
+          graphBacked.parser,
+          graphBacked.workspace,
+          graphBacked.symbolIndex,
+        );
+        const graphIndex = new GraphIndex(
+          graphBacked.parser,
+          graphBacked.workspace,
+          resolver,
+          graphBacked.symbolIndex,
+        );
+        graphIndex.rebuildWorkspaceDeclarations();
+        assert.equal(graphIndex.getStats().relationshipIndexComplete, false);
+
+        const provider = new CallHierarchyProvider(
+          graphBacked.symbolIndex,
+          graphBacked.workspace,
+          graphBacked.parser,
+          resolver,
+          graphIndex,
+        );
+
+        const outgoing = await provider.getOutgoingCalls({
+          name: "useB",
+          kind: SymbolKind.Function,
+          uri: graphBacked.bUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "B",
+        });
+
+        assert.equal(outgoing.length, 1);
+        assert.equal(outgoing[0].to.name, "transfer");
+        assert.equal(outgoing[0].to.detail, "A");
+        assert.equal(graphIndex.getStats().relationshipIndexComplete, false);
+
+        const incoming = await provider.getIncomingCalls({
+          name: "transfer",
+          kind: SymbolKind.Function,
+          uri: graphBacked.aUri,
+          range: { start: { line: 3, character: 4 }, end: { line: 6, character: 5 } },
+          selectionRange: { start: { line: 4, character: 13 }, end: { line: 4, character: 21 } },
+          detail: "A",
+        });
+        const incomingNames = incoming.map((call) => call.from.name).sort();
+        assert.deepEqual(incomingNames, ["useA", "useB", "useC"]);
+      } finally {
+        teardownFixture(graphBacked);
+      }
+    });
+
+    it("keeps graph-backed outgoing lookup within the interactive budget", async () => {
+      const repeatedCalls = Array.from({ length: 120 }, () => "        target.transfer();").join(
+        "\n",
+      );
+      const graphBacked = setupFixture({
+        "A.sol": A_SOL,
+        "Busy.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "./A.sol";
+
+contract Busy {
+    function scan(A target) external {
+${repeatedCalls}
+    }
+}
+`,
+      });
+      try {
+        const resolver = new SemanticResolver(
+          graphBacked.parser,
+          graphBacked.workspace,
+          graphBacked.symbolIndex,
+        );
+        const graphIndex = new GraphIndex(
+          graphBacked.parser,
+          graphBacked.workspace,
+          resolver,
+          graphBacked.symbolIndex,
+        );
+        graphIndex.rebuildWorkspace();
+        const provider = new CallHierarchyProvider(
+          graphBacked.symbolIndex,
+          graphBacked.workspace,
+          graphBacked.parser,
+          resolver,
+          graphIndex,
+        );
+
+        const started = Date.now();
+        const calls = await provider.getOutgoingCalls({
+          name: "scan",
+          kind: SymbolKind.Function,
+          uri: URI.file(path.join(graphBacked.tmpDir, "Busy.sol")).toString(),
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "Busy",
+        });
+        const elapsedMs = Date.now() - started;
+
+        assert.ok(
+          elapsedMs < 100,
+          `expected graph-backed outgoing lookup under 100ms, got ${elapsedMs}ms`,
+        );
+        assert.equal(calls.length, 1);
+        assert.equal(calls[0].to.name, "transfer");
+        assert.equal(calls[0].to.detail, "A");
+        assert.equal(calls[0].fromRanges.length, 120);
+      } finally {
+        teardownFixture(graphBacked);
+      }
+    });
+
     it("uses semantic targets for outgoing calls when SolcBridge resolves the callee", async () => {
       const exact = setupFixture({
         "Exact.sol": `// SPDX-License-Identifier: MIT
@@ -305,6 +475,7 @@ pragma solidity ^0.8.24;
 
 interface IERC4626 {
     function convertToAssets(uint256 shares) external view returns (uint256 assets);
+    function previewRedeem(uint256 shares) external view returns (uint256 assets);
 }
 `,
         "src/PoolVault.sol": `// SPDX-License-Identifier: MIT
@@ -315,10 +486,18 @@ import "./IERC4626.sol";
 abstract contract MultiAssetVault {}
 
 abstract contract PoolVault is MultiAssetVault {
-    mapping(uint256 => IERC4626) public vaults;
+    mapping(uint256 => mapping(address => IERC4626)) public vaults;
 
     function _effectiveBalance(uint256 poolId) internal view returns (uint256 bal) {
-        IERC4626 vault = vaults[poolId];
+        IERC4626 vault = vaults[poolId][address(0)];
+        if (address(vault) != address(0)) {
+            uint256 shares = 1;
+            bal += vault.previewRedeem(shares);
+        }
+    }
+
+    function _assetBalanceV4(uint256 poolId) internal view returns (uint256 bal) {
+        IERC4626 vault = vaults[poolId][address(0)];
         if (address(vault) != address(0)) {
             uint256 shares = 1;
             bal += vault.convertToAssets(shares);
@@ -331,6 +510,10 @@ pragma solidity ^0.8.24;
 
 contract MockERC4626 {
     function convertToAssets(uint256 shares) public view returns (uint256 assets) {
+        return shares;
+    }
+
+    function previewRedeem(uint256 shares) public view returns (uint256 assets) {
         return shares;
     }
 }
@@ -348,7 +531,20 @@ contract MockERC4626 {
           detail: "PoolVault",
         });
 
-        const convert = calls.find((call) => call.to.name === "convertToAssets");
+        const preview = calls.find((call) => call.to.name === "previewRedeem");
+        assert.ok(preview, "expected previewRedeem outgoing call");
+        assert.equal(preview.to.detail, "IERC4626");
+        assert.notEqual(preview.to.detail, "MockERC4626");
+
+        const assetCalls = await erc4626.provider.getOutgoingCalls({
+          name: "_assetBalanceV4",
+          kind: SymbolKind.Function,
+          uri: poolVaultUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "PoolVault",
+        });
+        const convert = assetCalls.find((call) => call.to.name === "convertToAssets");
         assert.ok(convert, "expected convertToAssets outgoing call");
         assert.equal(convert.to.detail, "IERC4626");
         assert.notEqual(convert.to.detail, "MockERC4626");
