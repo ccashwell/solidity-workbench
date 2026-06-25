@@ -432,6 +432,8 @@ contract Child is Base {
         "expected impact query to include incoming state access edges",
       );
 
+      graph.recordRequestDuration("query", 750);
+      graph.recordRequestDuration("search", 25);
       const stats = graph.getStats();
       assert.equal(stats.nodesByKind.contract, 3);
       assert.equal(stats.edgesByKind.inherits, 1);
@@ -454,6 +456,14 @@ contract Child is Base {
       assert.ok(
         typeof stats.lastRebuildDurationMs === "number",
         "expected rebuild timing to be recorded",
+      );
+      assert.equal(stats.lastRequestDurationsMs?.query, 750);
+      assert.equal(stats.lastRequestDurationsMs?.search, 25);
+      assert.equal(stats.performance?.state, "warning");
+      assert.equal(stats.performance?.slowestRequest?.kind, "query");
+      assert.match(
+        stats.performance?.warnings.join("\n") ?? "",
+        /Slowest graph request \(query\) took 750ms/,
       );
 
       const cacheDir = path.join(tmpDir, ".cache", "graph-index");

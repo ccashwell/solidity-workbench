@@ -386,6 +386,40 @@ export interface ProjectGraphEdgeQuality {
   lowConfidenceEdgeCount: number;
 }
 
+export type ProjectGraphMeasuredRequestKind =
+  | "graph"
+  | "neighborhood"
+  | "path"
+  | "search"
+  | "query"
+  | "stats"
+  | "rebuild";
+
+export type ProjectGraphPerformanceState = "ok" | "warning" | "slow";
+
+export interface ProjectGraphPerformanceBudget {
+  requestWarningMs: number;
+  requestSlowMs: number;
+  rebuildWarningMs: number;
+  rebuildSlowMs: number;
+  cacheWarningMs: number;
+  cacheSlowMs: number;
+}
+
+export interface ProjectGraphSlowRequest {
+  kind: ProjectGraphMeasuredRequestKind;
+  durationMs: number;
+  warningMs: number;
+  slowMs: number;
+}
+
+export interface ProjectGraphPerformanceSummary {
+  state: ProjectGraphPerformanceState;
+  budget: ProjectGraphPerformanceBudget;
+  warnings: string[];
+  slowestRequest?: ProjectGraphSlowRequest;
+}
+
 /** Request a focused graph query over callers, callees, or impact radius. */
 export const QueryProjectGraph = "solidity-workbench/queryProjectGraph";
 
@@ -444,6 +478,8 @@ export interface ProjectGraphStatsResult {
   cacheHit?: boolean;
   lastCacheRestoreDurationMs?: number | null;
   lastCacheWriteDurationMs?: number | null;
+  lastRequestDurationsMs?: Partial<Record<ProjectGraphMeasuredRequestKind, number>>;
+  performance?: ProjectGraphPerformanceSummary;
   relationshipFilesIndexed?: number;
   relationshipFilesTotal?: number;
   pendingRelationshipFiles?: number;

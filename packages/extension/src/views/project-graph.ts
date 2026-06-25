@@ -466,6 +466,7 @@ function projectGraphToCodeGraphJson(
       pendingRelationshipFiles: stats?.pendingRelationshipFiles,
       relationshipStatus: summarizeProjectGraphRelationshipStatus(stats),
       edgeQuality: summarizeProjectGraphEdgeQuality(stats),
+      performance: stats?.performance,
     },
     nodes,
     edges,

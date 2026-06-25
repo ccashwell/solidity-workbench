@@ -27,6 +27,8 @@ import type {
   ProjectGraphSearchMatch,
   ProjectGraphSearchResult,
   StateVariableDeclaration,
+  ProjectGraphMeasuredRequestKind,
+  ProjectGraphPerformanceSummary,
   EventDefinition,
   ErrorDefinition,
   StructDefinition,
@@ -55,6 +57,15 @@ export type SolidityGraphEdgeKind = ProjectGraphEdgeKind;
 export type SolidityGraphNode = ProjectGraphNode;
 export type SolidityGraphEdge = ProjectGraphEdge;
 export type GraphDependencyIndexingMode = "disabled" | "declarations" | "relationships";
+
+const PROJECT_GRAPH_PERFORMANCE_BUDGET = {
+  requestWarningMs: 500,
+  requestSlowMs: 2_000,
+  rebuildWarningMs: 2_500,
+  rebuildSlowMs: 10_000,
+  cacheWarningMs: 500,
+  cacheSlowMs: 2_000,
+} as const;
 
 export interface GraphRelationshipIndexBatchResult {
   filesIndexed: number;
@@ -252,6 +263,8 @@ export class GraphIndex {
   private lastUpdateDurationMs: number | null = null;
   private lastCacheRestoreDurationMs: number | null = null;
   private lastCacheWriteDurationMs: number | null = null;
+  private lastRequestDurationsMs: Partial<Record<ProjectGraphMeasuredRequestKind, number>> =
+    Object.create(null);
   private cacheHit = false;
   private solcBridge: SolcBridge | null = null;
   private dependencyIndexing: GraphDependencyIndexingMode = "disabled";
@@ -273,6 +286,10 @@ export class GraphIndex {
     this.relationshipQueue = this.relationshipFileUris(this.relationshipQueue);
     this.relationshipQueuedUris = new Set(this.relationshipQueue);
     return true;
+  }
+
+  recordRequestDuration(kind: ProjectGraphMeasuredRequestKind, durationMs: number): void {
+    this.lastRequestDurationsMs[kind] = Math.max(0, Math.round(durationMs));
   }
 
   restoreFromCache(cacheDir: string | undefined): boolean {
@@ -904,6 +921,7 @@ export class GraphIndex {
     }
 
     const relationshipProgress = this.relationshipProgress();
+    const lastRequestDurationsMs = { ...this.lastRequestDurationsMs };
     return {
       nodeCount: this.nodes.size,
       edgeCount: this.edges.length,
@@ -917,10 +935,88 @@ export class GraphIndex {
       cacheHit: this.cacheHit,
       lastCacheRestoreDurationMs: this.lastCacheRestoreDurationMs,
       lastCacheWriteDurationMs: this.lastCacheWriteDurationMs,
+      lastRequestDurationsMs,
+      performance: this.performanceSummary(lastRequestDurationsMs),
       relationshipFilesIndexed: relationshipProgress.indexed,
       relationshipFilesTotal: relationshipProgress.total,
       pendingRelationshipFiles: relationshipProgress.remaining,
       relationshipIndexComplete: this.isRelationshipIndexComplete(),
+    };
+  }
+
+  private performanceSummary(
+    lastRequestDurationsMs: Partial<Record<ProjectGraphMeasuredRequestKind, number>>,
+  ): ProjectGraphPerformanceSummary {
+    const warnings: string[] = [];
+    let state: ProjectGraphPerformanceSummary["state"] = "ok";
+    const mark = (next: ProjectGraphPerformanceSummary["state"]) => {
+      if (next === "slow" || state === "ok") state = next;
+    };
+
+    const checkDuration = (
+      label: string,
+      durationMs: number | null | undefined,
+      warningMs: number,
+      slowMs: number,
+    ) => {
+      if (durationMs === null || durationMs === undefined) return;
+      if (durationMs >= slowMs) {
+        mark("slow");
+        warnings.push(`${label} took ${durationMs}ms, above the ${slowMs}ms slow budget.`);
+      } else if (durationMs >= warningMs) {
+        mark("warning");
+        warnings.push(`${label} took ${durationMs}ms, above the ${warningMs}ms warning budget.`);
+      }
+    };
+
+    checkDuration(
+      "Last graph rebuild",
+      this.lastRebuildDurationMs,
+      PROJECT_GRAPH_PERFORMANCE_BUDGET.rebuildWarningMs,
+      PROJECT_GRAPH_PERFORMANCE_BUDGET.rebuildSlowMs,
+    );
+    checkDuration(
+      "Last cache restore",
+      this.lastCacheRestoreDurationMs,
+      PROJECT_GRAPH_PERFORMANCE_BUDGET.cacheWarningMs,
+      PROJECT_GRAPH_PERFORMANCE_BUDGET.cacheSlowMs,
+    );
+    checkDuration(
+      "Last cache write",
+      this.lastCacheWriteDurationMs,
+      PROJECT_GRAPH_PERFORMANCE_BUDGET.cacheWarningMs,
+      PROJECT_GRAPH_PERFORMANCE_BUDGET.cacheSlowMs,
+    );
+
+    let slowestRequest: ProjectGraphPerformanceSummary["slowestRequest"];
+    for (const [kind, durationMs] of Object.entries(lastRequestDurationsMs) as [
+      ProjectGraphMeasuredRequestKind,
+      number,
+    ][]) {
+      if (!slowestRequest || durationMs > slowestRequest.durationMs) {
+        slowestRequest = {
+          kind,
+          durationMs,
+          warningMs: PROJECT_GRAPH_PERFORMANCE_BUDGET.requestWarningMs,
+          slowMs: PROJECT_GRAPH_PERFORMANCE_BUDGET.requestSlowMs,
+        };
+      }
+    }
+
+    if (slowestRequest) {
+      checkDuration(
+        `Slowest graph request (${slowestRequest.kind})`,
+        slowestRequest.durationMs,
+        slowestRequest.warningMs,
+        slowestRequest.slowMs,
+      );
+    }
+
+    return {
+      state,
+      budget: { ...PROJECT_GRAPH_PERFORMANCE_BUDGET },
+      warnings,
+      slowestRequest,
     };
   }
 

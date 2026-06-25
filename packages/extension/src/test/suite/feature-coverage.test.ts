@@ -280,6 +280,27 @@ describe("Feature coverage — project graph export", () => {
       filesByTier: Object.assign(Object.create(null), { project: 1 }),
       lastRebuildDurationMs: 12,
       lastUpdateDurationMs: 3,
+      lastRequestDurationsMs: {
+        query: 750,
+      },
+      performance: {
+        state: "warning",
+        budget: {
+          requestWarningMs: 500,
+          requestSlowMs: 2_000,
+          rebuildWarningMs: 2_500,
+          rebuildSlowMs: 10_000,
+          cacheWarningMs: 500,
+          cacheSlowMs: 2_000,
+        },
+        warnings: ["Slowest graph request (query) took 750ms, above the 500ms warning budget."],
+        slowestRequest: {
+          kind: "query",
+          durationMs: 750,
+          warningMs: 500,
+          slowMs: 2_000,
+        },
+      },
       relationshipFilesIndexed: 7,
       relationshipFilesTotal: 10,
       pendingRelationshipFiles: 3,
@@ -295,6 +316,8 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(parsedJson.stats.edgesByResolutionConfidence.parser, 1);
     assert.equal(parsedJson.stats.edgesByResolutionConfidence.heuristic, 1);
     assert.equal(parsedJson.stats.unresolvedEdgeCount, 1);
+    assert.equal(parsedJson.stats.performance.state, "warning");
+    assert.equal(parsedJson.stats.performance.slowestRequest.kind, "query");
     assert.equal(parsedJson.relationshipStatus.state, "partial");
     assert.equal(parsedJson.relationshipStatus.pending, 3);
     assert.equal(parsedJson.edgeQuality.unresolved, 1);
@@ -337,6 +360,8 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(parsed.graph.relationshipFilesIndexed, 7);
     assert.equal(parsed.graph.relationshipStatus.state, "partial");
     assert.equal(parsed.graph.edgeQuality.unresolved, 1);
+    assert.equal(parsed.graph.performance.state, "warning");
+    assert.equal(parsed.graph.performance.slowestRequest.durationMs, 750);
     assert.match(parsed.graph.relationshipStatus.detail, /full-workspace edges may be partial/);
     assert.equal(parsed.edges[0].resolutionConfidence, "parser");
     assert.equal(parsed.edges[0].unresolvedTarget, undefined);
@@ -763,6 +788,16 @@ describe("Feature coverage — live project graph", () => {
         typeof stats.edgesByResolutionConfidence.unknown === "number" &&
         typeof stats.unresolvedEdgeCount === "number",
       "expected edge confidence fields in live graph stats",
+    );
+    assert.ok(
+      stats.lastRequestDurationsMs && typeof stats.lastRequestDurationsMs.rebuild === "number",
+      "expected live graph stats to include request timing metadata",
+    );
+    assert.ok(
+      stats.performance &&
+        typeof stats.performance.budget.requestWarningMs === "number" &&
+        Array.isArray(stats.performance.warnings),
+      "expected live graph stats to include performance budget metadata",
     );
     assert.equal(
       stats.relationshipIndexComplete,

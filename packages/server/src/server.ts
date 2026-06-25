@@ -70,6 +70,7 @@ import {
   type ListTestsResult,
   type ProjectGraphPathResult,
   type ProjectGraphQueryResult,
+  type ProjectGraphMeasuredRequestKind,
   type ProjectGraphResult,
   type ProjectGraphSearchResult,
   type ProjectGraphStatsResult,
@@ -861,35 +862,55 @@ connection.onRequest(
   },
 );
 
+async function measureProjectGraphRequest<T>(
+  kind: ProjectGraphMeasuredRequestKind,
+  fn: () => T | Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await fn();
+  } finally {
+    graphIndex.recordRequestDuration(kind, Date.now() - startedAt);
+  }
+}
+
 connection.onRequest(
   GetProjectGraph,
   async (params: GetProjectGraphParams = {}): Promise<ProjectGraphResult> => {
-    return graphIndex.toProjectGraph(params.edgeKinds, params.maxNodes);
+    return measureProjectGraphRequest("graph", () =>
+      graphIndex.toProjectGraph(params.edgeKinds, params.maxNodes),
+    );
   },
 );
 
 connection.onRequest(
   GetProjectGraphNeighborhood,
   async (params: GetProjectGraphNeighborhoodParams): Promise<ProjectGraphResult> => {
-    if (params.uri) graphIndex.ensureFileRelationships(params.uri);
-    return graphIndex.toNeighborhood(params);
+    return measureProjectGraphRequest("neighborhood", () => {
+      if (params.uri) graphIndex.ensureFileRelationships(params.uri);
+      return graphIndex.toNeighborhood(params);
+    });
   },
 );
 
 connection.onRequest(
   GetProjectGraphPath,
   async (params: GetProjectGraphPathParams): Promise<ProjectGraphPathResult> => {
-    if (params.from.uri) graphIndex.ensureFileRelationships(params.from.uri);
-    if (params.to.uri) graphIndex.ensureFileRelationships(params.to.uri);
-    return graphIndex.toShortestPath(params);
+    return measureProjectGraphRequest("path", () => {
+      if (params.from.uri) graphIndex.ensureFileRelationships(params.from.uri);
+      if (params.to.uri) graphIndex.ensureFileRelationships(params.to.uri);
+      return graphIndex.toShortestPath(params);
+    });
   },
 );
 
 connection.onRequest(
   SearchProjectGraph,
   async (params: SearchProjectGraphParams): Promise<ProjectGraphSearchResult> => {
-    graphIndex.ensureWorkspaceDeclarations();
-    return graphIndex.search(params);
+    return measureProjectGraphRequest("search", () => {
+      graphIndex.ensureWorkspaceDeclarations();
+      return graphIndex.search(params);
+    });
   },
 );
 
@@ -899,40 +920,42 @@ connection.onRequest(
     params: QueryProjectGraphParams,
     token?: CancellationToken,
   ): Promise<ProjectGraphQueryResult> => {
-    graphIndex.ensureWorkspaceDeclarations();
-    if (params.target?.uri) graphIndex.ensureFileRelationships(params.target.uri);
-    if (params.kind === "callers" || params.kind === "impact") {
-      await drainGraphRelationshipIndexForQuery(token);
-      if (token?.isCancellationRequested) {
-        const stats = graphIndex.getStats();
-        return {
-          nodes: [],
-          edges: [],
-          kind: params.kind,
-          query: params.query,
-          found: false,
-          missReason: "targetNotFound",
-          indexStatus: {
-            relationshipIndexComplete: stats.relationshipIndexComplete,
-            relationshipFilesIndexed: stats.relationshipFilesIndexed,
-            relationshipFilesTotal: stats.relationshipFilesTotal,
-            pendingRelationshipFiles: stats.pendingRelationshipFiles,
-            partial: stats.relationshipIndexComplete !== true,
-          },
-          edgeQuality: {
-            edgesByResolutionConfidence: {},
-            unresolvedEdgeCount: 0,
-            lowConfidenceEdgeCount: 0,
-          },
-        };
+    return measureProjectGraphRequest("query", async () => {
+      graphIndex.ensureWorkspaceDeclarations();
+      if (params.target?.uri) graphIndex.ensureFileRelationships(params.target.uri);
+      if (params.kind === "callers" || params.kind === "impact") {
+        await drainGraphRelationshipIndexForQuery(token);
+        if (token?.isCancellationRequested) {
+          const stats = graphIndex.getStats();
+          return {
+            nodes: [],
+            edges: [],
+            kind: params.kind,
+            query: params.query,
+            found: false,
+            missReason: "targetNotFound",
+            indexStatus: {
+              relationshipIndexComplete: stats.relationshipIndexComplete,
+              relationshipFilesIndexed: stats.relationshipFilesIndexed,
+              relationshipFilesTotal: stats.relationshipFilesTotal,
+              pendingRelationshipFiles: stats.pendingRelationshipFiles,
+              partial: stats.relationshipIndexComplete !== true,
+            },
+            edgeQuality: {
+              edgesByResolutionConfidence: {},
+              unresolvedEdgeCount: 0,
+              lowConfidenceEdgeCount: 0,
+            },
+          };
+        }
       }
-    }
-    return graphIndex.query(params);
+      return graphIndex.query(params);
+    });
   },
 );
 
 connection.onRequest(GetProjectGraphStats, async (): Promise<ProjectGraphStatsResult> => {
-  return graphIndex.getStats();
+  return measureProjectGraphRequest("stats", () => graphIndex.getStats());
 });
 
 connection.onRequest(
@@ -941,36 +964,38 @@ connection.onRequest(
     params: RebuildProjectGraphParams = {},
     token?: CancellationToken,
   ): Promise<ProjectGraphStatsResult> => {
-    cancelGraphRelationshipIndex();
-    await workspaceManager.initialize();
-    semanticResolver.invalidate();
-    await symbolIndex.indexWorkspace();
-    graphIndex.rebuildWorkspaceDeclarations();
+    return measureProjectGraphRequest("rebuild", async () => {
+      cancelGraphRelationshipIndex();
+      await workspaceManager.initialize();
+      semanticResolver.invalidate();
+      await symbolIndex.indexWorkspace();
+      graphIndex.rebuildWorkspaceDeclarations();
 
-    if (shouldRunExplicitGraphRelationshipIndex(params)) {
-      let complete = false;
-      let canceled = false;
-      while (!complete) {
-        if (token?.isCancellationRequested) {
-          canceled = true;
-          break;
+      if (shouldRunExplicitGraphRelationshipIndex(params)) {
+        let complete = false;
+        let canceled = false;
+        while (!complete) {
+          if (token?.isCancellationRequested) {
+            canceled = true;
+            break;
+          }
+          complete = graphIndex.indexRelationshipBatch(50, 50).complete;
+          // Drain the relationship queue for explicit, user-triggered rebuilds.
         }
-        complete = graphIndex.indexRelationshipBatch(50, 50).complete;
-        // Drain the relationship queue for explicit, user-triggered rebuilds.
+        graphIndex.writeCache(graphCacheDir);
+        return { ...graphIndex.getStats(), rebuildCanceled: canceled };
       }
-      graphIndex.writeCache(graphCacheDir);
-      return { ...graphIndex.getStats(), rebuildCanceled: canceled };
-    }
 
-    graphIndex.writeCache(graphCacheDir);
-    if (
-      params.relationships !== "declarationsOnly" &&
-      !graphIndex.isRelationshipIndexComplete() &&
-      shouldRunBackgroundGraphRelationshipIndex()
-    ) {
-      scheduleGraphRelationshipIndex();
-    }
-    return graphIndex.getStats();
+      graphIndex.writeCache(graphCacheDir);
+      if (
+        params.relationships !== "declarationsOnly" &&
+        !graphIndex.isRelationshipIndexComplete() &&
+        shouldRunBackgroundGraphRelationshipIndex()
+      ) {
+        scheduleGraphRelationshipIndex();
+      }
+      return graphIndex.getStats();
+    });
   },
 );
 
