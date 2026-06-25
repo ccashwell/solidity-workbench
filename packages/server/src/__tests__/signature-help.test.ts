@@ -197,6 +197,46 @@ contract Pool {
       assert.equal(sig!.signatures.length, 1);
       assert.match(sig!.signatures[0].label, /convertToAssets\(uint256 shares\)/);
     });
+
+    it("uses NatSpec from the resolved receiver declaration when duplicate containers exist", () => {
+      const files = {
+        "test/IVault.sol": `pragma solidity ^0.8.24;
+interface IVault {
+    /// @param shares Test-only shares documentation.
+    function convertToAssets(uint256 shares) external view returns (uint256 assets);
+}`,
+        "src/IVault.sol": `pragma solidity ^0.8.24;
+interface IVault {
+    /// @param shares Source shares documentation.
+    function convertToAssets(uint256 shares) external view returns (uint256 assets);
+}`,
+        "src/Pool.sol": `pragma solidity ^0.8.24;
+import { IVault as RenamedVault } from "./IVault.sol";
+contract Pool {
+    function f(RenamedVault vault, uint256 shares) external view {
+        vault.convertToAssets(shares);
+    }
+}`,
+      };
+      const { docs, provider } = setupFiles(files);
+      const text = files["src/Pool.sol"];
+      const lines = text.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("convertToAssets"));
+      const col = lines[callLine].indexOf("convertToAssets(") + "convertToAssets(".length;
+
+      const sig = provider.provideSignatureHelp(docs["src/Pool.sol"], {
+        line: callLine,
+        character: col,
+      });
+
+      assert.ok(sig, "expected signature help for aliased receiver type");
+      const param = sig!.signatures[0].parameters?.[0];
+      assert.ok(param, "expected parameter info for shares");
+      assert.deepEqual(param.documentation, {
+        kind: "markdown",
+        value: "Source shares documentation.",
+      });
+    });
   });
 
   describe("robustness", () => {

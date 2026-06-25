@@ -152,6 +152,7 @@ export class SignatureHelpProvider {
         signatures.push(
           this.buildSignature(usingForHit.fn, usingForHit.containerName ?? "", {
             skipFirstParameter: true,
+            containerUri: usingForHit.filePath,
           }),
         );
         return signatures;
@@ -188,7 +189,11 @@ export class SignatureHelpProvider {
           if (resolved) {
             const func = resolved.contract.functions.find((f) => f.name === funcName);
             if (func) {
-              signatures.push(this.buildSignature(func, resolved.contract.name));
+              signatures.push(
+                this.buildSignature(func, resolved.contract.name, {
+                  containerUri: resolved.uri,
+                }),
+              );
               continue;
             }
             const event = resolved.contract.events.find((e) => e.name === funcName);
@@ -205,7 +210,11 @@ export class SignatureHelpProvider {
             if (entry) {
               const func = entry.contract.functions.find((f) => f.name === funcName);
               if (func) {
-                signatures.push(this.buildSignature(func, sym.containerName));
+                signatures.push(
+                  this.buildSignature(func, sym.containerName, {
+                    containerUri: entry.uri,
+                  }),
+                );
                 continue;
               }
               const event = entry.contract.events.find((e) => e.name === funcName);
@@ -223,7 +232,7 @@ export class SignatureHelpProvider {
           const parsed = this.parser.get(sym.filePath);
           const fn = parsed?.sourceUnit.freeFunctions.find((f) => f.name === funcName);
           if (fn) {
-            signatures.push(this.buildSignature(fn, ""));
+            signatures.push(this.buildSignature(fn, "", { containerUri: sym.filePath }));
           }
         } else if (sym.kind === "error") {
           const parsed = this.parser.get(sym.filePath);
@@ -272,7 +281,9 @@ export class SignatureHelpProvider {
   ): void {
     for (const func of entry.contract.functions) {
       if (func.name === funcName) {
-        signatures.push(this.buildSignature(func, entry.contract.name));
+        signatures.push(
+          this.buildSignature(func, entry.contract.name, { containerUri: entry.uri }),
+        );
       }
     }
   }
@@ -298,15 +309,22 @@ export class SignatureHelpProvider {
   private buildSignature(
     func: FunctionDefinition,
     containerName: string,
-    options: { skipFirstParameter?: boolean } = {},
+    options: { skipFirstParameter?: boolean; containerUri?: string } = {},
   ): SignatureInformation {
     const sym =
       func.name && containerName
         ? this.symbolIndex
             .findSymbols(func.name)
-            .find((s) => s.kind === "function" && s.containerName === containerName)
+            .find(
+              (s) =>
+                s.kind === "function" &&
+                s.containerName === containerName &&
+                (!options.containerUri || s.filePath === options.containerUri),
+            )
         : undefined;
-    const effective = sym ? resolveEffectiveNatspec(sym, this.symbolIndex) : func.natspec;
+    const effective = sym
+      ? resolveEffectiveNatspec(sym, this.symbolIndex, this.resolver)
+      : func.natspec;
 
     const params: ParameterInformation[] = func.parameters
       .slice(options.skipFirstParameter ? 1 : 0)
