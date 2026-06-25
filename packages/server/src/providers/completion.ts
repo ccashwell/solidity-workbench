@@ -4,7 +4,7 @@ import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { ContractDefinition, SolSymbol, SymbolKind } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
-import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { FileTier, WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
 import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { resolveReceiverTypeName, isSameTypeName } from "../utils/receiver-type.js";
@@ -47,7 +47,7 @@ export class CompletionProvider {
     const textBefore = lineText.slice(0, position.character);
 
     if (this.isInImportPath(textBefore)) {
-      return this.provideImportCompletions();
+      return this.provideImportCompletions(document.uri);
     }
 
     if (this.isInNatspecComment(text, offset)) {
@@ -105,11 +105,12 @@ export class CompletionProvider {
     return /^\s*\/\/\//.test(currentLine) || /\/\*\*/.test(currentLine);
   }
 
-  private provideImportCompletions(): CompletionItem[] {
+  private provideImportCompletions(uri: string): CompletionItem[] {
     const items: CompletionItem[] = [];
 
     // Suggest known contract/library names from the workspace
     for (const [name, entry] of this.symbolIndex.getAllContracts()) {
+      if (!this.shouldSuggestImportCandidate(uri, entry.uri)) continue;
       items.push({
         label: name,
         kind: CompletionItemKind.Module,
@@ -127,6 +128,25 @@ export class CompletionProvider {
     }
 
     return items;
+  }
+
+  private shouldSuggestImportCandidate(currentUri: string, candidateUri: string): boolean {
+    const currentTier = this.getCompletionTier(currentUri);
+    if (currentTier === "tests") return true;
+    return this.getCompletionTier(candidateUri) !== "tests";
+  }
+
+  private getCompletionTier(uri: string): FileTier | "unknown" {
+    const tier = (this.workspace as Partial<WorkspaceManager>).getFileTier?.(uri);
+    if (tier) return tier;
+
+    const fsPath = new URL(uri).pathname.replace(/\\/g, "/");
+    if (/\/(test|tests|script|scripts)\//.test(fsPath) || /\.t\.sol$/i.test(fsPath)) {
+      return "tests";
+    }
+    if (/\/lib\//.test(fsPath) || /\/node_modules\//.test(fsPath)) return "deps";
+    if (/\/(src|contracts)\//.test(fsPath)) return "project";
+    return "unknown";
   }
 
   private provideNatspecCompletions(): CompletionItem[] {

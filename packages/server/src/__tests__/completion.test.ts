@@ -221,6 +221,46 @@ contract XTest { \n }`,
       assert.ok(ls.has("forge-std/"), "expected forge-std/ remapping");
       assert.ok(ls.has("@oz/"), "expected @oz/ remapping");
     });
+
+    it("does not suggest test contracts in source-file import completions", () => {
+      const currentUri = "file:///w/src/App.sol";
+      const files = {
+        "file:///w/src/ProductionVault.sol": `pragma solidity ^0.8.24;
+contract ProductionVault {}
+`,
+        "file:///w/test/MockVault.sol": `pragma solidity ^0.8.24;
+contract MockVault {}
+`,
+        [currentUri]: `pragma solidity ^0.8.24;
+import "";
+contract App {}
+`,
+      };
+      const { doc, provider } = setupFiles(currentUri, files);
+      const items = provider.provideCompletions(doc, { line: 1, character: 8 });
+      const ls = labels(items);
+
+      assert.ok(ls.has("ProductionVault"), "expected source contract import completion");
+      assert.equal(ls.has("MockVault"), false, "source imports must not suggest test contracts");
+    });
+
+    it("allows test contracts in test-file import completions", () => {
+      const currentUri = "file:///w/test/App.t.sol";
+      const files = {
+        "file:///w/test/MockVault.sol": `pragma solidity ^0.8.24;
+contract MockVault {}
+`,
+        [currentUri]: `pragma solidity ^0.8.24;
+import "";
+contract AppTest {}
+`,
+      };
+      const { doc, provider } = setupFiles(currentUri, files);
+      const items = provider.provideCompletions(doc, { line: 1, character: 8 });
+      const ls = labels(items);
+
+      assert.ok(ls.has("MockVault"), "test imports should suggest test contracts");
+    });
   });
 
   describe("member access context", () => {
