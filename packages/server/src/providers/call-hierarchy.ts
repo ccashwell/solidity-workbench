@@ -282,21 +282,23 @@ export class CallHierarchyProvider {
     if (token?.isCancellationRequested) return [];
 
     const callerMap = new Map<string, { item: CallHierarchyItem; ranges: Range[] }>();
-    for (const edge of this.graphIndex!.getIncomingEdges(target.id, "calls")) {
-      if (!edge.range) continue;
-      const source = this.graphIndex!.getNode(edge.source);
-      if (!source || !this.isCallableGraphNode(source)) continue;
+    for (const edgeKind of this.graphIncomingEdgeKinds(target)) {
+      for (const edge of this.graphIndex!.getIncomingEdges(target.id, edgeKind)) {
+        if (!edge.range) continue;
+        const source = this.graphIndex!.getNode(edge.source);
+        if (!source || !this.isCallHierarchySourceNode(source)) continue;
 
-      const existing = callerMap.get(source.id);
-      if (existing) {
-        existing.ranges.push(edge.range);
-        continue;
+        const existing = callerMap.get(source.id);
+        if (existing) {
+          existing.ranges.push(edge.range);
+          continue;
+        }
+
+        callerMap.set(source.id, {
+          item: this.graphNodeToCallHierarchyItem(source),
+          ranges: [edge.range],
+        });
       }
-
-      callerMap.set(source.id, {
-        item: this.graphNodeToCallHierarchyItem(source),
-        ranges: [edge.range],
-      });
     }
 
     return Array.from(callerMap.values()).map((entry) => ({
@@ -321,21 +323,23 @@ export class CallHierarchyProvider {
     if (!source) return null;
 
     const calleeMap = new Map<string, { item: CallHierarchyItem; ranges: Range[] }>();
-    for (const edge of this.graphIndex!.getOutgoingEdges(source.id, "calls")) {
-      if (!edge.range) continue;
-      const target = this.graphIndex!.getNode(edge.target);
-      if (!target || !this.isCallableGraphNode(target)) continue;
+    for (const edgeKind of ["calls", "emits", "revertsWith"] as const) {
+      for (const edge of this.graphIndex!.getOutgoingEdges(source.id, edgeKind)) {
+        if (!edge.range) continue;
+        const target = this.graphIndex!.getNode(edge.target);
+        if (!target || !this.isCallHierarchyTargetNode(target)) continue;
 
-      const existing = calleeMap.get(target.id);
-      if (existing) {
-        existing.ranges.push(edge.range);
-        continue;
+        const existing = calleeMap.get(target.id);
+        if (existing) {
+          existing.ranges.push(edge.range);
+          continue;
+        }
+
+        calleeMap.set(target.id, {
+          item: this.graphNodeToCallHierarchyItem(target),
+          ranges: [edge.range],
+        });
       }
-
-      calleeMap.set(target.id, {
-        item: this.graphNodeToCallHierarchyItem(target),
-        ranges: [edge.range],
-      });
     }
 
     return Array.from(calleeMap.values()).map((entry) => ({
@@ -350,7 +354,7 @@ export class CallHierarchyProvider {
       .getNodes()
       .find(
         (node) =>
-          this.isCallableGraphNode(node) &&
+          this.isCallHierarchyTargetNode(node) &&
           node.uri === item.uri &&
           node.name === item.name &&
           (!item.detail || node.containerName === item.detail),
@@ -369,7 +373,7 @@ export class CallHierarchyProvider {
     };
   }
 
-  private isCallableGraphNode(node: SolidityGraphNode): boolean {
+  private isCallHierarchySourceNode(node: SolidityGraphNode): boolean {
     return (
       node.kind === "function" ||
       node.kind === "constructor" ||
@@ -380,24 +384,48 @@ export class CallHierarchyProvider {
     );
   }
 
+  private isCallHierarchyTargetNode(node: SolidityGraphNode): boolean {
+    return this.isCallHierarchySourceNode(node) || node.kind === "event" || node.kind === "error";
+  }
+
+  private graphIncomingEdgeKinds(node: SolidityGraphNode): ("calls" | "emits" | "revertsWith")[] {
+    if (node.kind === "event") return ["emits"];
+    if (node.kind === "error") return ["revertsWith"];
+    return ["calls"];
+  }
+
   private isCallHierarchySymbolKind(kind: string): boolean {
-    return kind === "function" || kind === "modifier" || kind === "stateVariable";
+    return (
+      kind === "function" ||
+      kind === "modifier" ||
+      kind === "stateVariable" ||
+      kind === "event" ||
+      kind === "error"
+    );
   }
 
   private symbolKindToCallHierarchyKind(kind: string | undefined): SymbolKind {
     return kind === "stateVariable"
       ? SymbolKind.Field
-      : kind === "modifier"
-        ? SymbolKind.Method
-        : SymbolKind.Function;
+      : kind === "event"
+        ? SymbolKind.Event
+        : kind === "error"
+          ? SymbolKind.Struct
+          : kind === "modifier"
+            ? SymbolKind.Method
+            : SymbolKind.Function;
   }
 
   private graphNodeKindToCallHierarchyKind(kind: SolidityGraphNode["kind"]): SymbolKind {
     return kind === "stateVariable"
       ? SymbolKind.Field
-      : kind === "modifier"
-        ? SymbolKind.Method
-        : SymbolKind.Function;
+      : kind === "event"
+        ? SymbolKind.Event
+        : kind === "error"
+          ? SymbolKind.Struct
+          : kind === "modifier"
+            ? SymbolKind.Method
+            : SymbolKind.Function;
   }
 
   /**
@@ -728,12 +756,69 @@ export class CallHierarchyProvider {
           containerName: entry.contract.name,
         };
       }
+      for (const event of entry.contract.events) {
+        if (!this.rangeContains(event.range, start, end)) continue;
+        return {
+          name: event.name,
+          kind: "event",
+          uri: targetUri,
+          range: event.range,
+          selectionRange: event.nameRange,
+          containerName: entry.contract.name,
+        };
+      }
+      for (const err of entry.contract.errors) {
+        if (!this.rangeContains(err.range, start, end)) continue;
+        return {
+          name: err.name,
+          kind: "error",
+          uri: targetUri,
+          range: err.range,
+          selectionRange: err.nameRange,
+          containerName: entry.contract.name,
+        };
+      }
+    }
+    const sourceUnit = this.parser.get(targetUri)?.sourceUnit;
+    if (sourceUnit) {
+      for (const fn of sourceUnit.freeFunctions) {
+        if (!fn.name || !this.rangeContains(fn.range, start, end)) continue;
+        return {
+          name: fn.name,
+          kind: "function",
+          uri: targetUri,
+          range: fn.range,
+          selectionRange: fn.nameRange,
+        };
+      }
+      for (const event of sourceUnit.events) {
+        if (!this.rangeContains(event.range, start, end)) continue;
+        return {
+          name: event.name,
+          kind: "event",
+          uri: targetUri,
+          range: event.range,
+          selectionRange: event.nameRange,
+        };
+      }
+      for (const err of sourceUnit.errors) {
+        if (!this.rangeContains(err.range, start, end)) continue;
+        return {
+          name: err.name,
+          kind: "error",
+          uri: targetUri,
+          range: err.range,
+          selectionRange: err.nameRange,
+        };
+      }
     }
     return undefined;
   }
 
   private matchesTarget(target: CallTarget, item: CallHierarchyItem): boolean {
-    return target.name === item.name && (!item.detail || target.containerName === item.detail);
+    if (target.name !== item.name) return false;
+    if (item.detail) return target.containerName === item.detail;
+    return !target.containerName && target.uri === item.uri;
   }
 
   /**

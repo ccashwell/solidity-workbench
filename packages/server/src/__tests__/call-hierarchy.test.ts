@@ -916,6 +916,132 @@ contract Reader {
       }
     });
 
+    it("treats file-level events and errors as call hierarchy targets", async () => {
+      const eventFixture = setupFixture({
+        "src/Signals.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+event FileClaimed(address indexed account, uint256 amount);
+error FileDenied(address account);
+
+contract Signals {
+    function run(address account) external {
+        emit FileClaimed(account, 1);
+        revert FileDenied(account);
+    }
+}
+`,
+      });
+
+      try {
+        const signalsUri = URI.file(path.join(eventFixture.tmpDir, "src/Signals.sol")).toString();
+        const outgoing = await eventFixture.provider.getOutgoingCalls({
+          name: "run",
+          kind: SymbolKind.Function,
+          uri: signalsUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "Signals",
+        });
+
+        const claimed = outgoing.find((call) => call.to.name === "FileClaimed");
+        assert.ok(claimed, "expected outgoing file-level event emit");
+        assert.equal(claimed.to.kind, SymbolKind.Event);
+        assert.equal(claimed.to.detail, undefined);
+
+        const denied = outgoing.find((call) => call.to.name === "FileDenied");
+        assert.ok(denied, "expected outgoing file-level custom error revert");
+        assert.equal(denied.to.kind, SymbolKind.Struct);
+        assert.equal(denied.to.detail, undefined);
+
+        const eventIncoming = await eventFixture.provider.getIncomingCalls(claimed.to);
+        assert.ok(
+          eventIncoming.some((call) => call.from.name === "run"),
+          "expected switching to callers of FileClaimed to include Signals.run",
+        );
+
+        const errorIncoming = await eventFixture.provider.getIncomingCalls(denied.to);
+        assert.ok(
+          errorIncoming.some((call) => call.from.name === "run"),
+          "expected switching to callers of FileDenied to include Signals.run",
+        );
+      } finally {
+        teardownFixture(eventFixture);
+      }
+    });
+
+    it("maps graph-backed emits and custom-error reverts into call hierarchy", async () => {
+      const eventFixture = setupFixture({
+        "src/Signals.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+event FileClaimed(address indexed account, uint256 amount);
+error FileDenied(address account);
+
+contract Signals {
+    function run(address account) external {
+        emit FileClaimed(account, 1);
+        revert FileDenied(account);
+    }
+}
+`,
+      });
+
+      try {
+        const resolver = new SemanticResolver(
+          eventFixture.parser,
+          eventFixture.workspace,
+          eventFixture.symbolIndex,
+        );
+        const graphIndex = new GraphIndex(
+          eventFixture.parser,
+          eventFixture.workspace,
+          resolver,
+          eventFixture.symbolIndex,
+        );
+        graphIndex.rebuildWorkspace();
+        const provider = new CallHierarchyProvider(
+          eventFixture.symbolIndex,
+          eventFixture.workspace,
+          eventFixture.parser,
+          resolver,
+          graphIndex,
+        );
+        const signalsUri = URI.file(path.join(eventFixture.tmpDir, "src/Signals.sol")).toString();
+
+        const outgoing = await provider.getOutgoingCalls({
+          name: "run",
+          kind: SymbolKind.Function,
+          uri: signalsUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "Signals",
+        });
+
+        const claimed = outgoing.find((call) => call.to.name === "FileClaimed");
+        assert.ok(claimed, "expected graph-backed outgoing event emit");
+        assert.equal(claimed.to.kind, SymbolKind.Event);
+
+        const denied = outgoing.find((call) => call.to.name === "FileDenied");
+        assert.ok(denied, "expected graph-backed outgoing custom error revert");
+        assert.equal(denied.to.kind, SymbolKind.Struct);
+
+        const eventIncoming = await provider.getIncomingCalls(claimed.to);
+        assert.ok(
+          eventIncoming.some((call) => call.from.name === "run"),
+          "expected graph-backed callers of FileClaimed to include Signals.run",
+        );
+
+        const errorIncoming = await provider.getIncomingCalls(denied.to);
+        assert.ok(
+          errorIncoming.some((call) => call.from.name === "run"),
+          "expected graph-backed callers of FileDenied to include Signals.run",
+        );
+      } finally {
+        teardownFixture(eventFixture);
+      }
+    });
+
     it("drops only the changed file's call sites on invalidate, leaving other callers intact", async () => {
       // Regression test for the per-keystroke invalidate hot path:
       // `invalidateFile` used to walk every callee name in the

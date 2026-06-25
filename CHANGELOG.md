@@ -157,6 +157,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native Call Hierarchy callers now reuse the shared Project Graph relationship
   index when available, making callers/callees switching consistent with graph
   queries and avoiding the legacy workspace scanner on graph-backed targets.
+- Native Call Hierarchy now treats emitted events and custom-error reverts as
+  navigable targets, including file-level declarations and graph-backed
+  `emits` / `revertsWith` edges.
 - Live Project Graph updates now refresh declarations and dependents
   immediately but queue relationship reindexing in the background, avoiding
   synchronous full edge rebuilds on every edit.
