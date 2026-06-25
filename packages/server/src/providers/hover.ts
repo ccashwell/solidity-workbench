@@ -648,7 +648,7 @@ export class HoverProvider {
     const declaration = this.buildDeclaration(sym);
     parts.push(`\`\`\`solidity\n${declaration}\n\`\`\``);
 
-    const natspec = resolveEffectiveNatspec(sym, this.symbolIndex);
+    const natspec = resolveEffectiveNatspec(sym, this.symbolIndex, this.resolver);
     if (natspec) {
       parts.push(this.formatNatspec(natspec, sym));
     }

@@ -1,5 +1,6 @@
 import type { NatspecComment, SolSymbol } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 
 /** True when NatSpec has displayable content beyond a bare `@inheritdoc` tag. */
 export function hasNatspecBody(natspec: NatspecComment): boolean {
@@ -21,6 +22,7 @@ export function hasNatspecBody(natspec: NatspecComment): boolean {
 export function resolveEffectiveNatspec(
   sym: SolSymbol,
   index: SymbolIndex,
+  resolver?: SemanticResolver,
   visited: Set<string> = new Set(),
 ): NatspecComment | undefined {
   const natspec = sym.natspec;
@@ -31,12 +33,12 @@ export function resolveEffectiveNatspec(
 
   let inherited: NatspecComment | undefined;
   if (needsInherit) {
-    const sourceSym = findInheritdocSource(sym, inheritRef, index);
+    const sourceSym = findInheritdocSource(sym, inheritRef, index, resolver);
     if (sourceSym) {
       const key = `${sourceSym.filePath}#${sourceSym.containerName ?? ""}#${sourceSym.name ?? ""}`;
       if (!visited.has(key)) {
         visited.add(key);
-        inherited = resolveEffectiveNatspec(sourceSym, index, visited);
+        inherited = resolveEffectiveNatspec(sourceSym, index, resolver, visited);
       }
     }
   }
@@ -80,6 +82,7 @@ function findInheritdocSource(
   sym: SolSymbol,
   inheritRef: string | undefined,
   index: SymbolIndex,
+  resolver?: SemanticResolver,
 ): SolSymbol | null {
   const memberName = sym.name;
   const containerName = sym.containerName;
@@ -98,19 +101,29 @@ function findInheritdocSource(
     }
   }
 
-  const searchContracts: string[] = [];
+  const searchContracts: { name: string; uri?: string }[] = [];
   if (targetContract) {
-    searchContracts.push(targetContract);
+    const resolved = resolver?.resolveContract(targetContract, sym.filePath);
+    searchContracts.push({ name: targetContract, uri: resolved?.uri });
   } else {
-    for (const contract of index.getInheritanceChain(containerName)) {
-      if (contract.name !== containerName) {
-        searchContracts.push(contract.name);
+    const chain = resolver?.getInheritanceChain(containerName, sym.filePath);
+    if (chain && chain.length > 0) {
+      for (const contract of chain) {
+        if (contract.contract.name !== containerName) {
+          searchContracts.push({ name: contract.contract.name, uri: contract.uri });
+        }
+      }
+    } else {
+      for (const contract of index.getInheritanceChain(containerName)) {
+        if (contract.name !== containerName) {
+          searchContracts.push({ name: contract.name });
+        }
       }
     }
   }
 
-  for (const contractName of searchContracts) {
-    const hit = pickMemberSymbol(index, contractName, targetMember, sym);
+  for (const contract of searchContracts) {
+    const hit = pickMemberSymbol(index, contract.name, targetMember, sym, contract.uri);
     if (hit) return hit;
   }
 
@@ -122,6 +135,7 @@ function pickMemberSymbol(
   contractName: string,
   memberName: string,
   context: SolSymbol,
+  contractUri?: string,
 ): SolSymbol | null {
   let candidates = index
     .findSymbols(memberName)
@@ -145,6 +159,10 @@ function pickMemberSymbol(
   }
 
   if (candidates.length === 0) return null;
+  if (contractUri) {
+    const exactFile = candidates.find((s) => s.filePath === contractUri);
+    if (exactFile) return exactFile;
+  }
   if (candidates.length === 1) return candidates[0];
   if (context.detail) {
     const exact = candidates.find((s) => s.detail === context.detail);
