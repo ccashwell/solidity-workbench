@@ -2743,33 +2743,35 @@ export class GraphIndex {
     sourceId: string,
     emitNode: RawAstNode,
   ): void {
-    const eventExpression = emitNode.eventCall?.expression;
-    if (!eventExpression || eventExpression.type !== "Identifier" || !eventExpression.name) return;
+    const event = this.rawCallName(text, emitNode.eventCall?.expression);
+    if (!event) return;
+    const eventName = event.receiverLeaf ? `${event.receiverLeaf}.${event.name}` : event.name;
     const target = contract
-      ? (this.resolveContractMemberGraphNode(uri, contract.name, eventExpression.name, "event") ??
+      ? ((event.receiverLeaf
+          ? undefined
+          : this.resolveContractMemberGraphNode(uri, contract.name, event.name, "event")) ??
         this.resolveFileLevelGraphNode(
           uri,
-          eventExpression.name,
+          eventName,
           "event",
           emitNode.eventCall?.arguments?.length,
         ))
       : this.resolveFileLevelGraphNode(
           uri,
-          eventExpression.name,
+          eventName,
           "event",
           emitNode.eventCall?.arguments?.length,
         );
     if (!target) return;
-    const range = this.rawNameRange(text, eventExpression, eventExpression.name);
     const resolved = this.resolveGraphTargetWithSolc(
       uri,
-      range.start,
+      event.range.start,
       target,
       "parser",
       EVENT_TARGET_NODE_KINDS,
     );
-    this.addResolvedGraphEdge(sourceId, resolved, "emits", range, {
-      eventName: eventExpression.name,
+    this.addResolvedGraphEdge(sourceId, resolved, "emits", event.range, {
+      eventName,
     });
   }
 
@@ -2780,33 +2782,35 @@ export class GraphIndex {
     sourceId: string,
     revertNode: RawAstNode,
   ): void {
-    const errorExpression = revertNode.revertCall?.expression;
-    if (!errorExpression || errorExpression.type !== "Identifier" || !errorExpression.name) return;
+    const error = this.rawCallName(text, revertNode.revertCall?.expression);
+    if (!error) return;
+    const errorName = error.receiverLeaf ? `${error.receiverLeaf}.${error.name}` : error.name;
     const target = contract
-      ? (this.resolveContractMemberGraphNode(uri, contract.name, errorExpression.name, "error") ??
+      ? ((error.receiverLeaf
+          ? undefined
+          : this.resolveContractMemberGraphNode(uri, contract.name, error.name, "error")) ??
         this.resolveFileLevelGraphNode(
           uri,
-          errorExpression.name,
+          errorName,
           "error",
           revertNode.revertCall?.arguments?.length,
         ))
       : this.resolveFileLevelGraphNode(
           uri,
-          errorExpression.name,
+          errorName,
           "error",
           revertNode.revertCall?.arguments?.length,
         );
     if (!target) return;
-    const range = this.rawNameRange(text, errorExpression, errorExpression.name);
     const resolved = this.resolveGraphTargetWithSolc(
       uri,
-      range.start,
+      error.range.start,
       target,
       "parser",
       ERROR_TARGET_NODE_KINDS,
     );
-    this.addResolvedGraphEdge(sourceId, resolved, "revertsWith", range, {
-      errorName: errorExpression.name,
+    this.addResolvedGraphEdge(sourceId, resolved, "revertsWith", error.range, {
+      errorName,
     });
   }
 
@@ -2982,7 +2986,12 @@ export class GraphIndex {
 
       const contractTarget = this.resolver.resolveContract(receiverType, uri);
       if (contractTarget) return this.resolveMemberNode(contractTarget, calleeName, argumentCount);
-      return undefined;
+      return this.resolveFileLevelGraphNode(
+        uri,
+        `${qualifier}.${calleeName}`,
+        "function",
+        argumentCount,
+      );
     }
 
     if (!contract) {

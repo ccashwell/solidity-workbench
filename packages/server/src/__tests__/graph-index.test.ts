@@ -810,6 +810,103 @@ contract Consumer {
     }
   });
 
+  it("resolves namespace-imported file-level relationship targets", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-file-namespace-"));
+    try {
+      const files = {
+        "src/Claims.sol": `pragma solidity ^0.8.24;
+
+event Claimed(address indexed account, uint256 amount);
+error ClaimDenied();
+
+function redeemClaims(uint256 amount) {
+    amount;
+}
+`,
+        "src/UseClaims.sol": `pragma solidity ^0.8.24;
+import * as Claims from "./Claims.sol";
+
+function runFree(uint256 amount) {
+    Claims.redeemClaims(amount);
+    emit Claims.Claimed(address(0), amount);
+    if (amount == 0) revert Claims.ClaimDenied();
+}
+
+contract Consumer {
+    function run(uint256 amount) external {
+        Claims.redeemClaims(amount);
+        emit Claims.Claimed(msg.sender, amount);
+        if (amount == 0) revert Claims.ClaimDenied();
+    }
+}
+`,
+      };
+
+      const uris: string[] = [];
+      const parser = new SolidityParser();
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+
+      graph.rebuildWorkspace();
+
+      const redeemClaims = graph
+        .getNodes()
+        .find((node) => node.kind === "function" && node.name === "redeemClaims");
+      const claimed = graph
+        .getNodes()
+        .find((node) => node.kind === "event" && node.name === "Claimed");
+      const denied = graph
+        .getNodes()
+        .find((node) => node.kind === "error" && node.name === "ClaimDenied");
+      const runFree = graph
+        .getNodes()
+        .find((node) => node.kind === "function" && node.name === "runFree");
+      const run = graph
+        .getNodes()
+        .find(
+          (node) =>
+            node.kind === "function" && node.name === "run" && node.containerName === "Consumer",
+        );
+      assert.ok(redeemClaims, "expected namespace target free function node");
+      assert.ok(claimed, "expected namespace target file-level event node");
+      assert.ok(denied, "expected namespace target file-level error node");
+      assert.ok(runFree, "expected namespaced free-function caller node");
+      assert.ok(run, "expected namespaced contract caller node");
+
+      for (const source of [runFree, run]) {
+        assert.ok(
+          graph
+            .getOutgoingEdges(source.id, "calls")
+            .some((edge) => edge.target === redeemClaims.id),
+          `expected ${source.qualifiedName} to call Claims.redeemClaims`,
+        );
+        assert.ok(
+          graph.getOutgoingEdges(source.id, "emits").some((edge) => edge.target === claimed.id),
+          `expected ${source.qualifiedName} to emit Claims.Claimed`,
+        );
+        assert.ok(
+          graph
+            .getOutgoingEdges(source.id, "revertsWith")
+            .some((edge) => edge.target === denied.id),
+          `expected ${source.qualifiedName} to revert with Claims.ClaimDenied`,
+        );
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("excludes test files and Foundry Test descendants unless requested", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-include-tests-"));
     try {
