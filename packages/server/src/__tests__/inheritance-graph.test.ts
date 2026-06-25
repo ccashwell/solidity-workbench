@@ -35,6 +35,10 @@ contract HarnessBase is Test {}
 import "./HarnessBase.sol";
 contract SourceHarness is HarnessBase {}
 `,
+        "src/ProjectTestName.sol": `pragma solidity ^0.8.24;
+contract Test {}
+contract LegitSource is Test {}
+`,
         "lib/Dep.sol": `pragma solidity ^0.8.24;
 contract Dep {}
 `,
@@ -126,6 +130,16 @@ contract Base {}
         harnessBase,
         undefined,
         "indirect Foundry Test bases in src should be excluded by default",
+      );
+      const legitSource = graph.nodes.find((n) => n.name === "LegitSource");
+      assert.ok(
+        legitSource,
+        "project contracts extending a project contract named Test should not be treated as Foundry tests",
+      );
+      const usesDepDefault = graph.nodes.find((n) => n.name === "UsesDep");
+      assert.ok(
+        usesDepDefault,
+        "project contracts extending hidden non-test dependencies should stay visible",
       );
       const depBase = graph.nodes.find((n) => n.name === "Dep");
       assert.equal(depBase, undefined, "dependency contracts should be excluded by default");

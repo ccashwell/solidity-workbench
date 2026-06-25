@@ -152,6 +152,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Exact-signature Project Graph queries now treat hidden test/dependency
   matches as out-of-scope misses instead of reporting a misleading target-kind
   mismatch.
+- Project Graph and inheritance graph test filtering now distinguish Foundry's
+  `Test` base from ordinary project contracts named `Test`, and no longer hide
+  source contracts merely because they inherit a filtered dependency.
 - Added a Project Graph scope diagnostics command that opens a JSON report
   comparing Project Sources, Tests, Dependencies, and combined graph scopes.
 - VSIX verification now lives in a shared `scripts/verify-vsix.mjs` checker,

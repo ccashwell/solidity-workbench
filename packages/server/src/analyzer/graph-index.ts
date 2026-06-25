@@ -1502,12 +1502,19 @@ export class GraphIndex {
       if (edge.kind !== "inherits") continue;
       const baseName = typeof edge.metadata?.baseName === "string" ? edge.metadata.baseName : "";
       const baseLeaf = baseName.split(".").pop();
-      if (baseLeaf === "Test") return true;
-      if (excluded.has(edge.target)) return true;
       const target = this.nodes.get(edge.target);
-      if (target?.name === "Test") return true;
+      if (baseLeaf === "Test" && (!target || this.isFoundryTestBaseNode(target))) return true;
+      if (target && this.isFoundryTestBaseNode(target)) return true;
+      if (target?.tier === "tests") return true;
+      if (target && excluded.has(edge.target) && target.tier !== "deps") return true;
     }
     return false;
+  }
+
+  private isFoundryTestBaseNode(node: SolidityGraphNode): boolean {
+    if (!this.isContractLikeNode(node) || node.name !== "Test") return false;
+    if (node.tier === "tests" || node.tier === "deps") return true;
+    return /(?:^|[/\\])forge-std(?:[/\\](?:src[/\\])?)?Test\.sol$/u.test(node.filePath);
   }
 
   private findInnermostNodeAtPosition(

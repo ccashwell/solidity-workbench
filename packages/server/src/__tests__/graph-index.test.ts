@@ -1003,8 +1003,22 @@ contract Consumer {
 contract Prod { function run() external {} }
 `,
         "src/SourceHarness.sol": `pragma solidity ^0.8.24;
-contract Test {}
+import "../lib/forge-std/Test.sol";
 contract SourceHarness is Test { function test_run() external {} }
+`,
+        "src/ProjectTestName.sol": `pragma solidity ^0.8.24;
+contract Test {}
+contract LegitSource is Test { function run() external {} }
+`,
+        "src/UsesDep.sol": `pragma solidity ^0.8.24;
+import "../lib/Dep.sol";
+contract UsesDep is Dep { function run() external {} }
+`,
+        "lib/Dep.sol": `pragma solidity ^0.8.24;
+contract Dep {}
+`,
+        "lib/forge-std/Test.sol": `pragma solidity ^0.8.24;
+contract Test {}
 `,
         "test/Prod.t.sol": `pragma solidity ^0.8.24;
 contract ProdTest { function test_Run() external {} }
@@ -1033,6 +1047,14 @@ contract ProdTest { function test_Run() external {} }
       assert.ok(!defaultGraph.nodes.some((node) => node.name === "ProdTest"));
       assert.ok(!defaultGraph.nodes.some((node) => node.name === "SourceHarness"));
       assert.ok(!defaultGraph.nodes.some((node) => node.name === "test_run"));
+      assert.ok(
+        defaultGraph.nodes.some((node) => node.name === "LegitSource"),
+        "project contracts extending a project contract named Test should stay visible",
+      );
+      assert.ok(
+        defaultGraph.nodes.some((node) => node.name === "UsesDep"),
+        "project contracts extending hidden non-test dependencies should stay visible",
+      );
 
       const withTests = graph.toProjectGraph(undefined, undefined, true);
       assert.ok(withTests.nodes.some((node) => node.name === "ProdTest"));

@@ -180,9 +180,9 @@ export class InheritanceGraphProvider {
 
     for (const edge of this.graphIndex?.getOutgoingEdges(nodeId, "inherits") ?? []) {
       const baseName = typeof edge.metadata?.baseName === "string" ? edge.metadata.baseName : "";
-      if (this.isFoundryTestBaseName(baseName)) return true;
       const target = allNodes.get(edge.target);
-      if (target?.name === "Test") return true;
+      if (this.isUnresolvedFoundryTestBase(baseName, target)) return true;
+      if (target && this.isFoundryTestGraphNode(target)) return true;
       if (target && this.graphNodeExtendsFoundryTest(target.id, allNodes, visited)) return true;
     }
     return false;
@@ -196,15 +196,38 @@ export class InheritanceGraphProvider {
     visited.add(entry.id);
 
     for (const base of entry.contract.baseContracts) {
-      if (this.isFoundryTestBaseName(base.baseName)) return true;
       const resolved = this.resolver.resolveBaseContract(entry.uri, base.baseName);
-      if (resolved?.contract.name === "Test") return true;
+      if (this.isUnresolvedFoundryTestBase(base.baseName, resolved)) return true;
+      if (resolved && this.isFoundryTestResolvedContract(resolved)) return true;
       if (resolved && this.resolvedContractExtendsFoundryTest(resolved, visited)) return true;
     }
     return false;
   }
 
-  private isFoundryTestBaseName(baseName: string): boolean {
-    return baseName.split(".").pop() === "Test";
+  private isUnresolvedFoundryTestBase(
+    baseName: string,
+    resolved: SolidityGraphNode | ResolvedContract | undefined,
+  ): boolean {
+    return baseName.split(".").pop() === "Test" && !resolved;
+  }
+
+  private isFoundryTestGraphNode(node: SolidityGraphNode): boolean {
+    if (!this.isContractLikeGraphNode(node) || node.name !== "Test") return false;
+    if (node.tier === "tests" || node.tier === "deps") return true;
+    return this.isForgeStdTestPath(node.filePath);
+  }
+
+  private isFoundryTestResolvedContract(entry: ResolvedContract): boolean {
+    if (entry.contract.name !== "Test") return false;
+    if (entry.tier === "tests" || entry.tier === "deps") return true;
+    return this.isForgeStdTestPath(entry.filePath);
+  }
+
+  private isContractLikeGraphNode(node: SolidityGraphNode): boolean {
+    return node.kind === "contract" || node.kind === "interface" || node.kind === "library";
+  }
+
+  private isForgeStdTestPath(filePath: string): boolean {
+    return /(?:^|[/\\])forge-std(?:[/\\](?:src[/\\])?)?Test\.sol$/u.test(filePath);
   }
 }
