@@ -3364,6 +3364,28 @@ export class GraphIndex {
     return null;
   }
 
+  private rawCallTargetName(expression: RawAstNode | undefined): {
+    name: string;
+    receiver: string | null;
+    receiverLeaf: string | undefined;
+  } | null {
+    if (!expression) return null;
+    if (expression.type === "Identifier" && expression.name) {
+      return { name: expression.name, receiver: null, receiverLeaf: undefined };
+    }
+
+    if (expression.type === "MemberAccess" && expression.memberName) {
+      const receiver = this.rawExpressionToString(expression.expression);
+      return {
+        name: expression.memberName,
+        receiver,
+        receiverLeaf: receiver ? receiver.split(".").filter(Boolean).at(-1) : undefined,
+      };
+    }
+
+    return null;
+  }
+
   private rawExpressionToString(expression: RawAstNode | undefined): string | null {
     if (!expression) return null;
     if (expression.type === "Identifier" && expression.name) return expression.name;
@@ -3673,14 +3695,86 @@ export class GraphIndex {
         return this.inferRawIndexAccessType(uri, contract, arg, position);
       case "FunctionCall": {
         const castType = this.rawTypeNameToString(arg.expression);
-        return castType &&
+        if (
+          castType &&
           (isSolidityBuiltinType(castType) || this.resolveTypeNodeId(castType, uri))
-          ? castType
-          : undefined;
+        ) {
+          return castType;
+        }
+        return this.inferRawFunctionCallReturnType(uri, contract, arg, position);
       }
       default:
         return undefined;
     }
+  }
+
+  private inferRawFunctionCallReturnType(
+    uri: string,
+    contract: ContractDefinition | undefined,
+    call: RawAstNode,
+    position: SourceRange["start"],
+  ): string | undefined {
+    const callee = this.rawCallTargetName(call.expression);
+    if (!callee) return undefined;
+    if (CALL_LIKE_KEYWORDS.has(callee.name)) return undefined;
+    if (isSolidityBuiltinType(callee.name)) return undefined;
+
+    const target = this.resolveCallTarget(
+      uri,
+      contract,
+      callee.receiverLeaf,
+      callee.receiver,
+      callee.name,
+      this.rawNodeStartPosition(call.expression ?? call, position),
+      call.arguments?.length ?? 0,
+      this.inferRawArgumentTypes(uri, contract, call.arguments, position),
+    );
+    if (!target) return undefined;
+
+    if (target.kind === "function") {
+      const fn = this.findFunctionDefinitionForNode(target);
+      return fn?.returnParameters.length === 1 ? fn.returnParameters[0]?.typeName : undefined;
+    }
+
+    if (target.kind === "stateVariable") {
+      return this.findStateVariableDeclarationForNode(target)?.typeName;
+    }
+
+    return undefined;
+  }
+
+  private findFunctionDefinitionForNode(node: SolidityGraphNode): FunctionDefinition | undefined {
+    const sourceUnit = this.parser.get(node.uri)?.sourceUnit;
+    if (!sourceUnit) return undefined;
+
+    const functions = node.containerName
+      ? (sourceUnit.contracts
+          .find((contract) => contract.name === node.containerName)
+          ?.functions.filter((fn) => fn.kind === "function") ?? [])
+      : sourceUnit.freeFunctions;
+
+    return functions.find(
+      (fn) =>
+        fn.name === node.name &&
+        fn.nameRange.start.line === node.selectionRange.start.line &&
+        fn.nameRange.start.character === node.selectionRange.start.character,
+    );
+  }
+
+  private findStateVariableDeclarationForNode(
+    node: SolidityGraphNode,
+  ): StateVariableDeclaration | undefined {
+    if (!node.containerName) return undefined;
+    const sourceUnit = this.parser.get(node.uri)?.sourceUnit;
+    const contract = sourceUnit?.contracts.find(
+      (candidate) => candidate.name === node.containerName,
+    );
+    return contract?.stateVariables.find(
+      (stateVariable) =>
+        stateVariable.name === node.name &&
+        stateVariable.nameRange.start.line === node.selectionRange.start.line &&
+        stateVariable.nameRange.start.character === node.selectionRange.start.character,
+    );
   }
 
   private inferRawBinaryOperationType(

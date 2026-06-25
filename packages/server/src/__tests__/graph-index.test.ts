@@ -1909,6 +1909,8 @@ contract Caller {
         one(flag ? value : 1);
         one(amounts[0]);
         one(balances[account]);
+        one(makeAmount(value));
+        one(makeAccount(account));
     }
 
     function receiver(address account, uint256 value) external {
@@ -1920,6 +1922,16 @@ contract Caller {
         target.ping(flag ? value : 1);
         target.ping(amounts[0]);
         target.ping(balances[account]);
+        target.ping(makeAmount(value));
+        target.ping(makeAccount(account));
+    }
+
+    function makeAmount(uint256 value) internal pure returns (uint256) {
+        return value;
+    }
+
+    function makeAccount(address account) internal pure returns (address) {
+        return account;
     }
 
     function one() internal {}
@@ -1991,7 +2003,7 @@ contract Caller {
       assert.equal(
         graph.getOutgoingEdges(local.id, "calls").filter((edge) => edge.target === oneUint.id)
           .length,
-        6,
+        7,
         "expected every local uint-compatible expression to target the uint256 overload",
       );
       assert.ok(
@@ -2001,8 +2013,8 @@ contract Caller {
       assert.equal(
         graph.getOutgoingEdges(local.id, "calls").filter((edge) => edge.target === oneAddress.id)
           .length,
-        1,
-        "expected exactly one local address-overload edge",
+        2,
+        "expected direct and nested local address expressions to target the address overload",
       );
       assert.ok(
         graph.getOutgoingEdges(receiver.id, "calls").some((edge) => edge.target === pingNoArgs.id),
@@ -2015,7 +2027,7 @@ contract Caller {
       assert.equal(
         graph.getOutgoingEdges(receiver.id, "calls").filter((edge) => edge.target === pingUint.id)
           .length,
-        6,
+        7,
         "expected every receiver uint-compatible expression to target the uint256 overload",
       );
       assert.ok(
@@ -2026,8 +2038,8 @@ contract Caller {
         graph
           .getOutgoingEdges(receiver.id, "calls")
           .filter((edge) => edge.target === pingAddress.id).length,
-        1,
-        "expected exactly one receiver address-overload edge",
+        2,
+        "expected direct and nested receiver address expressions to target the address overload",
       );
 
       const pingUintCallers = graph.query({
