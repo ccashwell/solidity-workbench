@@ -101,6 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   callers queries reject non-public state variables as getter targets.
 - The Project Graph view now renders node metadata badges for visibility and
   public getters in the canvas, sidebar, and details pane.
+- The Project Graph status line now reports how many matching nodes are hidden
+  by the interactive render cap.
 - Project Graph callers/callees/impact queries now understand exact callable
   signatures such as `Vault.deposit(uint256)`, so overloaded functions resolve
   to the requested target instead of the highest-ranked same-name symbol.

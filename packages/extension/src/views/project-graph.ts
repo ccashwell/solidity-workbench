@@ -1903,7 +1903,7 @@ export class ProjectGraphExporter {
     return edgeConfidence(edge) === quality;
   }
 
-  function visibleNodeSet() {
+  function visibleNodeState() {
     const q = query.trim().toLowerCase();
     const direct = new Set();
     if (scope === "neighbors" && activeId) {
@@ -1941,7 +1941,7 @@ export class ProjectGraphExporter {
         .map((id) => nodesById.get(id))
         .filter(Boolean)
         .sort(compareNodes);
-      return new Set(sorted.slice(0, maxRenderedNodes).map((node) => node.id));
+      return cappedNodeState(sorted);
     }
 
     const connected = new Set(direct);
@@ -1956,7 +1956,23 @@ export class ProjectGraphExporter {
       .map((id) => nodesById.get(id))
       .filter(Boolean)
       .sort(compareNodes);
-    return new Set(sorted.slice(0, maxRenderedNodes).map((node) => node.id));
+    return cappedNodeState(sorted);
+  }
+
+  function cappedNodeState(nodes) {
+    const capped = nodes.slice(0, maxRenderedNodes);
+    return {
+      ids: new Set(capped.map((node) => node.id)),
+      candidateCount: nodes.length,
+      hiddenCount: Math.max(0, nodes.length - capped.length),
+    };
+  }
+
+  function graphStatsText(nodeState, visibleGraphEdges) {
+    const hiddenText = nodeState.hiddenCount > 0
+      ? " · " + nodeState.hiddenCount + " hidden by render cap"
+      : "";
+    return nodeState.ids.size + "/" + nodeState.candidateCount + " rendered nodes" + hiddenText + " · " + visibleGraphEdges.length + "/" + graph.edges.length + " edges" + (graph.truncated ? " · truncated" : "") + (edgeQualityText() ? " · " + edgeQualityText() : "");
   }
 
   function compareNodes(a, b) {
@@ -2194,7 +2210,8 @@ export class ProjectGraphExporter {
   }
 
   function render() {
-    const ids = visibleNodeSet();
+    const nodeState = visibleNodeState();
+    const ids = nodeState.ids;
     const positions = layoutNodes(ids);
     const visibleGraphEdges = graph.edges.filter((edge) => visibleEdges.has(edge.kind) && edgeMatchesQuality(edge) && positions.has(edge.source) && positions.has(edge.target));
     const maxY = Math.max(360, ...Array.from(positions.values()).map((pos) => pos.y + 52));
@@ -2270,7 +2287,7 @@ export class ProjectGraphExporter {
       svg.append(group);
     }
 
-    stats.textContent = ids.size + "/" + graph.nodes.length + " nodes · " + visibleGraphEdges.length + "/" + graph.edges.length + " edges" + (graph.truncated ? " · truncated" : "") + (edgeQualityText() ? " · " + edgeQualityText() : "");
+    stats.textContent = graphStatsText(nodeState, visibleGraphEdges);
     readiness.textContent = relationshipStatusText();
     const partialRelationships = Boolean(graphStats && graphStats.relationshipIndexComplete === false);
     readiness.classList.toggle("partial", partialRelationships);
