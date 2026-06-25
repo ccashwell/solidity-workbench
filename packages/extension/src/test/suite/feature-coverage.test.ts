@@ -362,6 +362,28 @@ describe("Feature coverage — project graph export", () => {
     assert.match(html, /confidence\.classList\.add\("warning"\)/);
   });
 
+  it("renders embedded project graph search and query controls", () => {
+    type ProjectGraphExporterInternals = {
+      buildHtml(
+        graph: ProjectGraphResult,
+        focusId?: string,
+        graphStats?: ProjectGraphStatsResult,
+      ): string;
+    };
+    const exporter = new ProjectGraphExporter(
+      {} as ConstructorParameters<typeof ProjectGraphExporter>[0],
+    ) as unknown as ProjectGraphExporterInternals;
+
+    const html = exporter.buildHtml(sampleGraph, sampleGraph.focusId);
+
+    assert.match(html, /id="serverSearch"/);
+    assert.match(html, /id="serverQueryKind"/);
+    assert.match(html, /id="serverQuery"/);
+    assert.match(html, /type: "searchGraph"/);
+    assert.match(html, /type: "queryGraph"/);
+    assert.match(html, /message\.clearQuery === true/);
+  });
+
   it("summarizes project graph edge quality", () => {
     const status = summarizeProjectGraphEdgeQuality({
       nodeCount: 10,

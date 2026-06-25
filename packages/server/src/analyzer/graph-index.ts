@@ -682,6 +682,13 @@ export class GraphIndex {
           edgeKinds,
         );
         match.edges = adjacent.slice(0, maxEdgesPerNode);
+        const related = new Map<string, SolidityGraphNode>();
+        for (const edge of match.edges) {
+          const otherId = edge.source === match.node.id ? edge.target : edge.source;
+          const other = this.nodes.get(otherId);
+          if (other) related.set(other.id, other);
+        }
+        match.relatedNodes = Array.from(related.values());
         match.edgesTruncated = adjacent.length > maxEdgesPerNode;
       }
     }

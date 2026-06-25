@@ -518,6 +518,80 @@ export class ProjectGraphExporter {
           return;
         }
 
+        if (msg.type === "searchGraph" && typeof msg.query === "string") {
+          const query = msg.query.trim();
+          if (!query) {
+            await this.postProjectGraphStatus("Enter a symbol query first.");
+            return;
+          }
+          const result = await this.client.sendRequest<ProjectGraphSearchResult>(
+            SearchProjectGraph,
+            {
+              query,
+              includeEdges: true,
+              edgeDirection: "both",
+              maxResults: 80,
+              maxEdgesPerNode: 24,
+            },
+          );
+          if (result.matches.length === 0) {
+            await this.postProjectGraphStatus(`No project graph matches for '${query}'.`);
+            return;
+          }
+          const stats = await this.getProjectGraphStats();
+          const searchGraph = this.searchResultToProjectGraph(result);
+          if (this.panel) {
+            await this.panel.webview.postMessage({
+              type: "setGraph",
+              graph: searchGraph,
+              stats,
+              focusId: searchGraph.focusId,
+              scope: "all",
+              status: this.graphResultStatus(result, `Search: ${query}`),
+              clearQuery: true,
+            });
+          }
+          return;
+        }
+
+        if (msg.type === "queryGraph" && typeof msg.kind === "string") {
+          const kind = this.parseProjectGraphQueryKind(msg.kind);
+          if (!kind) {
+            await this.postProjectGraphStatus("Choose a supported graph query.");
+            return;
+          }
+          const query = typeof msg.query === "string" ? msg.query.trim() : "";
+          const target =
+            typeof msg.targetId === "string" && msg.targetId ? { nodeId: msg.targetId } : undefined;
+          if (!target && !query) {
+            await this.postProjectGraphStatus("Select a graph node or enter a symbol query first.");
+            return;
+          }
+          const result = await this.client.sendRequest<ProjectGraphQueryResult>(QueryProjectGraph, {
+            kind,
+            target,
+            query: target ? undefined : query,
+            maxNodes: 240,
+          });
+          if (!result.found) {
+            await this.postProjectGraphStatus("No project graph query target found.");
+            return;
+          }
+          const stats = await this.getProjectGraphStats();
+          if (this.panel) {
+            await this.panel.webview.postMessage({
+              type: "setGraph",
+              graph: result,
+              stats,
+              focusId: result.targetId ?? result.focusId,
+              scope: "all",
+              status: this.graphResultStatus(result, this.graphQueryLabel(kind)),
+              clearQuery: true,
+            });
+          }
+          return;
+        }
+
         if (msg.type === "rebuild") {
           await this.rebuildProjectGraph();
           return;
@@ -813,6 +887,68 @@ export class ProjectGraphExporter {
     return related.length > 0
       ? related
       : result.nodes.filter((node) => node.id !== result.targetId);
+  }
+
+  private searchResultToProjectGraph(result: ProjectGraphSearchResult): ProjectGraphResult {
+    const nodes = new Map<string, ProjectGraphNode>();
+    const edges = new Map<string, ProjectGraphEdge>();
+    for (const match of result.matches) {
+      nodes.set(match.node.id, match.node);
+      for (const node of match.relatedNodes ?? []) {
+        nodes.set(node.id, node);
+      }
+      for (const edge of match.edges ?? []) {
+        edges.set(this.projectGraphEdgeKey(edge), edge);
+      }
+    }
+    const included = new Set(nodes.keys());
+    return {
+      nodes: Array.from(nodes.values()),
+      edges: Array.from(edges.values()).filter(
+        (edge) => included.has(edge.source) && included.has(edge.target),
+      ),
+      focusId: result.matches[0]?.node.id,
+      truncated: result.truncated,
+    };
+  }
+
+  private projectGraphEdgeKey(edge: ProjectGraphEdge): string {
+    const line = edge.range?.start.line ?? "";
+    const character = edge.range?.start.character ?? "";
+    return `${edge.source}->${edge.kind}->${edge.target}@${line}:${character}`;
+  }
+
+  private parseProjectGraphQueryKind(value: string): ProjectGraphQueryKind | undefined {
+    return value === "callers" || value === "callees" || value === "impact" ? value : undefined;
+  }
+
+  private graphQueryLabel(kind: ProjectGraphQueryKind): string {
+    switch (kind) {
+      case "callers":
+        return "Callers";
+      case "callees":
+        return "Callees";
+      case "impact":
+        return "Impact";
+    }
+  }
+
+  private graphResultStatus(
+    result: {
+      indexStatus?: ProjectGraphIndexStatus;
+      edgeQuality?: ProjectGraphEdgeQuality;
+      truncated?: boolean;
+    },
+    prefix: string,
+  ): string {
+    return [prefix, result.truncated ? "truncated" : "", this.graphResultDetail(result)]
+      .filter(Boolean)
+      .join(" · ");
+  }
+
+  private async postProjectGraphStatus(message: string): Promise<void> {
+    if (!this.panel) return;
+    await this.panel.webview.postMessage({ type: "status", message });
   }
 
   private async openProjectGraphNode(node: ProjectGraphNode): Promise<void> {
@@ -1374,6 +1510,13 @@ export class ProjectGraphExporter {
       <option value="unresolved">Unresolved</option>
       <option value="unknown">Unknown</option>
     </select>
+    <button id="serverSearch" title="Search the indexed project graph using the filter text">Search</button>
+    <select id="serverQueryKind" title="Choose graph query">
+      <option value="callers">Callers</option>
+      <option value="callees">Callees</option>
+      <option value="impact">Impact</option>
+    </select>
+    <button id="serverQuery" title="Run graph query for the selected node or filter text">Query</button>
     <span class="spacer"></span>
     <button class="compact" id="zoomOut" title="Zoom out">−</button>
     <span class="zoom" id="zoomLabel"></span>
@@ -1431,6 +1574,7 @@ export class ProjectGraphExporter {
   const search = document.getElementById("search");
   const scopeSelect = document.getElementById("scope");
   const qualitySelect = document.getElementById("quality");
+  const serverQueryKind = document.getElementById("serverQueryKind");
   const zoomLabel = document.getElementById("zoomLabel");
   const pathModeButton = document.getElementById("pathMode");
   const laneDefs = [
@@ -1965,6 +2109,29 @@ export class ProjectGraphExporter {
     saveUiState();
     render();
   });
+  document.getElementById("serverSearch").addEventListener("click", () => {
+    const serverQuery = search.value.trim();
+    if (!serverQuery) {
+      setStatus("Enter a symbol query first.");
+      return;
+    }
+    setStatus("Searching project graph…");
+    vscode.postMessage({ type: "searchGraph", query: serverQuery });
+  });
+  document.getElementById("serverQuery").addEventListener("click", () => {
+    const serverQuery = search.value.trim();
+    if (!activeId && !serverQuery) {
+      setStatus("Select a graph node or enter a symbol query first.");
+      return;
+    }
+    setStatus("Querying project graph…");
+    vscode.postMessage({
+      type: "queryGraph",
+      kind: serverQueryKind.value,
+      targetId: activeId || undefined,
+      query: serverQuery,
+    });
+  });
   document.getElementById("workspace").addEventListener("click", () => {
     vscode.postMessage({ type: "loadWorkspace" });
   });
@@ -1984,7 +2151,12 @@ export class ProjectGraphExporter {
     const message = event.data;
     if (!message || typeof message !== "object") return;
     if (message.type === "setGraph" && message.graph) {
+      if (message.clearQuery === true) {
+        query = "";
+        search.value = "";
+      }
       setGraph(message.graph, message.focusId, message.scope, message.stats);
+      if (typeof message.status === "string") setStatus(message.status);
       return;
     }
     if (message.type === "status" && typeof message.message === "string") {

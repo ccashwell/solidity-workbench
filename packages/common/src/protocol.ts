@@ -358,6 +358,8 @@ export interface ProjectGraphSearchMatch {
   matchedText: string;
   /** Adjacent edges when requested. */
   edges?: ProjectGraphEdge[];
+  /** Endpoint nodes for adjacent edges when requested. */
+  relatedNodes?: ProjectGraphNode[];
   edgesTruncated?: boolean;
 }
 

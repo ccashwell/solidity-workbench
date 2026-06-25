@@ -302,6 +302,11 @@ contract Child is Base {
         [helper.id, inherited.id].sort(),
         "expected search to include filtered adjacent call edges",
       );
+      assert.deepEqual(
+        entrySearch.matches[0]?.relatedNodes?.map((node) => node.id).sort(),
+        [helper.id, inherited.id].sort(),
+        "expected search to include endpoint nodes for adjacent edges",
+      );
       assert.equal(entrySearch.indexStatus?.partial, false);
       assert.ok(
         (entrySearch.edgeQuality?.edgesByResolutionConfidence.parser ?? 0) >= 1,

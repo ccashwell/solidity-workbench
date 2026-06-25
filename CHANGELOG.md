@@ -51,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph details now call out unresolved, heuristic, and unknown-confidence
   edges with warning styling so users can distinguish trusted compiler-backed
   edges from edges that need manual verification.
+- The Project Graph view can now run indexed symbol searches and callers,
+  callees, or impact queries directly from the graph toolbar, replacing the
+  canvas with the focused result set.
 
 ### Fixed
 
