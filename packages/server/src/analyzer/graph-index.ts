@@ -866,6 +866,9 @@ export class GraphIndex {
     const direction = params.direction ?? "outgoing";
     const allowedKinds = params.edgeKinds?.length ? new Set(params.edgeKinds) : null;
     const maxDepth = Math.max(0, Math.min(params.maxDepth ?? 16, 64));
+    if (direction !== "outgoing") {
+      this.ensureRelationshipIndexComplete();
+    }
     const visited = new Set<string>([from.id]);
     const queue: { nodeId: string; depth: number; path: SolidityGraphEdge[] }[] = [
       { nodeId: from.id, depth: 0, path: [] },
@@ -874,6 +877,10 @@ export class GraphIndex {
     while (queue.length > 0) {
       const current = queue.shift()!;
       if (current.depth >= maxDepth) continue;
+      const currentNode = this.nodes.get(current.nodeId);
+      if (currentNode && direction === "outgoing") {
+        this.ensureFileRelationships(currentNode.uri);
+      }
 
       for (const edge of this.connectedEdges(current.nodeId, direction, allowedKinds)) {
         const next = edge.source === current.nodeId ? edge.target : edge.source;
