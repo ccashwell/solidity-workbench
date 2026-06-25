@@ -75,7 +75,7 @@ export function projectGraphQueryMissLabel(
   if (reason === "targetKindMismatch") {
     return kind === "impact"
       ? "No project graph query target found."
-      : "Selected graph node is not callable; choose a function, constructor, receive/fallback, or modifier.";
+      : "Project graph call queries require a function, constructor, receive/fallback, or modifier target.";
   }
   return kind === "impact"
     ? "No project graph query target found."

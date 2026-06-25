@@ -1036,7 +1036,13 @@ export class GraphIndex {
       kinds: params.targetKinds,
       maxResults: 1,
     }).matches[0]?.node;
-    return target ? { target, missReason: "targetNotFound" } : { missReason: "targetNotFound" };
+    if (target) return { target, missReason: "targetNotFound" };
+    const mismatchedTarget = params.targetKinds?.length
+      ? this.search({ query, maxResults: 1 }).matches[0]?.node
+      : undefined;
+    return mismatchedTarget
+      ? { missReason: "targetKindMismatch" }
+      : { missReason: "targetNotFound" };
   }
 
   private pathResult(

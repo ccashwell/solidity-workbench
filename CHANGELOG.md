@@ -62,6 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   produce misleading call-hierarchy-style results.
 - Project Graph query misses now include a normalized `missReason`, allowing
   the graph UI to distinguish missing targets from non-callable selected nodes.
+- Text-driven Project Graph callers/callees queries now report non-callable
+  matches separately from true missing targets.
 
 ### Fixed
 

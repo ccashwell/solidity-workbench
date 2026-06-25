@@ -398,6 +398,20 @@ contract Child is Base {
       assert.deepEqual(nonCallableCallers.nodes, []);
       assert.deepEqual(nonCallableCallers.edges, []);
 
+      const nonCallableTextCallers = graph.query({
+        kind: "callers",
+        query: "count",
+        targetKinds: ["function"],
+      });
+      assert.equal(
+        nonCallableTextCallers.found,
+        false,
+        "text callers targets must report when only non-callable symbols match",
+      );
+      assert.equal(nonCallableTextCallers.missReason, "targetKindMismatch");
+      assert.deepEqual(nonCallableTextCallers.nodes, []);
+      assert.deepEqual(nonCallableTextCallers.edges, []);
+
       const countImpact = graph.query({
         kind: "impact",
         target: { nodeId: count.id },
