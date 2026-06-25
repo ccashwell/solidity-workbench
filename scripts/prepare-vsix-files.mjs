@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 /**
  * Copy the repo-root README, LICENSE, and CHANGELOG into the extension
- * package so `vsce package` picks them up and the VS Code Marketplace
- * listing has a populated overview, license, and changelog tab.
+ * package so `vsce package` picks them up and marketplace listings have a
+ * populated overview, license, and changelog tab.
  *
- * Run via `pnpm --filter solidity-workbench prepackage` or implicitly
- * through the `prepackage` npm lifecycle hook before `pnpm package`.
+ * Run by `packages/extension/package.json#scripts.package` before
+ * `vsce package`.
  * The copied files live in the gitignored set at
  * `packages/extension/{README.md,LICENSE,CHANGELOG.md}` so the
  * authoritative copies remain at the repo root.

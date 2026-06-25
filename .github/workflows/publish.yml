@@ -46,32 +46,7 @@ jobs:
         run: cd packages/extension && pnpm package
 
       - name: Verify VSIX contents
-        run: |
-          VERSION=$(node -p "require('./packages/extension/package.json').version")
-          VSIX="packages/extension/solidity-workbench-${VERSION}.vsix"
-          test -f "$VSIX" || {
-            echo "::error::Expected VSIX was not produced: $VSIX"
-            exit 1
-          }
-          unzip -l "$VSIX" | tee /tmp/vsix-listing.txt
-          grep -q 'extension/dist/server.js' /tmp/vsix-listing.txt
-          grep -q 'extension/dist/extension.js' /tmp/vsix-listing.txt
-          grep -q 'extension/resources/icon.png' /tmp/vsix-listing.txt
-          grep -q 'extension/README.md' /tmp/vsix-listing.txt
-          grep -q 'extension/LICENSE' /tmp/vsix-listing.txt
-          grep -q 'extension/CHANGELOG.md' /tmp/vsix-listing.txt
-          if grep -q 'extension/dist/test/' /tmp/vsix-listing.txt; then
-            echo "::error::VSIX contains dist/test/ artifacts — check .vscodeignore"
-            exit 1
-          fi
-          EXTRA_DIST_JS=$(awk '{print $4}' /tmp/vsix-listing.txt \
-            | grep -E '^extension/dist/.*\.js$' \
-            | grep -Ev '^extension/dist/(extension|server|parser-worker)\.js$' || true)
-          if [ -n "$EXTRA_DIST_JS" ]; then
-            echo "::error::VSIX contains unexpected dist JavaScript artifacts:"
-            echo "$EXTRA_DIST_JS"
-            exit 1
-          fi
+        run: pnpm verify:vsix
 
       - name: Publish to Open VSX
         env:

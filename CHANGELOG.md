@@ -132,6 +132,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- VSIX verification now lives in a shared `scripts/verify-vsix.mjs` checker,
+  and local packaging, CI, and publish workflows all verify the same exact
+  versioned artifact before upload or release.
 - Native Call Hierarchy callers now reuse the shared Project Graph relationship
   index when available, making callers/callees switching consistent with graph
   queries and avoiding the legacy workspace scanner on graph-backed targets.
