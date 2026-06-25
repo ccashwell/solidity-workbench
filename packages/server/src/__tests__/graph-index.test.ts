@@ -612,6 +612,28 @@ contract Child is Base {
       assert.ok(staleGraph.getNode(childId), "expected missing Child declarations to be rebuilt");
       assert.equal(staleGraph.getStats().relationshipIndexComplete, false);
 
+      const helperPath = path.join(tmpDir, "src/helper.sol");
+      const helperOriginalStat = fs.statSync(helperPath);
+      const helperChangedSameSize = files["src/helper.sol"].replace("helper", "unused");
+      assert.equal(
+        helperChangedSameSize.length,
+        files["src/helper.sol"].length,
+        "test fixture must keep the edited helper file the same size",
+      );
+      fs.writeFileSync(helperPath, helperChangedSameSize, "utf-8");
+      fs.utimesSync(helperPath, helperOriginalStat.atime, helperOriginalStat.mtime);
+      const sameStatChangedGraph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      assert.equal(
+        sameStatChangedGraph.restoreFromCache(cacheDir),
+        true,
+        "same-size same-mtime edits should still preserve unchanged cache entries",
+      );
+      assert.equal(
+        sameStatChangedGraph.getNode(helperContract.id),
+        undefined,
+        "same-size same-mtime source edits must drop stale cached graph entries",
+      );
+
       fs.writeFileSync(
         basePath,
         `pragma solidity ^0.8.24;

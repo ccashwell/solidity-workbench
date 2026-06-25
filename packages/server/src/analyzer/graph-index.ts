@@ -3263,8 +3263,9 @@ export class GraphIndex {
   private fileFingerprint(uri: string): string | undefined {
     try {
       const filePath = this.workspace.uriToPath(uri);
-      const stat = fs.statSync(filePath);
-      return this.hash(`${uri}\0${filePath}\0${stat.size}\0${stat.mtimeMs}`);
+      const contentHash = this.hashFileContents(filePath);
+      if (!contentHash) return undefined;
+      return this.hash(`${uri}\0${filePath}\0${contentHash}`);
     } catch {
       return undefined;
     }
@@ -3311,11 +3312,19 @@ export class GraphIndex {
   }
 
   private hashFileStat(hash: crypto.Hash, filePath: string): void {
-    try {
-      const stat = fs.statSync(filePath);
-      hash.update(`${filePath}:${stat.size}:${stat.mtimeMs}\0`);
-    } catch {
+    const contentHash = this.hashFileContents(filePath);
+    if (contentHash) {
+      hash.update(`${filePath}:sha256:${contentHash}\0`);
+    } else {
       hash.update(`${filePath}:missing\0`);
+    }
+  }
+
+  private hashFileContents(filePath: string): string | undefined {
+    try {
+      return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
+    } catch {
+      return undefined;
     }
   }
 
