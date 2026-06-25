@@ -146,7 +146,9 @@ export class HoverProvider {
     position: Position,
   ): Hover | null {
     const receiverName = receiver.simpleName ?? receiver.explicitTypeName;
-    const receiverSymbols = receiverName ? this.symbolIndex.findSymbols(receiverName) : [];
+    const receiverSymbols = receiverName
+      ? this.filterVisibleSymbols(fromUri, this.symbolIndex.findSymbols(receiverName))
+      : [];
 
     // UDVT builtins: `wrap(underlying) -> UDVT`, `unwrap(UDVT) -> underlying`.
     const udvt = receiverSymbols.find((s) => s.kind === "userDefinedValueType");

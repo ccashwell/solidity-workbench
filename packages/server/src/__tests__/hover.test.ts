@@ -813,6 +813,58 @@ contract C {
       assert.doesNotMatch(value, /unrelated/);
     });
 
+    it("does not let an unreachable test UDVT shadow an imported static receiver", () => {
+      const currentUri = "file:///w/src/UsesCurrency.sol";
+      const libUri = "file:///w/src/CurrencyLib.sol";
+      const testUri = "file:///w/test/Currency.t.sol";
+      const current = `pragma solidity ^0.8.24;
+import {Currency} from "./CurrencyLib.sol";
+
+contract UsesCurrency {
+    function f() external pure returns (uint256) {
+        return Currency.unwrap(1);
+    }
+}`;
+      const files = {
+        [testUri]: `pragma solidity ^0.8.24;
+type Currency is address;
+`,
+        [libUri]: `pragma solidity ^0.8.24;
+library Currency {
+    /// @notice Converts a currency value.
+    function unwrap(uint256 value) internal pure returns (uint256) {
+        return value;
+    }
+}
+`,
+        [currentUri]: current,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, fromFile: string) => {
+          const slash = fromFile.lastIndexOf("/");
+          const base = slash >= 0 ? fromFile.slice(0, slash + 1) : "";
+          const normalized = new URL(importPath, URI.file(base).toString()).toString();
+          return normalized in files ? URI.parse(normalized).fsPath : null;
+        },
+      } as unknown as WorkspaceManager;
+      const { doc, provider } = setupFiles(currentUri, files, workspace);
+      const lines = current.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("Currency.unwrap"));
+      const hover = provider.provideHover(doc, {
+        line: callLine,
+        character: lines[callLine].indexOf("unwrap") + 1,
+      });
+
+      assert.ok(hover, "expected hover on imported Currency.unwrap");
+      assert.ok(!Array.isArray(hover.contents) && typeof hover.contents !== "string");
+      assert.match(hover.contents.value, /function unwrap\(uint256 value\)/);
+      assert.match(hover.contents.value, /Converts a currency value/);
+      assert.match(hover.contents.value, /Defined in.*Currency/);
+      assert.doesNotMatch(hover.contents.value, /Implicit converter/);
+    });
+
     it("resolves @inheritdoc on a public constant from the interface getter", () => {
       const { doc, provider } = setup(
         "file:///w/ConstantInherit.sol",
