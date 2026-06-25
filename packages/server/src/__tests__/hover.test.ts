@@ -405,6 +405,40 @@ struct Box {
       assert.match(previewHover.contents.value, /Defined in.*IBase/);
     });
 
+    it("does not resolve dotted hovers through unimported test-only receiver types", () => {
+      const currentUri = "file:///w/src/UsesGhost.sol";
+      const current = `pragma solidity ^0.8.24;
+contract UsesGhost {
+    Ghost internal ghost;
+
+    function f() external view {
+        ghost.ping();
+    }
+}`;
+      const files = {
+        "file:///w/test/Ghost.sol": `pragma solidity ^0.8.24;
+interface Ghost {
+    function ping() external view returns (uint256);
+}
+`,
+        [currentUri]: current,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: () => null,
+      } as unknown as WorkspaceManager;
+      const { doc, provider } = setupFiles(currentUri, files, workspace);
+      const lines = current.split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("ghost.ping"));
+      const hover = provider.provideHover(doc, {
+        line,
+        character: lines[line].indexOf("ping") + 1,
+      });
+
+      assert.equal(hover, null);
+    });
+
     it("resolves using-for hovers through imported library aliases", () => {
       const libUri = "file:///w/src/DataLib.sol";
       const currentUri = "file:///w/src/UsesUsingAlias.sol";

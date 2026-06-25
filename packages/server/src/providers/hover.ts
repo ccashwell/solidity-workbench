@@ -14,7 +14,7 @@ import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
-import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
+import type { ResolvedContract, SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { URI } from "vscode-uri";
 import { readFileSync } from "node:fs";
 import {
@@ -280,8 +280,16 @@ export class HoverProvider {
     member: string,
     fromUri?: string,
   ): SolSymbol | null {
-    const resolved = this.resolver?.findMemberInInheritanceChain(receiver, member, fromUri);
-    if (resolved) return resolved;
+    if (this.resolver && fromUri) {
+      const root = this.resolveVisibleContract(receiver, fromUri);
+      if (!root) return null;
+
+      for (const entry of this.resolver.getInheritanceChainFor(root)) {
+        const resolved = this.resolver.findMemberInContract(entry, member);
+        if (resolved) return resolved;
+      }
+      return null;
+    }
 
     const chain = this.symbolIndex.getInheritanceChain(receiver);
     for (const contract of chain) {
@@ -296,15 +304,32 @@ export class HoverProvider {
     member: string,
     fromUri?: string,
   ): SolSymbol | null {
-    const resolvedContract = this.resolver?.resolveContract(receiver, fromUri);
-    if (resolvedContract) {
-      const resolved = this.resolver?.findMemberInContract(resolvedContract, member);
-      if (resolved) return resolved;
+    if (this.resolver && fromUri) {
+      const resolvedContract = this.resolveVisibleContract(receiver, fromUri);
+      return resolvedContract ? this.resolver.findMemberInContract(resolvedContract, member) : null;
     }
 
     const entry = this.symbolIndex.getContract(receiver);
     if (!entry) return null;
     return this.lookupMember(entry.contract.name, entry.contract, member);
+  }
+
+  private resolveVisibleContract(receiver: string, fromUri: string): ResolvedContract | null {
+    if (!this.resolver) return null;
+
+    const imported = this.resolver.resolveImportedSymbol(receiver, fromUri);
+    if (imported) return this.resolver.resolveContract(receiver, fromUri) ?? null;
+
+    const symbols = this.resolver.filterVisibleSymbols(
+      fromUri,
+      this.symbolIndex
+        .findSymbols(receiver)
+        .filter(
+          (sym) => sym.kind === "contract" || sym.kind === "interface" || sym.kind === "library",
+        ),
+    );
+    const sym = symbols.find((candidate) => candidate.filePath === fromUri) ?? symbols[0];
+    return sym ? (this.resolver.resolveContract(sym.name, sym.filePath) ?? null) : null;
   }
 
   /**
