@@ -81,6 +81,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Selected-node Project Graph path queries now force-index both endpoint files
   before path traversal, so valid paths are not missed in declaration-only or
   partially indexed graphs.
+- Project Graph callers and impact queries now drain queued relationship
+  indexing before traversal, and relationship progress no longer stalls on
+  queued files without parser state.
 
 ### Fixed
 

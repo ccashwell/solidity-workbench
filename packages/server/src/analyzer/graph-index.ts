@@ -417,7 +417,10 @@ export class GraphIndex {
       const uri = this.relationshipQueue.shift()!;
       this.relationshipQueuedUris.delete(uri);
       if (this.relationshipIndexedUris.has(uri)) continue;
-      if (!this.parser.get(uri)) continue;
+      if (!this.parser.get(uri)) {
+        this.relationshipIndexedUris.add(uri);
+        continue;
+      }
 
       this.indexFileRelationships(uri);
       this.relationshipIndexedUris.add(uri);
@@ -433,6 +436,14 @@ export class GraphIndex {
       complete: this.isRelationshipIndexComplete(),
       durationMs,
     };
+  }
+
+  ensureRelationshipIndexComplete(): GraphRelationshipIndexBatchResult {
+    let batch = this.indexRelationshipBatch(50, 50);
+    while (!batch.complete && this.relationshipQueue.length > 0) {
+      batch = this.indexRelationshipBatch(50, 50);
+    }
+    return batch;
   }
 
   ensureFileRelationships(uri: string): void {
@@ -725,6 +736,9 @@ export class GraphIndex {
       };
     }
     if (params.kind === "callees") this.ensureFileRelationships(target.uri);
+    if (params.kind === "callers" || params.kind === "impact") {
+      this.ensureRelationshipIndexComplete();
+    }
 
     const edgeKinds = params.edgeKinds?.length
       ? params.edgeKinds

@@ -3131,6 +3131,79 @@ contract B {
     }
   });
 
+  it("drains relationship indexing for callers queries", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-callers-test-"));
+    try {
+      const files = {
+        "src/A.sol": `pragma solidity ^0.8.24;
+import "./B.sol";
+
+contract A {
+    B internal b;
+
+    function run() external {
+        b.ping();
+    }
+}
+`,
+        "src/B.sol": `pragma solidity ^0.8.24;
+
+contract B {
+    function ping() external {}
+}
+`,
+      };
+      const uris: string[] = [];
+      const parser = new SolidityParser();
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+      const unparsedUri = URI.file(path.join(tmpDir, "src/GeneratedButUnparsed.sol")).toString();
+      uris.push(unparsedUri);
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+
+      graph.rebuildWorkspaceDeclarations();
+
+      const run = graph
+        .getNodes()
+        .find((node) => node.name === "run" && node.containerName === "A");
+      const ping = graph
+        .getNodes()
+        .find((node) => node.name === "ping" && node.containerName === "B");
+      assert.ok(run, "expected A.run declaration node");
+      assert.ok(ping, "expected B.ping declaration node");
+      assert.equal(graph.getStats().relationshipFilesIndexed, 0);
+      assert.equal(graph.getStats().relationshipFilesTotal, 3);
+
+      const callers = graph.query({
+        kind: "callers",
+        target: { nodeId: ping.id },
+        maxNodes: 20,
+      });
+
+      assert.equal(callers.found, true);
+      assert.ok(
+        callers.edges.some((edge) => edge.source === run.id && edge.target === ping.id),
+        "expected callers query to force-index all potential caller files",
+      );
+      assert.equal(callers.indexStatus?.partial, false);
+      assert.equal(graph.getStats().relationshipIndexComplete, true);
+      assert.equal(graph.getStats().relationshipFilesIndexed, 3);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("supports declaration-only rebuilds with chunked relationship indexing", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-test-"));
     try {
