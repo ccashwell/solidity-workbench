@@ -23,6 +23,10 @@ import { getConfig } from "../../config";
 // Publisher is declared in packages/extension/package.json — keep this
 // constant in sync with that publisher + name pair.
 const EXTENSION_ID = "ccashwell.solidity-workbench";
+const INTERNAL_COMMAND_ALLOWLIST = new Set([
+  "solidity-workbench.findReferencesAt",
+  "solidity-workbench.internal.projectGraphRequest",
+]);
 
 describe("Extension activation", () => {
   it("is present", () => {
@@ -75,6 +79,42 @@ describe("Extension activation", () => {
     ];
     for (const cmd of expected) {
       assert.ok(all.includes(cmd), `expected command '${cmd}' to be registered`);
+    }
+  });
+
+  it("registers every contributed Solidity Workbench command", async function () {
+    this.timeout(15_000);
+    const ext = vscode.extensions.getExtension(EXTENSION_ID);
+    assert.ok(ext);
+    if (!ext.isActive) await ext.activate();
+
+    const contributed = contributedCommands(ext.packageJSON);
+    const registered = new Set(await vscode.commands.getCommands(true));
+    for (const command of contributed) {
+      assert.ok(registered.has(command), `contributed command '${command}' is not registered`);
+    }
+  });
+
+  it("keeps menu and internal command contribution boundaries explicit", async function () {
+    this.timeout(15_000);
+    const ext = vscode.extensions.getExtension(EXTENSION_ID);
+    assert.ok(ext);
+    if (!ext.isActive) await ext.activate();
+
+    const contributed = new Set(contributedCommands(ext.packageJSON));
+    for (const command of menuCommands(ext.packageJSON)) {
+      assert.ok(contributed.has(command), `menu command '${command}' is not contributed`);
+    }
+
+    const registered = (await vscode.commands.getCommands(true)).filter((command) =>
+      command.startsWith("solidity-workbench."),
+    );
+    for (const command of registered) {
+      if (contributed.has(command)) continue;
+      assert.ok(
+        INTERNAL_COMMAND_ALLOWLIST.has(command),
+        `registered command '${command}' is neither contributed nor explicitly internal`,
+      );
     }
   });
 
@@ -156,4 +196,33 @@ function findSampleFile(rel: string): vscode.Uri {
   const folder = vscode.workspace.workspaceFolders?.[0];
   assert.ok(folder, "workspace folder must be open for these tests");
   return vscode.Uri.joinPath(folder.uri, rel);
+}
+
+function contributedCommands(packageJSON: unknown): string[] {
+  const commands = (packageJSON as { contributes?: { commands?: Array<{ command?: unknown }> } })
+    .contributes?.commands;
+  return (commands ?? [])
+    .map((entry) => entry.command)
+    .filter((command): command is string => typeof command === "string")
+    .filter((command) => command.startsWith("solidity-workbench."))
+    .sort();
+}
+
+function menuCommands(packageJSON: unknown): string[] {
+  const menus = (
+    packageJSON as {
+      contributes?: { menus?: Record<string, Array<{ command?: unknown }>> };
+    }
+  ).contributes?.menus;
+  if (!menus) return [];
+
+  const commands = new Set<string>();
+  for (const items of Object.values(menus)) {
+    for (const item of items) {
+      if (typeof item.command === "string" && item.command.startsWith("solidity-workbench.")) {
+        commands.add(item.command);
+      }
+    }
+  }
+  return [...commands].sort();
 }
