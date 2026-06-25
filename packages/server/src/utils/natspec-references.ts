@@ -12,7 +12,15 @@ export function resolveNatspecReference(
 ): SolSymbol | undefined {
   const parts = ref.split(".");
   const symbolName = parts[parts.length - 1];
-  const containerName = parts.length > 1 ? parts.slice(0, -1).join(".") : fromSymbol?.containerName;
+  let implicitContainerName = fromSymbol?.containerName;
+  if (
+    fromSymbol?.kind === "contract" ||
+    fromSymbol?.kind === "interface" ||
+    fromSymbol?.kind === "library"
+  ) {
+    implicitContainerName = fromSymbol.name;
+  }
+  const containerName = parts.length > 1 ? parts.slice(0, -1).join(".") : implicitContainerName;
 
   let candidates = symbolIndex.findSymbols(symbolName);
   if (resolver) candidates = resolver.filterVisibleSymbols(documentUri, candidates);

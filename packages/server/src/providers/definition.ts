@@ -18,7 +18,11 @@ import {
 } from "../utils/text.js";
 import { findUsingForFunction } from "../utils/using-for.js";
 import { getEnclosingContract, getEnclosingFunctionScope } from "../utils/scope.js";
-import { resolveNatspecReference, symbolDocumentUri } from "../utils/natspec-references.js";
+import {
+  isNatspecReferenceTarget,
+  resolveNatspecReference,
+  symbolDocumentUri,
+} from "../utils/natspec-references.js";
 import { readFileSync } from "node:fs";
 
 /**
@@ -291,7 +295,9 @@ export class DefinitionProvider {
     text: string,
     position: Position,
   ): Definition | null {
-    if (!this.isInsideNatspecComment(text, position)) return null;
+    const comment = this.natspecCommentRangeAtPosition(text, position);
+    if (!comment) return null;
+    const fromSymbol = this.findDocumentedSymbol(documentUri, comment.endLine);
     const line = text.split("\n")[position.line] ?? "";
     for (const match of line.matchAll(/\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\}/g)) {
       const start = match.index ?? 0;
@@ -303,6 +309,7 @@ export class DefinitionProvider {
         documentUri,
         this.symbolIndex,
         this.resolver,
+        fromSymbol,
       );
       return target ? Location.create(symbolDocumentUri(target), target.nameRange) : null;
     }
@@ -310,29 +317,65 @@ export class DefinitionProvider {
   }
 
   private isInsideNatspecComment(text: string, position: Position): boolean {
+    return this.natspecCommentRangeAtPosition(text, position) !== null;
+  }
+
+  private natspecCommentRangeAtPosition(
+    text: string,
+    position: Position,
+  ): { startLine: number; endLine: number } | null {
     const lines = text.split("\n");
     const line = lines[position.line] ?? "";
     const trimmed = line.trimStart();
-    if (trimmed.startsWith("///")) return true;
+    if (trimmed.startsWith("///")) {
+      let startLine = position.line;
+      while (startLine > 0 && (lines[startLine - 1] ?? "").trimStart().startsWith("///")) {
+        startLine--;
+      }
+      let endLine = position.line;
+      while (
+        endLine + 1 < lines.length &&
+        (lines[endLine + 1] ?? "").trimStart().startsWith("///")
+      ) {
+        endLine++;
+      }
+      return { startLine, endLine };
+    }
 
     let openLine = -1;
     for (let i = position.line; i >= 0; i--) {
       const candidate = lines[i] ?? "";
       const open = candidate.indexOf("/**");
       const close = candidate.indexOf("*/");
-      if (close >= 0 && (i < position.line || close < position.character)) return false;
+      if (close >= 0 && (i < position.line || close < position.character)) return null;
       if (open >= 0) {
         openLine = i;
         break;
       }
     }
-    if (openLine < 0) return false;
+    if (openLine < 0) return null;
 
     for (let i = openLine; i <= position.line; i++) {
       const close = (lines[i] ?? "").indexOf("*/");
-      if (close >= 0 && (i < position.line || close < position.character)) return false;
+      if (close >= 0 && (i < position.line || close < position.character)) return null;
     }
-    return true;
+
+    let endLine = position.line;
+    while (endLine < lines.length && !(lines[endLine] ?? "").includes("*/")) endLine++;
+    return { startLine: openLine, endLine: Math.min(endLine, lines.length - 1) };
+  }
+
+  private findDocumentedSymbol(uri: string, commentEndLine: number): SolSymbol | undefined {
+    return this.symbolIndex
+      .getFileSymbols(uri)
+      .filter(isNatspecReferenceTarget)
+      .filter((symbol) => symbol.range.start.line > commentEndLine)
+      .sort(
+        (a, b) =>
+          a.range.start.line - b.range.start.line ||
+          a.range.start.character - b.range.start.character ||
+          this.rangeSize(a.range) - this.rangeSize(b.range),
+      )[0];
   }
 
   private isTypeSymbol(sym: SolSymbol): boolean {
@@ -355,6 +398,12 @@ export class DefinitionProvider {
       return false;
     }
     return true;
+  }
+
+  private rangeSize(range: SourceRange): number {
+    return (
+      (range.end.line - range.start.line) * 10_000 + (range.end.character - range.start.character)
+    );
   }
 
   private resolveImportSymbolAtPosition(

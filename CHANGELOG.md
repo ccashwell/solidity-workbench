@@ -161,6 +161,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Plain-imported file-level structs now resolve through the shared symbol
   index, improving struct receiver/member typing for files that use
   `import "./Types.sol";`.
+- Unqualified braced NatSpec references on contract, interface, or library
+  documentation now prefer members of the documented type before same-name
+  visible symbols elsewhere.
 - Project Graph snapshots and search edge previews now drop edges whose source
   or target node is hidden by the current scope or absent because dependency
   declarations were not indexed.

@@ -221,6 +221,36 @@ library InventoryLib {
     );
   });
 
+  it("prefers the documented contract for unqualified braced NatSpec member links", () => {
+    const files = {
+      "src/InventoryLib.sol": `pragma solidity ^0.8.24;
+
+contract Helper {
+    function redeemClaims() external {}
+}
+
+/// @notice Claims are redeemed via {redeemClaims}.
+library InventoryLib {
+    function redeemClaims() internal {}
+}
+`,
+    };
+    const { docs, parser, idx, resolver, workspace } = setupFiles(files);
+
+    const links = new DocumentLinksProvider(parser, workspace, idx, resolver).provideDocumentLinks(
+      docs["src/InventoryLib.sol"],
+    );
+    const redeemClaims = links.find((link) => link.tooltip === "Open InventoryLib.redeemClaims");
+
+    assert.ok(redeemClaims, "expected InventoryLib.redeemClaims NatSpec document link");
+    assert.equal(redeemClaims.target, "file:///w/src/InventoryLib.sol#L9,14");
+    assert.equal(
+      links.some((link) => link.tooltip === "Open Helper.redeemClaims"),
+      false,
+      "contract-level NatSpec should not link to an earlier same-name member",
+    );
+  });
+
   it("links explicit braced NatSpec members through the imported container", () => {
     const files = {
       "test/IFoo.sol": `pragma solidity ^0.8.24;

@@ -644,6 +644,34 @@ library InventoryLib {
       assert.equal(loc.uri, "file:///w/InventoryLib.sol");
       assert.equal(loc.range.start.line, 6);
     });
+
+    it("prefers the documented contract for unqualified braced NatSpec member definitions", () => {
+      const { docs, provider } = setup({
+        "file:///w/InventoryLib.sol": `pragma solidity ^0.8.24;
+
+contract Helper {
+    function redeemClaims() external {}
+}
+
+/// Claims are redeemed via {redeemClaims}.
+library InventoryLib {
+    function redeemClaims() internal {}
+}`,
+      });
+      const document = docs["file:///w/InventoryLib.sol"];
+      const lines = document.getText().split("\n");
+      const commentLine = lines.findIndex((line) => line.includes("{redeemClaims}"));
+      const def = provider.provideDefinition(document, {
+        line: commentLine,
+        character: lines[commentLine].indexOf("redeemClaims") + 2,
+      });
+
+      assert.ok(def, "expected definition for braced NatSpec reference");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc);
+      assert.equal(loc.uri, "file:///w/InventoryLib.sol");
+      assert.equal(loc.range.start.line, 8);
+    });
   });
 
   describe("go-to-type-definition", () => {
