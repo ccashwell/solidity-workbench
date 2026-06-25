@@ -5,6 +5,7 @@ import * as path from "node:path";
 import * as vm from "node:vm";
 import * as vscode from "vscode";
 import type {
+  FileCoverage,
   InheritanceGraphResult,
   ProjectGraphResult,
   ProjectGraphStatsResult,
@@ -31,6 +32,7 @@ import {
   summarizeProjectGraphRelationshipStatus,
 } from "../../views/project-graph";
 import { InheritanceGraphPanel } from "../../views/inheritance-graph";
+import { CoverageProvider } from "../../views/coverage";
 
 /**
  * End-to-end coverage of the feature surface that landed across the
@@ -241,6 +243,82 @@ describe("Feature coverage — webview commands", () => {
     assert.match(html, /type: "reload"/);
     assert.match(html, /includeTests: state\.tests/);
     assert.match(html, /includeDependencies: state\.deps/);
+  });
+});
+
+describe("Feature coverage — coverage decorations", () => {
+  it("renders covered, uncovered, and partial branch line decorations", async function () {
+    this.timeout(30_000);
+    const uri = findSampleFile("src/Counter.sol");
+    const document = await vscode.workspace.openTextDocument(uri);
+    const provider = new CoverageProvider();
+    const internals = provider as unknown as {
+      coverageData: Map<string, FileCoverage>;
+      coveredDecoration: vscode.TextEditorDecorationType;
+      uncoveredDecoration: vscode.TextEditorDecorationType;
+      partialDecoration: vscode.TextEditorDecorationType;
+      statusBarItem: vscode.StatusBarItem;
+      updateDecorations(editor: vscode.TextEditor): void;
+    };
+    const calls: {
+      decoration: vscode.TextEditorDecorationType;
+      ranges: readonly (vscode.Range | vscode.DecorationOptions)[];
+    }[] = [];
+    const fakeEditor = {
+      document,
+      setDecorations(
+        decoration: vscode.TextEditorDecorationType,
+        ranges: readonly (vscode.Range | vscode.DecorationOptions)[],
+      ) {
+        calls.push({ decoration, ranges });
+      },
+    } as unknown as vscode.TextEditor;
+
+    try {
+      internals.coverageData = new Map<string, FileCoverage>([
+        [
+          "src/Counter.sol",
+          {
+            file: "src/Counter.sol",
+            lines: new Map([
+              [9, 1],
+              [25, 3],
+              [46, 0],
+            ]),
+            branches: [
+              { line: 25, branchId: "0/0", taken: 1 },
+              { line: 25, branchId: "0/1", taken: 0 },
+            ],
+            lineTotal: 3,
+            lineHit: 2,
+            branchTotal: 2,
+            branchHit: 1,
+            fnTotal: 0,
+            fnHit: 0,
+          },
+        ],
+      ]);
+
+      internals.updateDecorations(fakeEditor);
+
+      const linesFor = (decoration: vscode.TextEditorDecorationType): number[] => {
+        const call = calls.find((entry) => entry.decoration === decoration);
+        assert.ok(call, "expected decoration call");
+        return call.ranges.map((entry) => {
+          const range = entry instanceof vscode.Range ? entry : entry.range;
+          return range.start.line + 1;
+        });
+      };
+
+      assert.deepEqual(linesFor(internals.coveredDecoration), [9]);
+      assert.deepEqual(linesFor(internals.partialDecoration), [25]);
+      assert.deepEqual(linesFor(internals.uncoveredDecoration), [46]);
+    } finally {
+      internals.coveredDecoration.dispose();
+      internals.uncoveredDecoration.dispose();
+      internals.partialDecoration.dispose();
+      internals.statusBarItem.dispose();
+    }
   });
 });
 
