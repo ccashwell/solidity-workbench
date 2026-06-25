@@ -291,6 +291,7 @@ export class SolidityParser {
     const freeFunctions: FunctionDefinition[] = [];
     const structs: StructDefinition[] = [];
     const enums: EnumDefinition[] = [];
+    const events: EventDefinition[] = [];
     const errors: ErrorDefinition[] = [];
     const fileConstants: FileConstantDefinition[] = [];
     const usingFor: UsingForDirective[] = [];
@@ -333,6 +334,10 @@ export class SolidityParser {
           enums.push(this.mapEnum(node));
           break;
 
+        case "EventDefinition":
+          events.push(this.mapEvent(node));
+          break;
+
         case "CustomErrorType":
         case "CustomErrorDefinition":
           errors.push(this.mapError(node));
@@ -373,6 +378,7 @@ export class SolidityParser {
       freeFunctions,
       structs,
       enums,
+      events,
       errors,
       userDefinedValueTypes,
       fileConstants,
@@ -877,6 +883,7 @@ export class SolidityParser {
       freeFunctions: [],
       structs: [],
       enums: [],
+      events: [],
       errors: [],
       userDefinedValueTypes: [],
       fileConstants: [],

@@ -623,7 +623,7 @@ export class HoverProvider {
 
     const natspec = resolveEffectiveNatspec(sym, this.symbolIndex);
     if (natspec) {
-      parts.push(this.formatNatspec(natspec));
+      parts.push(this.formatNatspec(natspec, sym));
     }
 
     // Container info
@@ -681,34 +681,91 @@ export class HoverProvider {
     }
   }
 
-  private formatNatspec(natspec: NatspecComment): string {
+  private formatNatspec(natspec: NatspecComment, fromSymbol?: SolSymbol): string {
     const parts: string[] = [];
 
-    if (natspec.notice) parts.push(natspec.notice);
-    if (natspec.dev) parts.push(`\n**Dev:** ${natspec.dev}`);
+    if (natspec.notice) parts.push(this.linkNatspecReferences(natspec.notice, fromSymbol));
+    if (natspec.dev) {
+      parts.push(`\n**Dev:** ${this.linkNatspecReferences(natspec.dev, fromSymbol)}`);
+    }
 
     if (natspec.params && Object.keys(natspec.params).length > 0) {
       parts.push("\n**Parameters:**");
       for (const [name, desc] of Object.entries(natspec.params)) {
-        parts.push(`- \`${name}\` — ${desc}`);
+        parts.push(`- \`${name}\` — ${this.linkNatspecReferences(desc, fromSymbol)}`);
       }
     }
 
     if (natspec.returns && Object.keys(natspec.returns).length > 0) {
       parts.push("\n**Returns:**");
       for (const [name, desc] of Object.entries(natspec.returns)) {
-        parts.push(`- \`${name}\` — ${desc}`);
+        parts.push(`- \`${name}\` — ${this.linkNatspecReferences(desc, fromSymbol)}`);
       }
     }
 
     if (natspec.custom && Object.keys(natspec.custom).length > 0) {
       for (const [tag, desc] of Object.entries(natspec.custom)) {
         if (tag === "inheritdoc") continue;
-        parts.push(`\n**${this.formatCustomNatspecLabel(tag)}:** ${desc}`);
+        parts.push(
+          `\n**${this.formatCustomNatspecLabel(tag)}:** ${this.linkNatspecReferences(desc, fromSymbol)}`,
+        );
       }
     }
 
     return parts.join("\n");
+  }
+
+  private linkNatspecReferences(text: string, fromSymbol?: SolSymbol): string {
+    return text.replace(/\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\}/g, (match, ref) => {
+      const target = this.resolveNatspecReference(ref, fromSymbol);
+      if (!target) return match;
+      return `[${ref}](${this.symbolMarkdownUri(target)})`;
+    });
+  }
+
+  private resolveNatspecReference(ref: string, fromSymbol?: SolSymbol): SolSymbol | undefined {
+    const parts = ref.split(".");
+    const symbolName = parts[parts.length - 1];
+    const containerName =
+      parts.length > 1 ? parts.slice(0, -1).join(".") : fromSymbol?.containerName;
+    let candidates = this.symbolIndex.findSymbols(symbolName);
+    if (fromSymbol) candidates = this.filterVisibleSymbols(fromSymbol.filePath, candidates);
+    candidates = candidates.filter((candidate) => this.isNatspecReferenceTarget(candidate));
+    if (candidates.length === 0) return undefined;
+
+    const sameContainer = containerName
+      ? (candidates.find(
+          (candidate) =>
+            candidate.containerName === containerName &&
+            candidate.filePath === fromSymbol?.filePath,
+        ) ?? candidates.find((candidate) => candidate.containerName === containerName))
+      : undefined;
+    if (sameContainer) return sameContainer;
+
+    return (
+      candidates.find((candidate) => candidate.filePath === fromSymbol?.filePath) ?? candidates[0]
+    );
+  }
+
+  private isNatspecReferenceTarget(sym: SolSymbol): boolean {
+    return (
+      sym.kind === "contract" ||
+      sym.kind === "interface" ||
+      sym.kind === "library" ||
+      sym.kind === "function" ||
+      sym.kind === "modifier" ||
+      sym.kind === "event" ||
+      sym.kind === "error" ||
+      sym.kind === "struct" ||
+      sym.kind === "enum" ||
+      sym.kind === "userDefinedValueType"
+    );
+  }
+
+  private symbolMarkdownUri(sym: SolSymbol): string {
+    const line = sym.nameRange.start.line + 1;
+    const character = sym.nameRange.start.character + 1;
+    return `${sym.filePath}#L${line},${character}`;
   }
 
   private formatCustomNatspecLabel(tag: string): string {

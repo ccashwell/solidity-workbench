@@ -71,6 +71,16 @@ export class DocumentSymbolProvider {
       });
     }
 
+    for (const event of result.sourceUnit.events) {
+      symbols.push({
+        name: event.name,
+        detail: "event",
+        kind: SymbolKind.Event,
+        range: event.range,
+        selectionRange: event.nameRange,
+      });
+    }
+
     for (const err of result.sourceUnit.errors) {
       symbols.push({
         name: err.name,

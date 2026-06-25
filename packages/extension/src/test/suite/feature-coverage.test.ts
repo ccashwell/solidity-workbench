@@ -201,6 +201,42 @@ describe("Feature coverage — webview commands", () => {
   });
 });
 
+describe("Feature coverage — Solidity grammar", () => {
+  it("tokenizes multi-line global using directives", () => {
+    const grammarPath = path.resolve(__dirname, "../../../syntaxes/solidity.tmLanguage.json");
+    const grammar = JSON.parse(fs.readFileSync(grammarPath, "utf-8")) as {
+      repository?: {
+        "using-directive"?: {
+          patterns?: Array<{
+            begin?: string;
+            end?: string;
+            beginCaptures?: Record<string, { name?: string }>;
+            patterns?: Array<{ match?: string; name?: string }>;
+          }>;
+        };
+      };
+    };
+    const usingRule = grammar.repository?.["using-directive"]?.patterns?.[0];
+
+    assert.equal(usingRule?.begin, "\\b(using)\\b");
+    assert.equal(usingRule?.end, ";");
+    assert.equal(usingRule?.beginCaptures?.["1"]?.name, "keyword.other.using.solidity");
+    assert.ok(
+      usingRule?.patterns?.some(
+        (pattern) => pattern.match === "\\bfor\\b" && pattern.name === "keyword.other.for.solidity",
+      ),
+      "expected `for` keyword capture inside multi-line using directives",
+    );
+    assert.ok(
+      usingRule?.patterns?.some(
+        (pattern) =>
+          pattern.match === "\\bglobal\\b" && pattern.name === "keyword.other.global.solidity",
+      ),
+      "expected `global` keyword capture inside multi-line using directives",
+    );
+  });
+});
+
 describe("Feature coverage — project graph export", () => {
   const sampleGraph: ProjectGraphResult = {
     focusId: "file:///workspace/src/Vault.sol#Vault:function:deposit:4:13",
@@ -534,9 +570,11 @@ describe("Feature coverage — project graph export", () => {
     assert.match(html, /id="serverSearch"/);
     assert.match(html, /id="serverQueryKind"/);
     assert.match(html, /id="serverQuery"/);
+    assert.match(html, /id="includeTests"/);
     assert.match(html, /id="resultBanner"/);
     assert.match(html, /type: "searchGraph"/);
     assert.match(html, /type: "queryGraph"/);
+    assert.match(html, /includeTests/);
     assert.match(html, /resultDiagnosticsText/);
     assert.match(html, /message\.resultDiagnostics/);
     assert.match(html, /message\.clearQuery === true/);
@@ -593,12 +631,20 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(runtime.element("stats").textContent, "2/2 rendered nodes · 1/2 edges");
 
     runtime.change("nodeKind", "all");
+    runtime.change("includeTests", true);
+    assert.equal(runtime.lastState()?.includeTests, true);
+    assert.deepEqual(runtime.lastPostedMessage(), { type: "loadCursor", includeTests: true });
+
     runtime.input("search", "helper");
     assert.equal(runtime.lastState()?.query, "helper");
     assert.equal(runtime.element("stats").textContent, "2/2 rendered nodes · 1/2 edges");
 
     runtime.click("serverSearch");
-    assert.deepEqual(runtime.lastPostedMessage(), { type: "searchGraph", query: "helper" });
+    assert.deepEqual(runtime.lastPostedMessage(), {
+      type: "searchGraph",
+      query: "helper",
+      includeTests: true,
+    });
     assert.equal(runtime.element("stats").textContent, "Searching project graph…");
   });
 
@@ -1224,7 +1270,7 @@ function makeRuntimeProjectGraph(count: number): ProjectGraphResult {
 interface ProjectGraphWebviewRuntime {
   element(id: string): FakeElement;
   input(id: string, value: string): void;
-  change(id: string, value: string): void;
+  change(id: string, value: string | boolean): void;
   click(id: string): void;
   lastState(): RuntimeState | undefined;
   lastPostedMessage(): RuntimeMessage | undefined;
@@ -1240,6 +1286,7 @@ interface RuntimeState {
   pathMode?: boolean;
   renderedNodeLimit?: number;
   visibleEdges?: string[];
+  includeTests?: boolean;
 }
 
 type RuntimeMessage = Record<string, unknown>;
@@ -1277,7 +1324,8 @@ function runProjectGraphWebviewScript(html: string): ProjectGraphWebviewRuntime 
     },
     change(id, value) {
       const element = document.getElementById(id);
-      element.value = value;
+      if (typeof value === "boolean") element.checked = value;
+      else element.value = value;
       element.dispatch("change");
     },
     click(id) {

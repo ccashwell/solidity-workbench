@@ -16,6 +16,8 @@ export interface SoliditySourceUnit {
   structs: StructDefinition[];
   /** File-level enums (Solidity >=0.8.0) */
   enums: EnumDefinition[];
+  /** File-level events */
+  events: EventDefinition[];
   /** Custom errors at file level */
   errors: ErrorDefinition[];
   /** User-defined value types */

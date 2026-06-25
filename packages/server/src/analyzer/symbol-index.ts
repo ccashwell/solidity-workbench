@@ -360,6 +360,18 @@ export class SymbolIndex {
       this.indexEnum(newSymbols, uri, enumDef);
     }
 
+    // File-level events
+    for (const event of su.events) {
+      newSymbols.push({
+        name: event.name,
+        kind: "event",
+        filePath: uri,
+        range: event.range,
+        nameRange: event.nameRange,
+        natspec: event.natspec,
+      });
+    }
+
     // File-level custom errors
     for (const err of su.errors) {
       newSymbols.push({

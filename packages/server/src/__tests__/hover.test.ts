@@ -167,6 +167,28 @@ contract Security {
       assert.doesNotMatch(value, /Handles sensitive work\..*@custom:security-contact/s);
     });
 
+    it("links braced NatSpec references to visible workspace symbols", () => {
+      const uri = "file:///w/InventoryLib.sol";
+      const { doc, provider } = setup(
+        uri,
+        `pragma solidity ^0.8.24;
+
+contract PoolVault {}
+
+/// @notice Accounting helper for {PoolVault}; claims are redeemed via {redeemClaims}.
+library InventoryLib {
+    function redeemClaims() internal {}
+}`,
+      );
+
+      const h = provider.provideHover(doc, { line: 5, character: 9 });
+      assert.ok(h, "expected hover on library declaration");
+      const value = hoverValue(h);
+      assert.match(value, /\[PoolVault\]\(file:\/\/\/w\/InventoryLib\.sol#L3,10\)/);
+      assert.match(value, /\[redeemClaims\]\(file:\/\/\/w\/InventoryLib\.sol#L7,14\)/);
+      assert.doesNotMatch(value, /\{redeemClaims\}/);
+    });
+
     it("shows `contract C` for a contract-name hover", () => {
       const { doc, provider } = setup(
         "file:///w/D.sol",

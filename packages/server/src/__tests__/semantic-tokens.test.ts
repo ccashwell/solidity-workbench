@@ -358,6 +358,38 @@ contract C {
     });
   });
 
+  describe("using directives", () => {
+    it("tokenizes keywords in multi-line global using declarations", () => {
+      const code = `type Inventory is uint256;
+function vaultOf(Inventory self) pure returns (uint256) { return Inventory.unwrap(self); }
+using {
+    vaultOf
+} for Inventory global;`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+      const lines = code.split("\n");
+
+      const expectKeyword = (line: number, word: string) => {
+        const char = lines[line].indexOf(word);
+        assert.notEqual(char, -1, `test fixture missing ${word}`);
+        assert.ok(
+          tokens.some(
+            (token) =>
+              token.line === line &&
+              token.char === char &&
+              token.length === word.length &&
+              token.type === "keyword",
+          ),
+          `expected ${word} to be tokenized as a keyword; got ${JSON.stringify(tokens)}`,
+        );
+      };
+
+      expectKeyword(2, "using");
+      expectKeyword(4, "for");
+      expectKeyword(4, "global");
+    });
+  });
+
   describe("range request", () => {
     it("returns fewer tokens when given a sub-range that excludes declarations", () => {
       const code = `contract C {

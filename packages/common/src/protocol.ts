@@ -237,6 +237,8 @@ export interface GetProjectGraphParams {
   edgeKinds?: ProjectGraphEdgeKind[];
   /** Optional node cap for interactive views. Omit for full export/report payloads. */
   maxNodes?: number;
+  /** Include test files and contracts that extend Foundry's Test base. Defaults to false. */
+  includeTests?: boolean;
 }
 
 /** Request a focused project graph neighborhood around a symbol or source position. */
@@ -259,6 +261,8 @@ export interface GetProjectGraphNeighborhoodParams {
   maxNodes?: number;
   /** Include containing declarations for context. Defaults to true. */
   includeContainers?: boolean;
+  /** Include test files and contracts that extend Foundry's Test base. Defaults to false. */
+  includeTests?: boolean;
 }
 
 /** Request the shortest graph path between two nodes or source positions. */
@@ -282,6 +286,8 @@ export interface GetProjectGraphPathParams {
   edgeKinds?: ProjectGraphEdgeKind[];
   /** Maximum hops to search. Defaults to 16. */
   maxDepth?: number;
+  /** Include test files and contracts that extend Foundry's Test base. Defaults to false. */
+  includeTests?: boolean;
 }
 
 export interface ProjectGraphNode {
@@ -349,6 +355,8 @@ export interface SearchProjectGraphParams {
   maxResults?: number;
   /** Maximum adjacent edges per matched node. Defaults to 32. */
   maxEdgesPerNode?: number;
+  /** Include test files and contracts that extend Foundry's Test base. Defaults to false. */
+  includeTests?: boolean;
 }
 
 export interface ProjectGraphSearchMatch {
@@ -457,6 +465,8 @@ export interface QueryProjectGraphParams {
   maxNodes?: number;
   /** Include containing declarations for context. Defaults to true. */
   includeContainers?: boolean;
+  /** Include test files and contracts that extend Foundry's Test base. Defaults to false. */
+  includeTests?: boolean;
 }
 
 export interface ProjectGraphQueryResult extends ProjectGraphResult {

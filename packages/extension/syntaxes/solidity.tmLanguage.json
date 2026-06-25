@@ -259,13 +259,30 @@
       "patterns": [
         {
           "name": "meta.using.solidity",
-          "match": "\\b(using)\\s+(\\w+)\\s+(for)\\s+(\\*|\\w+)",
-          "captures": {
-            "1": { "name": "keyword.other.using.solidity" },
-            "2": { "name": "entity.name.type.library.solidity" },
-            "3": { "name": "keyword.other.for.solidity" },
-            "4": { "name": "support.type.solidity" }
-          }
+          "begin": "\\b(using)\\b",
+          "end": ";",
+          "beginCaptures": {
+            "1": { "name": "keyword.other.using.solidity" }
+          },
+          "patterns": [
+            {
+              "name": "keyword.other.for.solidity",
+              "match": "\\bfor\\b"
+            },
+            {
+              "name": "keyword.other.global.solidity",
+              "match": "\\bglobal\\b"
+            },
+            {
+              "name": "entity.name.type.library.solidity",
+              "match": "\\b[A-Z]\\w*\\b"
+            },
+            {
+              "name": "entity.name.function.solidity",
+              "match": "\\b[a-zA-Z_$][\\w$]*\\b(?=\\s*(?:,|\\}))"
+            },
+            { "include": "#types" }
+          ]
         }
       ]
     },

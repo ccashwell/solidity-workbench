@@ -527,6 +527,10 @@ export class GraphIndex {
       this.indexEnum(uri, fileNode.id, enumDef);
     }
 
+    for (const event of result.sourceUnit.events) {
+      this.indexEvent(uri, fileNode.id, undefined, event);
+    }
+
     for (const udvt of result.sourceUnit.userDefinedValueTypes) {
       this.indexUserDefinedValueType(uri, fileNode.id, udvt);
     }
@@ -652,10 +656,16 @@ export class GraphIndex {
     return kind ? edges.filter((edge) => edge.kind === kind) : edges.slice();
   }
 
-  toProjectGraph(edgeKinds?: ProjectGraphEdgeKind[], maxNodes?: number): ProjectGraphResult {
+  toProjectGraph(
+    edgeKinds?: ProjectGraphEdgeKind[],
+    maxNodes?: number,
+    includeTests = false,
+  ): ProjectGraphResult {
     const allowed = edgeKinds?.length ? new Set<ProjectGraphEdgeKind>(edgeKinds) : null;
-    let nodes = this.getNodes();
+    const excluded = this.testGraphNodeIds(includeTests);
+    let nodes = this.getNodes().filter((node) => !excluded.has(node.id));
     let edges = allowed ? this.edges.filter((edge) => allowed.has(edge.kind)) : this.edges;
+    edges = edges.filter((edge) => !excluded.has(edge.source) && !excluded.has(edge.target));
     const limit = maxNodes === undefined ? undefined : Math.max(1, Math.min(maxNodes, 10_000));
     let truncated = false;
     if (limit !== undefined && nodes.length > limit) {
@@ -684,6 +694,7 @@ export class GraphIndex {
 
     const query = normalizeSearchText(rawQuery);
     const allowedKinds = params.kinds?.length ? new Set<ProjectGraphNodeKind>(params.kinds) : null;
+    const excluded = this.testGraphNodeIds(params.includeTests ?? false);
     const maxResults = Math.max(1, Math.min(params.maxResults ?? 50, 500));
     const maxEdgesPerNode = Math.max(0, Math.min(params.maxEdgesPerNode ?? 32, 250));
     const edgeKinds = params.edgeKinds?.length
@@ -692,6 +703,7 @@ export class GraphIndex {
 
     const ranked: ProjectGraphSearchMatch[] = [];
     for (const node of this.nodes.values()) {
+      if (excluded.has(node.id)) continue;
       if (allowedKinds && !allowedKinds.has(node.kind)) continue;
       const match = scoreGraphNodeSearch(node, query);
       if (!match) continue;
@@ -718,7 +730,7 @@ export class GraphIndex {
           match.node.id,
           params.edgeDirection ?? "both",
           edgeKinds,
-        );
+        ).filter((edge) => !excluded.has(edge.source) && !excluded.has(edge.target));
         match.edges = adjacent.slice(0, maxEdgesPerNode);
         const related = new Map<string, SolidityGraphNode>();
         for (const edge of match.edges) {
@@ -744,6 +756,8 @@ export class GraphIndex {
   query(params: QueryProjectGraphParams): ProjectGraphQueryResult {
     const resolvedTarget = this.resolveGraphQueryTarget(params);
     const target = resolvedTarget.target;
+    const includeTests = params.includeTests ?? false;
+    const excluded = this.testGraphNodeIds(includeTests);
     if (!target) {
       return {
         nodes: [],
@@ -752,6 +766,18 @@ export class GraphIndex {
         query: params.query,
         found: false,
         missReason: resolvedTarget.missReason,
+        indexStatus: this.graphIndexStatus(),
+        edgeQuality: this.summarizeEdgeQuality([]),
+      };
+    }
+    if (excluded.has(target.id)) {
+      return {
+        nodes: [],
+        edges: [],
+        kind: params.kind,
+        query: params.query,
+        found: false,
+        missReason: "targetNotFound",
         indexStatus: this.graphIndexStatus(),
         edgeQuality: this.summarizeEdgeQuality([]),
       };
@@ -771,6 +797,7 @@ export class GraphIndex {
       edgeKinds,
       maxNodes: params.maxNodes,
       includeContainers: params.includeContainers,
+      includeTests,
     });
 
     return {
@@ -787,6 +814,9 @@ export class GraphIndex {
   toNeighborhood(params: GetProjectGraphNeighborhoodParams): ProjectGraphResult {
     const root = this.resolveNeighborhoodRoot(params);
     if (!root) return { nodes: [], edges: [] };
+
+    const excluded = this.testGraphNodeIds(params.includeTests ?? false);
+    if (excluded.has(root.id)) return { nodes: [], edges: [] };
 
     const depth = Math.max(0, Math.min(params.depth ?? 2, 8));
     const maxNodes = Math.max(1, Math.min(params.maxNodes ?? 240, 2_000));
@@ -811,7 +841,7 @@ export class GraphIndex {
         const edges = this.connectedEdges(nodeId, direction, allowedKinds);
         for (const edge of edges) {
           const other = edge.source === nodeId ? edge.target : edge.source;
-          if (!this.nodes.has(other) || included.has(other)) continue;
+          if (!this.nodes.has(other) || included.has(other) || excluded.has(other)) continue;
           if (included.size >= maxNodes) {
             truncated = true;
             continue;
@@ -827,6 +857,7 @@ export class GraphIndex {
       for (const nodeId of Array.from(included)) {
         let current = this.nodes.get(nodeId);
         while (current?.containerId && this.nodes.has(current.containerId)) {
+          if (excluded.has(current.containerId)) break;
           if (included.size >= maxNodes) {
             truncated = true;
             break;
@@ -841,6 +872,8 @@ export class GraphIndex {
       (edge) =>
         included.has(edge.source) &&
         included.has(edge.target) &&
+        !excluded.has(edge.source) &&
+        !excluded.has(edge.target) &&
         (!allowedKinds || allowedKinds.has(edge.kind)),
     );
     return {
@@ -857,6 +890,10 @@ export class GraphIndex {
     const from = this.resolveGraphEndpoint(params.from);
     const to = this.resolveGraphEndpoint(params.to);
     if (!from || !to) return { nodes: [], edges: [], fromId: from?.id, toId: to?.id, found: false };
+    const excluded = this.testGraphNodeIds(params.includeTests ?? false);
+    if (excluded.has(from.id) || excluded.has(to.id)) {
+      return { nodes: [], edges: [], fromId: from.id, toId: to.id, found: false };
+    }
     this.ensureFileRelationships(from.uri);
     this.ensureFileRelationships(to.uri);
     if (from.id === to.id) {
@@ -891,7 +928,7 @@ export class GraphIndex {
 
       for (const edge of this.connectedEdges(current.nodeId, direction, allowedKinds)) {
         const next = edge.source === current.nodeId ? edge.target : edge.source;
-        if (!this.nodes.has(next) || visited.has(next)) continue;
+        if (!this.nodes.has(next) || visited.has(next) || excluded.has(next)) continue;
         const path = [...current.path, edge];
         if (next === to.id) {
           return this.pathResult(from.id, to.id, path);
@@ -1156,12 +1193,15 @@ export class GraphIndex {
     target?: SolidityGraphNode;
     missReason: ProjectGraphQueryMissReason;
   } {
+    const includeTests = params.includeTests ?? false;
+    const excluded = this.testGraphNodeIds(includeTests);
     const allowedKinds = params.targetKinds?.length
       ? new Set<ProjectGraphNodeKind>(params.targetKinds)
       : null;
     if (params.target) {
       const target = this.resolveGraphEndpoint(params.target);
       if (!target) return { missReason: "targetNotFound" };
+      if (excluded.has(target.id)) return { missReason: "targetNotFound" };
       return this.isAllowedGraphQueryTarget(params.kind, target, allowedKinds)
         ? { target, missReason: "targetNotFound" }
         : { missReason: "targetKindMismatch" };
@@ -1173,7 +1213,9 @@ export class GraphIndex {
     if (signatureQuery) {
       const signatureMatches = this.findCallableSignatureMatches(signatureQuery);
       const target = signatureMatches.find((node) =>
-        this.isAllowedGraphQueryTarget(params.kind, node, allowedKinds),
+        excluded.has(node.id)
+          ? false
+          : this.isAllowedGraphQueryTarget(params.kind, node, allowedKinds),
       );
       if (target) return { target, missReason: "targetNotFound" };
       return signatureMatches.length > 0
@@ -1185,12 +1227,13 @@ export class GraphIndex {
       query,
       kinds: params.targetKinds,
       maxResults: 500,
+      includeTests,
     }).matches.find((match) =>
       this.isAllowedGraphQueryTarget(params.kind, match.node, allowedKinds),
     )?.node;
     if (target) return { target, missReason: "targetNotFound" };
     const mismatchedTarget = params.targetKinds?.length
-      ? this.search({ query, maxResults: 1 }).matches[0]?.node
+      ? this.search({ query, maxResults: 1, includeTests }).matches[0]?.node
       : undefined;
     return mismatchedTarget
       ? { missReason: "targetKindMismatch" }
@@ -1294,6 +1337,81 @@ export class GraphIndex {
         a.qualifiedName.localeCompare(b.qualifiedName)
       );
     });
+  }
+
+  private testGraphNodeIds(includeTests: boolean): Set<string> {
+    const excluded = new Set<string>();
+    if (includeTests) return excluded;
+
+    for (const node of this.nodes.values()) {
+      if (node.tier === "tests") excluded.add(node.id);
+    }
+
+    let changed = true;
+    while (changed) {
+      changed = false;
+
+      for (const node of this.nodes.values()) {
+        if (excluded.has(node.id)) continue;
+        if (!this.isContractLikeNode(node)) continue;
+        if (this.extendsFoundryTest(node.id, excluded)) {
+          excluded.add(node.id);
+          changed = true;
+        }
+      }
+
+      for (const node of this.nodes.values()) {
+        if (excluded.has(node.id) || node.name !== "Test" || !this.isContractLikeNode(node)) {
+          continue;
+        }
+        const inheritedByExcluded = (this.edgesByTarget.get(node.id) ?? []).some(
+          (edge) => edge.kind === "inherits" && excluded.has(edge.source),
+        );
+        if (inheritedByExcluded) {
+          excluded.add(node.id);
+          changed = true;
+        }
+      }
+
+      for (const node of this.nodes.values()) {
+        if (excluded.has(node.id)) continue;
+        if (node.containerId && excluded.has(node.containerId)) {
+          excluded.add(node.id);
+          changed = true;
+        }
+      }
+
+      for (const node of this.nodes.values()) {
+        if (excluded.has(node.id) || node.kind !== "file") continue;
+        const contained = (this.edgesBySource.get(node.id) ?? [])
+          .filter((edge) => edge.kind === "contains")
+          .map((edge) => edge.target)
+          .filter((targetId) => this.nodes.get(targetId)?.kind !== "file");
+        if (contained.length > 0 && contained.every((targetId) => excluded.has(targetId))) {
+          excluded.add(node.id);
+          changed = true;
+        }
+      }
+    }
+
+    return excluded;
+  }
+
+  private isContractLikeNode(node: SolidityGraphNode): boolean {
+    return node.kind === "contract" || node.kind === "interface" || node.kind === "library";
+  }
+
+  private extendsFoundryTest(nodeId: string, excluded: Set<string>): boolean {
+    for (const edge of this.edgesBySource.get(nodeId) ?? []) {
+      if (edge.kind !== "inherits") continue;
+      const baseName = typeof edge.metadata?.baseName === "string" ? edge.metadata.baseName : "";
+      const baseLeaf = baseName.split(".").pop();
+      if (baseLeaf === "Test") return true;
+      if (excluded.has(edge.target)) return true;
+      const target = this.nodes.get(edge.target);
+      if (target?.name === "Test") return true;
+    }
+    return false;
   }
 
   private findInnermostNodeAtPosition(
@@ -1689,7 +1807,7 @@ export class GraphIndex {
   private indexEvent(
     uri: string,
     parentId: string,
-    containerName: string,
+    containerName: string | undefined,
     event: EventDefinition,
   ): void {
     const node = this.memberNode(uri, parentId, "event", event.name, event.range, event.nameRange, {

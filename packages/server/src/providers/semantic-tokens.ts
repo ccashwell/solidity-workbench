@@ -100,12 +100,18 @@ export class SemanticTokensProvider {
         case "FunctionDefinition":
           this.emitFunction(node, lines, tokens);
           break;
+        case "EventDefinition":
+          this.emitEvent(node, lines, tokens);
+          break;
         case "CustomErrorDefinition":
         case "CustomErrorType":
           this.emitError(node, lines, tokens);
           break;
         case "TypeDefinition":
           this.emitUdvt(node, lines, tokens);
+          break;
+        case "UsingForDeclaration":
+          this.emitUsingForDirective(node, lines, tokens);
           break;
       }
     }
@@ -189,6 +195,28 @@ export class SemanticTokensProvider {
         case "TypeDefinition":
           this.emitUdvt(sub, lines, tokens);
           break;
+        case "UsingForDeclaration":
+          this.emitUsingForDirective(sub, lines, tokens);
+          break;
+      }
+    }
+  }
+
+  private emitUsingForDirective(node: RawNode, lines: string[], tokens: TokenInfo[]): void {
+    if (!node.loc) return;
+    for (let line = node.loc.start.line - 1; line <= node.loc.end.line - 1; line++) {
+      const text = lines[line] ?? "";
+      const start = line === node.loc.start.line - 1 ? node.loc.start.column : 0;
+      const end = line === node.loc.end.line - 1 ? node.loc.end.column : text.length;
+      const segment = text.slice(start, end);
+      for (const match of segment.matchAll(/\b(using|for|global)\b/g)) {
+        tokens.push({
+          line,
+          char: start + (match.index ?? 0),
+          length: match[1].length,
+          type: "keyword",
+          modifiers: [],
+        });
       }
     }
   }

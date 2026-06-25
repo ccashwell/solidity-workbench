@@ -665,6 +665,115 @@ contract Base {
     }
   });
 
+  it("indexes file-level event declarations", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-file-event-test-"));
+    try {
+      const filePath = path.join(tmpDir, "src/Events.sol");
+      const contents = `pragma solidity ^0.8.24;
+
+event FileClaimed(address indexed account, uint256 amount);
+`;
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, contents, "utf-8");
+      const uri = URI.file(filePath).toString();
+      const parser = new SolidityParser();
+      parser.parse(uri, contents);
+      const workspace = makeWorkspace(tmpDir, [uri]);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+
+      graph.rebuildWorkspace();
+
+      const event = graph
+        .getNodes()
+        .find((node) => node.kind === "event" && node.name === "FileClaimed");
+      assert.ok(event, "expected file-level event node");
+      assert.equal(event.containerName, undefined);
+      assert.ok(
+        graph.getOutgoingEdges(`file:${uri}`, "contains").some((edge) => edge.target === event.id),
+        "expected file node to contain the file-level event",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes test files and Foundry Test descendants unless requested", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-include-tests-"));
+    try {
+      const files = {
+        "src/Prod.sol": `pragma solidity ^0.8.24;
+contract Prod { function run() external {} }
+`,
+        "src/SourceHarness.sol": `pragma solidity ^0.8.24;
+contract Test {}
+contract SourceHarness is Test { function test_run() external {} }
+`,
+        "test/Prod.t.sol": `pragma solidity ^0.8.24;
+contract ProdTest { function test_Run() external {} }
+`,
+      };
+      const uris: string[] = [];
+      const parser = new SolidityParser();
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+
+      graph.rebuildWorkspace();
+
+      const defaultGraph = graph.toProjectGraph();
+      assert.ok(defaultGraph.nodes.some((node) => node.name === "Prod"));
+      assert.ok(!defaultGraph.nodes.some((node) => node.name === "ProdTest"));
+      assert.ok(!defaultGraph.nodes.some((node) => node.name === "SourceHarness"));
+      assert.ok(!defaultGraph.nodes.some((node) => node.name === "test_run"));
+
+      const withTests = graph.toProjectGraph(undefined, undefined, true);
+      assert.ok(withTests.nodes.some((node) => node.name === "ProdTest"));
+      assert.ok(withTests.nodes.some((node) => node.name === "SourceHarness"));
+      assert.ok(withTests.nodes.some((node) => node.name === "test_run"));
+
+      assert.equal(
+        graph.search({ query: "ProdTest" }).matches.length,
+        0,
+        "default graph search should exclude test files",
+      );
+      assert.equal(
+        graph.search({ query: "SourceHarness" }).matches.length,
+        0,
+        "default graph search should exclude Foundry Test descendants outside test/",
+      );
+      assert.equal(
+        graph.search({ query: "ProdTest", includeTests: true }).matches[0]?.node.name,
+        "ProdTest",
+        "includeTests should make test-file nodes searchable",
+      );
+      assert.equal(
+        graph.search({ query: "SourceHarness", includeTests: true }).matches[0]?.node.name,
+        "SourceHarness",
+        "includeTests should make Foundry Test descendants searchable",
+      );
+      assert.equal(
+        graph.query({ kind: "callees", query: "test_run", includeTests: true }).found,
+        true,
+        "includeTests should propagate through graph query target resolution",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("resolves typed receiver calls without unrelated same-name contamination", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-receiver-test-"));
     try {

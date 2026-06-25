@@ -513,6 +513,24 @@ contract C {
     });
   });
 
+  describe("file-level events", () => {
+    it("parses file-level events", () => {
+      const result = parser.parse(
+        "test.sol",
+        `
+pragma solidity ^0.8.24;
+
+event Claimed(address indexed account, uint256 amount);
+`,
+      );
+
+      assert.equal(result.sourceUnit.events.length, 1);
+      assert.equal(result.sourceUnit.events[0].name, "Claimed");
+      assert.equal(result.sourceUnit.events[0].parameters.length, 2);
+      assert.equal(result.sourceUnit.events[0].parameters[0].name, "account");
+    });
+  });
+
   describe("free functions", () => {
     it("parses file-level functions", () => {
       const result = parser.parse(

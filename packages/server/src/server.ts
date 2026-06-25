@@ -885,7 +885,7 @@ connection.onRequest(
   GetProjectGraph,
   async (params: GetProjectGraphParams = {}): Promise<ProjectGraphResult> => {
     return measureProjectGraphRequest("graph", () =>
-      graphIndex.toProjectGraph(params.edgeKinds, params.maxNodes),
+      graphIndex.toProjectGraph(params.edgeKinds, params.maxNodes, params.includeTests),
     );
   },
 );
