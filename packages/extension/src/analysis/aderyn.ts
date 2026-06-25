@@ -13,6 +13,68 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+export interface AderynDiagnosticsResult {
+  diagnosticsByFile: Map<string, vscode.Diagnostic[]>;
+}
+
+export function buildAderynDiagnostics(
+  findings: AderynFinding[],
+  workspaceUri: vscode.Uri,
+): AderynDiagnosticsResult {
+  const diagnosticsByFile = new Map<string, vscode.Diagnostic[]>();
+
+  for (const finding of findings) {
+    const severity = aderynDiagnosticSeverity(finding.severity);
+    const message = `[${finding.detector}] ${finding.title}`;
+
+    for (const instance of finding.instances) {
+      const fileUri = resolveInstanceUri(workspaceUri, instance);
+      const key = fileUri.toString();
+      const line = Math.max(0, instance.line - 1);
+      const diagnostic = new vscode.Diagnostic(
+        new vscode.Range(line, 0, line, 1000),
+        message,
+        severity,
+      );
+      diagnostic.source = "aderyn";
+      diagnostic.code = finding.detector;
+
+      if (finding.instances.length > 1) {
+        diagnostic.relatedInformation = finding.instances
+          .filter((e) => e !== instance)
+          .slice(0, 5)
+          .map((e) => {
+            const relUri = resolveInstanceUri(workspaceUri, e);
+            const relLine = Math.max(0, e.line - 1);
+            return new vscode.DiagnosticRelatedInformation(
+              new vscode.Location(relUri, new vscode.Range(relLine, 0, relLine, 1000)),
+              `Also here (${finding.detector})`,
+            );
+          });
+      }
+
+      const existing = diagnosticsByFile.get(key) ?? [];
+      existing.push(diagnostic);
+      diagnosticsByFile.set(key, existing);
+    }
+  }
+
+  return { diagnosticsByFile };
+}
+
+export function aderynDiagnosticSeverity(
+  sev: AderynFinding["severity"],
+): vscode.DiagnosticSeverity {
+  switch (sev) {
+    case "high":
+      return vscode.DiagnosticSeverity.Error;
+    case "low":
+      return vscode.DiagnosticSeverity.Warning;
+    case "nc":
+      return vscode.DiagnosticSeverity.Information;
+  }
+}
+
 /**
  * Aderyn (Cyfrin) static analysis integration.
  *
@@ -99,49 +161,7 @@ export class AderynIntegration {
       return;
     }
 
-    const diagnosticsByFile = new Map<string, vscode.Diagnostic[]>();
-
-    for (const finding of findings) {
-      const severity = toDiagnosticSeverity(finding.severity);
-      const message = `[${finding.detector}] ${finding.title}`;
-
-      for (const instance of finding.instances) {
-        const fileUri = resolveInstanceUri(workspaceUri, instance);
-        const key = fileUri.toString();
-        // Aderyn line numbers are 1-based; LSP ranges are 0-based. We
-        // don't have column info in the JSON, so we span the whole
-        // line (0..1000 handles every realistic source line).
-        const line = Math.max(0, instance.line - 1);
-        const diagnostic = new vscode.Diagnostic(
-          new vscode.Range(line, 0, line, 1000),
-          message,
-          severity,
-        );
-        diagnostic.source = "aderyn";
-        diagnostic.code = finding.detector;
-
-        // Attach other instances of the same finding as related
-        // information, capped to keep the popup tidy.
-        if (finding.instances.length > 1) {
-          diagnostic.relatedInformation = finding.instances
-            .filter((e) => e !== instance)
-            .slice(0, 5)
-            .map((e) => {
-              const relUri = resolveInstanceUri(workspaceUri, e);
-              const relLine = Math.max(0, e.line - 1);
-              return new vscode.DiagnosticRelatedInformation(
-                new vscode.Location(relUri, new vscode.Range(relLine, 0, relLine, 1000)),
-                `Also here (${finding.detector})`,
-              );
-            });
-        }
-
-        const existing = diagnosticsByFile.get(key) ?? [];
-        existing.push(diagnostic);
-        diagnosticsByFile.set(key, existing);
-      }
-    }
-
+    const { diagnosticsByFile } = buildAderynDiagnostics(findings, workspaceUri);
     for (const [key, diagnostics] of diagnosticsByFile) {
       this.diagnosticCollection.set(vscode.Uri.parse(key), diagnostics);
     }
@@ -151,17 +171,6 @@ export class AderynIntegration {
       `Aderyn found ${summary.total} issues across ${diagnosticsByFile.size} files ` +
         `(${summary.high} high, ${summary.low} low, ${summary.nc} non-critical).`,
     );
-  }
-}
-
-function toDiagnosticSeverity(sev: AderynFinding["severity"]): vscode.DiagnosticSeverity {
-  switch (sev) {
-    case "high":
-      return vscode.DiagnosticSeverity.Error;
-    case "low":
-      return vscode.DiagnosticSeverity.Warning;
-    case "nc":
-      return vscode.DiagnosticSeverity.Information;
   }
 }
 

@@ -10,6 +10,45 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+export interface MythrilDiagnosticsResult {
+  diagnostics: vscode.Diagnostic[];
+}
+
+export function buildMythrilDiagnostics(findings: MythrilFinding[]): MythrilDiagnosticsResult {
+  const diagnostics: vscode.Diagnostic[] = [];
+
+  for (const finding of findings) {
+    const line = Math.max(0, finding.line - 1);
+    const swcTag = finding.swcId ? ` [SWC-${finding.swcId}]` : "";
+    const fnTag = finding.function ? ` (${finding.function})` : "";
+    const message = `[mythril${swcTag}]${fnTag} ${finding.title}: ${finding.description}`.trim();
+    const diagnostic = new vscode.Diagnostic(
+      new vscode.Range(line, 0, line, 1000),
+      message,
+      mythrilDiagnosticSeverity(finding.severity),
+    );
+    diagnostic.source = "mythril";
+    diagnostic.code = finding.swcId ? `SWC-${finding.swcId}` : finding.title;
+    diagnostics.push(diagnostic);
+  }
+
+  return { diagnostics };
+}
+
+export function mythrilDiagnosticSeverity(
+  severity: MythrilFinding["severity"],
+): vscode.DiagnosticSeverity {
+  switch (severity) {
+    case "high":
+      return vscode.DiagnosticSeverity.Error;
+    case "medium":
+    case "low":
+      return vscode.DiagnosticSeverity.Warning;
+    case "informational":
+      return vscode.DiagnosticSeverity.Information;
+  }
+}
+
 /**
  * Mythril (ConsenSys) symbolic-execution analysis integration.
  *
@@ -131,25 +170,7 @@ export class MythrilIntegration {
       return;
     }
 
-    const diagnostics: vscode.Diagnostic[] = [];
-    for (const finding of findings) {
-      // Mythril reports filenames as the absolute path it was passed.
-      // Anything that isn't this target is an oddity (a transitive
-      // import flagged?) — surface it on the original target's
-      // diagnostics list so the user actually sees it.
-      const line = Math.max(0, finding.line - 1);
-      const swcTag = finding.swcId ? ` [SWC-${finding.swcId}]` : "";
-      const fnTag = finding.function ? ` (${finding.function})` : "";
-      const message = `[mythril${swcTag}]${fnTag} ${finding.title}: ${finding.description}`.trim();
-      const diagnostic = new vscode.Diagnostic(
-        new vscode.Range(line, 0, line, 1000),
-        message,
-        toDiagnosticSeverity(finding.severity),
-      );
-      diagnostic.source = "mythril";
-      diagnostic.code = finding.swcId ? `SWC-${finding.swcId}` : finding.title;
-      diagnostics.push(diagnostic);
-    }
+    const { diagnostics } = buildMythrilDiagnostics(findings);
     this.diagnosticCollection.set(target, diagnostics);
 
     const summary = summarizeMythril(findings);
@@ -157,17 +178,5 @@ export class MythrilIntegration {
       `Mythril found ${summary.total} issues in ${basename(target.fsPath)} ` +
         `(${summary.high} high, ${summary.medium} medium, ${summary.low} low, ${summary.informational} informational).`,
     );
-  }
-}
-
-function toDiagnosticSeverity(severity: MythrilFinding["severity"]): vscode.DiagnosticSeverity {
-  switch (severity) {
-    case "high":
-      return vscode.DiagnosticSeverity.Error;
-    case "medium":
-    case "low":
-      return vscode.DiagnosticSeverity.Warning;
-    case "informational":
-      return vscode.DiagnosticSeverity.Information;
   }
 }

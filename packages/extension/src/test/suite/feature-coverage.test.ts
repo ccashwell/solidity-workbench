@@ -34,6 +34,9 @@ import {
 import { InheritanceGraphPanel } from "../../views/inheritance-graph";
 import { CoverageProvider } from "../../views/coverage";
 import { buildSlitherDiagnostics } from "../../analysis/slither";
+import { buildAderynDiagnostics } from "../../analysis/aderyn";
+import { buildWakeDiagnostics } from "../../analysis/wake";
+import { buildMythrilDiagnostics } from "../../analysis/mythril";
 
 /**
  * End-to-end coverage of the feature surface that landed across the
@@ -377,6 +380,124 @@ describe("Feature coverage — static-analysis diagnostics", () => {
       diagnostic.relatedInformation?.[0].location.uri.toString(),
       vscode.Uri.joinPath(workspaceUri, "src/Auth.sol").toString(),
     );
+  });
+
+  it("maps Aderyn findings to VS Code diagnostics", () => {
+    const workspaceUri = vscode.Uri.file("/workspace");
+    const result = buildAderynDiagnostics(
+      [
+        {
+          detector: "unchecked-transfer",
+          title: "Unchecked transfer return value",
+          description: "ERC20 transfer result is ignored",
+          severity: "high",
+          instances: [
+            { contractPath: "src/Vault.sol", line: 12 },
+            { contractPath: "src/Token.sol", line: 4 },
+          ],
+        },
+      ],
+      workspaceUri,
+    );
+
+    const diagnostics = result.diagnosticsByFile.get(
+      vscode.Uri.joinPath(workspaceUri, "src/Vault.sol").toString(),
+    );
+    assert.equal(result.diagnosticsByFile.size, 2);
+    assert.equal(diagnostics?.length, 1);
+
+    const diagnostic = diagnostics![0];
+    assert.equal(diagnostic.source, "aderyn");
+    assert.equal(diagnostic.code, "unchecked-transfer");
+    assert.equal(diagnostic.severity, vscode.DiagnosticSeverity.Error);
+    assert.match(diagnostic.message, /\[unchecked-transfer\] Unchecked transfer return value/);
+    assert.equal(diagnostic.range.start.line, 11);
+    assert.equal(diagnostic.range.end.character, 1000);
+    assert.equal(diagnostic.relatedInformation?.length, 1);
+    assert.equal(diagnostic.relatedInformation?.[0].message, "Also here (unchecked-transfer)");
+  });
+
+  it("maps Wake findings to VS Code diagnostics", () => {
+    const workspaceUri = vscode.Uri.file("/workspace");
+    const result = buildWakeDiagnostics(
+      [
+        {
+          detector: "reentrancy",
+          message: "Possible reentrancy",
+          impact: "medium",
+          confidence: "high",
+          instances: [
+            {
+              contractPath: "src/Vault.sol",
+              line: 20,
+              column: 5,
+              endLine: 20,
+              endColumn: 16,
+            },
+            {
+              contractPath: "src/Hook.sol",
+              line: 8,
+              column: 2,
+            },
+          ],
+        },
+      ],
+      workspaceUri,
+    );
+
+    const diagnostics = result.diagnosticsByFile.get(
+      vscode.Uri.joinPath(workspaceUri, "src/Vault.sol").toString(),
+    );
+    assert.equal(result.diagnosticsByFile.size, 2);
+    assert.equal(diagnostics?.length, 1);
+
+    const diagnostic = diagnostics![0];
+    assert.equal(diagnostic.source, "wake");
+    assert.equal(diagnostic.code, "reentrancy");
+    assert.equal(diagnostic.severity, vscode.DiagnosticSeverity.Warning);
+    assert.match(diagnostic.message, /\[reentrancy\] Possible reentrancy \(confidence: high\)/);
+    assert.equal(diagnostic.range.start.line, 19);
+    assert.equal(diagnostic.range.start.character, 4);
+    assert.equal(diagnostic.range.end.character, 15);
+    assert.equal(diagnostic.relatedInformation?.length, 1);
+  });
+
+  it("maps Mythril findings to VS Code diagnostics", () => {
+    const result = buildMythrilDiagnostics([
+      {
+        title: "Integer Overflow",
+        description: "Arithmetic can overflow",
+        severity: "low",
+        contractPath: "src/Vault.sol",
+        line: 33,
+        swcId: "101",
+        function: "deposit(uint256)",
+      },
+      {
+        title: "Informational note",
+        description: "Compiler metadata",
+        severity: "informational",
+        contractPath: "src/Vault.sol",
+        line: 1,
+        swcId: null,
+      },
+    ]);
+
+    assert.equal(result.diagnostics.length, 2);
+
+    const overflow = result.diagnostics[0];
+    assert.equal(overflow.source, "mythril");
+    assert.equal(overflow.code, "SWC-101");
+    assert.equal(overflow.severity, vscode.DiagnosticSeverity.Warning);
+    assert.match(
+      overflow.message,
+      /\[mythril \[SWC-101\]\] \(deposit\(uint256\)\) Integer Overflow: Arithmetic can overflow/,
+    );
+    assert.equal(overflow.range.start.line, 32);
+
+    const info = result.diagnostics[1];
+    assert.equal(info.code, "Informational note");
+    assert.equal(info.severity, vscode.DiagnosticSeverity.Information);
   });
 });
 

@@ -10,6 +10,63 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+export interface WakeDiagnosticsResult {
+  diagnosticsByFile: Map<string, vscode.Diagnostic[]>;
+}
+
+export function buildWakeDiagnostics(
+  findings: WakeFinding[],
+  workspaceUri: vscode.Uri,
+): WakeDiagnosticsResult {
+  const diagnosticsByFile = new Map<string, vscode.Diagnostic[]>();
+
+  for (const finding of findings) {
+    const severity = wakeDiagnosticSeverity(finding.impact);
+    const message = `[${finding.detector}] ${finding.message || finding.detector} (confidence: ${finding.confidence})`;
+
+    for (const instance of finding.instances) {
+      const fileUri = resolveInstanceUri(workspaceUri, instance);
+      const key = fileUri.toString();
+      const range = wakeInstanceRange(instance);
+      const diagnostic = new vscode.Diagnostic(range, message, severity);
+      diagnostic.source = "wake";
+      diagnostic.code = finding.detector;
+
+      if (finding.instances.length > 1) {
+        diagnostic.relatedInformation = finding.instances
+          .filter((e) => e !== instance)
+          .slice(0, 5)
+          .map((e) => {
+            const relUri = resolveInstanceUri(workspaceUri, e);
+            return new vscode.DiagnosticRelatedInformation(
+              new vscode.Location(relUri, wakeInstanceRange(e)),
+              `Also here (${finding.detector})`,
+            );
+          });
+      }
+
+      const existing = diagnosticsByFile.get(key) ?? [];
+      existing.push(diagnostic);
+      diagnosticsByFile.set(key, existing);
+    }
+  }
+
+  return { diagnosticsByFile };
+}
+
+export function wakeDiagnosticSeverity(impact: WakeFinding["impact"]): vscode.DiagnosticSeverity {
+  switch (impact) {
+    case "high":
+      return vscode.DiagnosticSeverity.Error;
+    case "medium":
+    case "low":
+    case "warning":
+      return vscode.DiagnosticSeverity.Warning;
+    case "info":
+      return vscode.DiagnosticSeverity.Information;
+  }
+}
+
 /**
  * Wake (Ackee Blockchain) static-analysis integration.
  *
@@ -94,39 +151,7 @@ export class WakeIntegration {
       return;
     }
 
-    const diagnosticsByFile = new Map<string, vscode.Diagnostic[]>();
-
-    for (const finding of findings) {
-      const severity = toDiagnosticSeverity(finding.impact);
-      const message = `[${finding.detector}] ${finding.message || finding.detector} (confidence: ${finding.confidence})`;
-
-      for (const instance of finding.instances) {
-        const fileUri = resolveInstanceUri(workspaceUri, instance);
-        const key = fileUri.toString();
-        const range = toRange(instance);
-        const diagnostic = new vscode.Diagnostic(range, message, severity);
-        diagnostic.source = "wake";
-        diagnostic.code = finding.detector;
-
-        if (finding.instances.length > 1) {
-          diagnostic.relatedInformation = finding.instances
-            .filter((e) => e !== instance)
-            .slice(0, 5)
-            .map((e) => {
-              const relUri = resolveInstanceUri(workspaceUri, e);
-              return new vscode.DiagnosticRelatedInformation(
-                new vscode.Location(relUri, toRange(e)),
-                `Also here (${finding.detector})`,
-              );
-            });
-        }
-
-        const existing = diagnosticsByFile.get(key) ?? [];
-        existing.push(diagnostic);
-        diagnosticsByFile.set(key, existing);
-      }
-    }
-
+    const { diagnosticsByFile } = buildWakeDiagnostics(findings, workspaceUri);
     for (const [key, diagnostics] of diagnosticsByFile) {
       this.diagnosticCollection.set(vscode.Uri.parse(key), diagnostics);
     }
@@ -139,25 +164,12 @@ export class WakeIntegration {
   }
 }
 
-function toDiagnosticSeverity(impact: WakeFinding["impact"]): vscode.DiagnosticSeverity {
-  switch (impact) {
-    case "high":
-      return vscode.DiagnosticSeverity.Error;
-    case "medium":
-    case "low":
-    case "warning":
-      return vscode.DiagnosticSeverity.Warning;
-    case "info":
-      return vscode.DiagnosticSeverity.Information;
-  }
-}
-
 /**
  * Wake's location uses 1-based line/column; LSP ranges are 0-based.
  * When an end position is missing we fall back to a single-character
  * span at the start (caller-visible range; users can still navigate).
  */
-function toRange(instance: WakeInstance): vscode.Range {
+export function wakeInstanceRange(instance: WakeInstance): vscode.Range {
   const startLine = Math.max(0, instance.line - 1);
   const startCol = instance.column !== undefined ? Math.max(0, instance.column - 1) : 0;
   const endLine = instance.endLine !== undefined ? Math.max(0, instance.endLine - 1) : startLine;
