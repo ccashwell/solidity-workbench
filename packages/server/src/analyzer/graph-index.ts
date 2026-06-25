@@ -513,18 +513,6 @@ export class GraphIndex {
       });
     }
 
-    for (const fn of result.sourceUnit.freeFunctions) {
-      this.indexFunction(uri, fileNode.id, undefined, fn);
-    }
-
-    for (const err of result.sourceUnit.errors) {
-      this.indexError(uri, fileNode.id, undefined, err);
-    }
-
-    for (const constant of result.sourceUnit.fileConstants) {
-      this.indexFileConstant(uri, fileNode.id, constant);
-    }
-
     for (const struct of result.sourceUnit.structs) {
       this.indexStruct(uri, fileNode.id, struct);
     }
@@ -533,12 +521,24 @@ export class GraphIndex {
       this.indexEnum(uri, fileNode.id, enumDef);
     }
 
+    for (const udvt of result.sourceUnit.userDefinedValueTypes) {
+      this.indexUserDefinedValueType(uri, fileNode.id, udvt);
+    }
+
+    for (const fn of result.sourceUnit.freeFunctions) {
+      this.indexFunction(uri, fileNode.id, undefined, fn);
+    }
+
     for (const event of result.sourceUnit.events) {
       this.indexEvent(uri, fileNode.id, undefined, event);
     }
 
-    for (const udvt of result.sourceUnit.userDefinedValueTypes) {
-      this.indexUserDefinedValueType(uri, fileNode.id, udvt);
+    for (const err of result.sourceUnit.errors) {
+      this.indexError(uri, fileNode.id, undefined, err);
+    }
+
+    for (const constant of result.sourceUnit.fileConstants) {
+      this.indexFileConstant(uri, fileNode.id, constant);
     }
 
     for (const usingFor of result.sourceUnit.usingFor) {
@@ -573,6 +573,11 @@ export class GraphIndex {
     const result = this.parser.get(uri);
     if (!result) return;
     const text = this.parser.getText(uri) ?? "";
+    for (const fn of result.sourceUnit.freeFunctions) {
+      if (!fn.name) continue;
+      const sourceId = this.memberNodeId(uri, undefined, "function", fn.name, fn.nameRange);
+      this.indexFreeFunctionBodyEdges(uri, text, fn, sourceId);
+    }
     for (const contract of result.sourceUnit.contracts) {
       this.indexContract(uri, contract, text);
     }
@@ -2239,6 +2244,21 @@ export class GraphIndex {
     return true;
   }
 
+  private indexFreeFunctionBodyEdges(
+    uri: string,
+    text: string,
+    fn: FunctionDefinition,
+    sourceId: string,
+  ): void {
+    const rawFn = this.findRawFreeFunctionNode(uri, fn);
+    if (!rawFn?.body) return;
+
+    const parameterNames = new Set(
+      fn.parameters.map((param) => param.name).filter((name): name is string => Boolean(name)),
+    );
+    this.indexRawCallableBodyEdges(uri, text, undefined, sourceId, rawFn.body, parameterNames, []);
+  }
+
   private indexModifierBodyEdgesFromRawAst(
     uri: string,
     text: string,
@@ -2268,7 +2288,7 @@ export class GraphIndex {
   private indexRawCallableBodyEdges(
     uri: string,
     text: string,
-    contract: ContractDefinition,
+    contract: ContractDefinition | undefined,
     sourceId: string,
     body: RawAstNode,
     parameterNames: Set<string>,
@@ -2454,7 +2474,7 @@ export class GraphIndex {
   private indexRawFunctionCall(
     uri: string,
     text: string,
-    contract: ContractDefinition,
+    contract: ContractDefinition | undefined,
     sourceId: string,
     call: RawAstNode,
   ): void {
@@ -2560,7 +2580,7 @@ export class GraphIndex {
   private indexRawUsingForOperatorCall(
     uri: string,
     text: string,
-    contract: ContractDefinition,
+    contract: ContractDefinition | undefined,
     sourceId: string,
     operation: RawAstNode,
   ): void {
@@ -2671,7 +2691,7 @@ export class GraphIndex {
 
   private indexRawDelegateCall(
     uri: string,
-    contract: ContractDefinition,
+    contract: ContractDefinition | undefined,
     sourceId: string,
     callee: {
       name: string;
@@ -2719,18 +2739,26 @@ export class GraphIndex {
   private indexRawEmit(
     uri: string,
     text: string,
-    contract: ContractDefinition,
+    contract: ContractDefinition | undefined,
     sourceId: string,
     emitNode: RawAstNode,
   ): void {
     const eventExpression = emitNode.eventCall?.expression;
     if (!eventExpression || eventExpression.type !== "Identifier" || !eventExpression.name) return;
-    const target = this.resolveContractMemberGraphNode(
-      uri,
-      contract.name,
-      eventExpression.name,
-      "event",
-    );
+    const target = contract
+      ? (this.resolveContractMemberGraphNode(uri, contract.name, eventExpression.name, "event") ??
+        this.resolveFileLevelGraphNode(
+          uri,
+          eventExpression.name,
+          "event",
+          emitNode.eventCall?.arguments?.length,
+        ))
+      : this.resolveFileLevelGraphNode(
+          uri,
+          eventExpression.name,
+          "event",
+          emitNode.eventCall?.arguments?.length,
+        );
     if (!target) return;
     const range = this.rawNameRange(text, eventExpression, eventExpression.name);
     const resolved = this.resolveGraphTargetWithSolc(
@@ -2748,18 +2776,26 @@ export class GraphIndex {
   private indexRawRevert(
     uri: string,
     text: string,
-    contract: ContractDefinition,
+    contract: ContractDefinition | undefined,
     sourceId: string,
     revertNode: RawAstNode,
   ): void {
     const errorExpression = revertNode.revertCall?.expression;
     if (!errorExpression || errorExpression.type !== "Identifier" || !errorExpression.name) return;
-    const target = this.resolveContractMemberGraphNode(
-      uri,
-      contract.name,
-      errorExpression.name,
-      "error",
-    );
+    const target = contract
+      ? (this.resolveContractMemberGraphNode(uri, contract.name, errorExpression.name, "error") ??
+        this.resolveFileLevelGraphNode(
+          uri,
+          errorExpression.name,
+          "error",
+          revertNode.revertCall?.arguments?.length,
+        ))
+      : this.resolveFileLevelGraphNode(
+          uri,
+          errorExpression.name,
+          "error",
+          revertNode.revertCall?.arguments?.length,
+        );
     if (!target) return;
     const range = this.rawNameRange(text, errorExpression, errorExpression.name);
     const resolved = this.resolveGraphTargetWithSolc(
@@ -2924,7 +2960,7 @@ export class GraphIndex {
 
   private resolveCallTarget(
     uri: string,
-    contract: ContractDefinition,
+    contract: ContractDefinition | undefined,
     qualifier: string | undefined,
     receiver: string | null,
     calleeName: string,
@@ -2949,18 +2985,25 @@ export class GraphIndex {
       return undefined;
     }
 
+    if (!contract) {
+      return this.resolveFileLevelGraphNode(uri, calleeName, "function", argumentCount);
+    }
+
     const targetContract =
       qualifier === "super"
         ? this.resolver.resolveBaseContract(uri, contract.baseContracts[0]?.baseName ?? "")
         : this.resolver.resolveContract(contract.name, uri);
     if (!targetContract) return undefined;
 
-    return this.resolveMemberNode(targetContract, calleeName, argumentCount);
+    return (
+      this.resolveMemberNode(targetContract, calleeName, argumentCount) ??
+      this.resolveFileLevelGraphNode(uri, calleeName, "function", argumentCount)
+    );
   }
 
   private resolveReceiverType(
     uri: string,
-    contract: ContractDefinition,
+    contract: ContractDefinition | undefined,
     receiver: string,
     position: SourceRange["start"],
   ): string | undefined {
@@ -2969,15 +3012,15 @@ export class GraphIndex {
 
   private resolveReceiverInfo(
     uri: string,
-    contract: ContractDefinition,
+    contract: ContractDefinition | undefined,
     receiver: string,
     position: SourceRange["start"],
   ): (ReceiverTypeResolution & { typeName: string }) | undefined {
     if (receiver === "this") {
-      return { typeName: contract.name, source: "this", receiver };
+      return contract ? { typeName: contract.name, source: "this", receiver } : undefined;
     }
     if (receiver === "super") {
-      const typeName = contract.baseContracts[0]?.baseName;
+      const typeName = contract?.baseContracts[0]?.baseName;
       return typeName ? { typeName, source: "super", receiver } : undefined;
     }
 
@@ -3008,7 +3051,7 @@ export class GraphIndex {
 
   private resolveUsingForTarget(
     uri: string,
-    contract: ContractDefinition,
+    contract: ContractDefinition | undefined,
     receiverType: string,
     calleeName: string,
     argumentCount: number | undefined,
@@ -3036,12 +3079,107 @@ export class GraphIndex {
     );
   }
 
+  private resolveFileLevelGraphNode(
+    uri: string,
+    name: string,
+    kind: "function" | "event" | "error",
+    argumentCount?: number,
+  ): SolidityGraphNode | undefined {
+    const declaration = this.findVisibleFileLevelDeclaration(uri, name, kind, argumentCount);
+    if (!declaration) return undefined;
+    return this.nodes.get(
+      this.memberNodeId(declaration.uri, undefined, kind, declaration.name, declaration.nameRange),
+    );
+  }
+
+  private findVisibleFileLevelDeclaration(
+    uri: string,
+    name: string,
+    kind: "function" | "event" | "error",
+    argumentCount?: number,
+  ): { uri: string; name: string; nameRange: SourceRange } | undefined {
+    const imported = this.resolver.resolveImportedSymbol(name, uri);
+    if (imported) {
+      const importedDeclaration = this.findFileLevelDeclarationInSourceUnit(
+        imported.uri,
+        imported.name,
+        kind,
+        argumentCount,
+      );
+      if (importedDeclaration) return importedDeclaration;
+    }
+
+    const local = this.findFileLevelDeclarationInSourceUnit(uri, name, kind, argumentCount);
+    if (local) return local;
+    if (!this.symbolIndex) return undefined;
+
+    const symbols = this.symbolIndex
+      .findSymbols(name.includes(".") ? (name.split(".").at(-1) ?? name) : name)
+      .filter((symbol) => symbol.kind === kind && !symbol.containerName);
+    const visible = this.resolver.filterVisibleSymbols(uri, symbols);
+    for (const symbol of visible) {
+      const declaration = this.findFileLevelDeclarationInSourceUnit(
+        symbol.filePath,
+        symbol.name,
+        kind,
+        argumentCount,
+      );
+      if (declaration) return declaration;
+    }
+    return undefined;
+  }
+
+  private findFileLevelDeclarationInSourceUnit(
+    uri: string,
+    name: string,
+    kind: "function" | "event" | "error",
+    argumentCount?: number,
+  ): { uri: string; name: string; nameRange: SourceRange } | undefined {
+    const sourceUnit = this.parser.get(uri)?.sourceUnit;
+    if (!sourceUnit) return undefined;
+    const declarations =
+      kind === "function"
+        ? sourceUnit.freeFunctions
+        : kind === "event"
+          ? sourceUnit.events
+          : sourceUnit.errors;
+    for (const declaration of declarations) {
+      if (declaration.name !== name) continue;
+      const parameterCount = declaration.parameters.length;
+      if (argumentCount !== undefined && parameterCount !== argumentCount) continue;
+      return {
+        uri,
+        name: declaration.name,
+        nameRange: declaration.nameRange,
+      };
+    }
+    return undefined;
+  }
+
   private findRawContractNode(uri: string, contractName: string): RawAstNode | undefined {
     const rawAst = this.parser.getRawAst(uri) as RawAstNode | null | undefined;
     if (!rawAst) return undefined;
     return this.rawChildArray(rawAst, "children").find(
       (node) => node.type === "ContractDefinition" && node.name === contractName,
     );
+  }
+
+  private findRawFreeFunctionNode(uri: string, fn: FunctionDefinition): RawAstNode | undefined {
+    const rawAst = this.parser.getRawAst(uri) as RawAstNode | null | undefined;
+    if (!rawAst) return undefined;
+
+    return this.rawChildArray(rawAst, "children").find((node) => {
+      if (node.type !== "FunctionDefinition") return false;
+      if ((node.name ?? null) !== (fn.name ?? null)) return false;
+      const rawStart = node.range?.[0];
+      const rawEnd = node.range?.[1];
+      if (rawStart === undefined || rawEnd === undefined) return true;
+      const mappedStart = this.sourceOffsetAt(uri, fn.range.start);
+      const mappedEnd = this.sourceOffsetAt(uri, fn.range.end);
+      return mappedStart === undefined || mappedEnd === undefined
+        ? true
+        : rawStart <= mappedStart && rawEnd >= mappedEnd - 1;
+    });
   }
 
   private findRawFunctionNode(

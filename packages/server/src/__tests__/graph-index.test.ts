@@ -701,6 +701,115 @@ event FileClaimed(address indexed account, uint256 amount);
     }
   });
 
+  it("indexes relationship edges for file-level declarations", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-file-relationships-"));
+    try {
+      const filePath = path.join(tmpDir, "src/Claims.sol");
+      const contents = `pragma solidity ^0.8.24;
+
+event Claimed(address indexed account, uint256 amount);
+error ClaimDenied();
+
+struct Receipt {
+    address account;
+}
+
+function helper(uint256 amount) pure returns (uint256) {
+    return amount + 1;
+}
+
+function redeemClaims(Receipt memory receipt, uint256 amount) {
+    helper(amount);
+    emit Claimed(receipt.account, amount);
+    if (amount == 0) revert ClaimDenied();
+}
+
+contract Consumer {
+    function run(Receipt memory receipt) external {
+        redeemClaims(receipt, 1);
+        emit Claimed(receipt.account, 1);
+        revert ClaimDenied();
+    }
+}
+`;
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, contents, "utf-8");
+      const uri = URI.file(filePath).toString();
+      const parser = new SolidityParser();
+      parser.parse(uri, contents);
+      const workspace = makeWorkspace(tmpDir, [uri]);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+
+      graph.rebuildWorkspace();
+
+      const helper = graph
+        .getNodes()
+        .find((node) => node.kind === "function" && node.name === "helper");
+      const redeemClaims = graph
+        .getNodes()
+        .find((node) => node.kind === "function" && node.name === "redeemClaims");
+      const claimed = graph
+        .getNodes()
+        .find((node) => node.kind === "event" && node.name === "Claimed");
+      const denied = graph
+        .getNodes()
+        .find((node) => node.kind === "error" && node.name === "ClaimDenied");
+      const receipt = graph
+        .getNodes()
+        .find((node) => node.kind === "struct" && node.name === "Receipt");
+      const run = graph
+        .getNodes()
+        .find(
+          (node) =>
+            node.kind === "function" && node.name === "run" && node.containerName === "Consumer",
+        );
+      assert.ok(helper, "expected file-level helper function node");
+      assert.ok(redeemClaims, "expected file-level redeemClaims function node");
+      assert.ok(claimed, "expected file-level Claimed event node");
+      assert.ok(denied, "expected file-level ClaimDenied error node");
+      assert.ok(receipt, "expected file-level Receipt struct node");
+      assert.ok(run, "expected Consumer.run graph node");
+
+      assert.ok(
+        graph.getOutgoingEdges(redeemClaims.id, "calls").some((edge) => edge.target === helper.id),
+        "expected file-level function body to call another file-level function",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(redeemClaims.id, "emits").some((edge) => edge.target === claimed.id),
+        "expected file-level function body to emit a file-level event",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(redeemClaims.id, "revertsWith")
+          .some((edge) => edge.target === denied.id),
+        "expected file-level function body to revert with a file-level error",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(redeemClaims.id, "usesType")
+          .some((edge) => edge.target === receipt.id),
+        "expected file-level function parameters to reference file-level types",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(run.id, "calls").some((edge) => edge.target === redeemClaims.id),
+        "expected contract body to call a visible file-level function",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(run.id, "emits").some((edge) => edge.target === claimed.id),
+        "expected contract body to emit a visible file-level event",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(run.id, "revertsWith").some((edge) => edge.target === denied.id),
+        "expected contract body to revert with a visible file-level error",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("excludes test files and Foundry Test descendants unless requested", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-include-tests-"));
     try {
