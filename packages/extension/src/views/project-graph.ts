@@ -64,10 +64,18 @@ export const PROJECT_GRAPH_CALLABLE_NODE_KINDS: ProjectGraphNodeKind[] = [
   "modifier",
 ];
 
+export const PROJECT_GRAPH_CALLER_TARGET_NODE_KINDS: ProjectGraphNodeKind[] = [
+  ...PROJECT_GRAPH_CALLABLE_NODE_KINDS,
+  "stateVariable",
+];
+
 export function projectGraphQueryTargetKinds(
   kind: ProjectGraphQueryKind,
 ): ProjectGraphNodeKind[] | undefined {
-  return kind === "impact" ? undefined : PROJECT_GRAPH_CALLABLE_NODE_KINDS;
+  if (kind === "impact") return undefined;
+  return kind === "callers"
+    ? PROJECT_GRAPH_CALLER_TARGET_NODE_KINDS
+    : PROJECT_GRAPH_CALLABLE_NODE_KINDS;
 }
 
 export function projectGraphQueryMissLabel(
@@ -77,11 +85,15 @@ export function projectGraphQueryMissLabel(
   if (reason === "targetKindMismatch") {
     return kind === "impact"
       ? "No project graph query target found."
-      : "Project graph call queries require a function, constructor, receive/fallback, or modifier target.";
+      : kind === "callers"
+        ? "Project graph callers queries require a function, constructor, receive/fallback, modifier, or state-variable getter target."
+        : "Project graph callees queries require a function, constructor, receive/fallback, or modifier target.";
   }
   return kind === "impact"
     ? "No project graph query target found."
-    : "No callable project graph query target found.";
+    : kind === "callers"
+      ? "No project graph callers target found."
+      : "No callable project graph query target found.";
 }
 
 interface ExportGraphNode {

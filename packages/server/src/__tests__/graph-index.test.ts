@@ -1652,6 +1652,32 @@ contract Caller {
         "expected public mapping getter call to create an externalCall edge",
       );
 
+      const totalAssetsCallers = graph.query({
+        kind: "callers",
+        target: { nodeId: totalAssets.id },
+        targetKinds: ["function", "stateVariable"],
+      });
+      assert.equal(totalAssetsCallers.found, true);
+      assert.equal(totalAssetsCallers.targetId, totalAssets.id);
+      assert.ok(
+        totalAssetsCallers.edges.some(
+          (edge) => edge.source === read.id && edge.target === totalAssets.id,
+        ),
+        "expected callers query to include public getter call edge",
+      );
+
+      const balanceOfCallers = graph.query({
+        kind: "callers",
+        query: "balanceOf",
+        targetKinds: ["function", "stateVariable"],
+      });
+      assert.equal(balanceOfCallers.found, true);
+      assert.equal(balanceOfCallers.targetId, balanceOf.id);
+      assert.ok(
+        balanceOfCallers.nodes.some((node) => node.id === read.id),
+        "expected text callers query to include caller of public mapping getter",
+      );
+
       assert.ok(
         graph
           .getOutgoingEdges(ignored.id, "calls")

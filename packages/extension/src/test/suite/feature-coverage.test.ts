@@ -6,6 +6,7 @@ import * as vscode from "vscode";
 import type { ProjectGraphResult, ProjectGraphStatsResult } from "@solidity-workbench/common";
 import {
   ProjectGraphExporter,
+  PROJECT_GRAPH_CALLER_TARGET_NODE_KINDS,
   projectGraphQueryMissLabel,
   projectGraphQueryTargetKinds,
   PROJECT_GRAPH_CALLABLE_NODE_KINDS,
@@ -399,16 +400,24 @@ describe("Feature coverage — project graph export", () => {
       "fallback",
       "modifier",
     ]);
-    assert.deepEqual(projectGraphQueryTargetKinds("callers"), PROJECT_GRAPH_CALLABLE_NODE_KINDS);
+    assert.deepEqual(PROJECT_GRAPH_CALLER_TARGET_NODE_KINDS, [
+      ...PROJECT_GRAPH_CALLABLE_NODE_KINDS,
+      "stateVariable",
+    ]);
+    assert.deepEqual(
+      projectGraphQueryTargetKinds("callers"),
+      PROJECT_GRAPH_CALLER_TARGET_NODE_KINDS,
+    );
     assert.deepEqual(projectGraphQueryTargetKinds("callees"), PROJECT_GRAPH_CALLABLE_NODE_KINDS);
     assert.equal(projectGraphQueryTargetKinds("impact"), undefined);
-    assert.equal(
-      projectGraphQueryMissLabel("callers"),
-      "No callable project graph query target found.",
-    );
+    assert.equal(projectGraphQueryMissLabel("callers"), "No project graph callers target found.");
     assert.equal(
       projectGraphQueryMissLabel("callers", "targetKindMismatch"),
-      "Project graph call queries require a function, constructor, receive/fallback, or modifier target.",
+      "Project graph callers queries require a function, constructor, receive/fallback, modifier, or state-variable getter target.",
+    );
+    assert.equal(
+      projectGraphQueryMissLabel("callees", "targetKindMismatch"),
+      "Project graph callees queries require a function, constructor, receive/fallback, or modifier target.",
     );
     assert.equal(projectGraphQueryMissLabel("impact"), "No project graph query target found.");
   });
