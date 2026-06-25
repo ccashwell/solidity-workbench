@@ -4,7 +4,7 @@ import type { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import * as path from "node:path";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
-import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { FileTier, WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 
 /**
@@ -113,7 +113,7 @@ export class AutoImportProvider {
     if (symbols.some((s) => s.filePath === currentUri)) return [];
 
     const candidates: ImportCandidate[] = [];
-    for (const sym of symbols) {
+    for (const sym of this.filterImportCandidateSymbols(currentUri, symbols)) {
       if (existingImports.has(sym.filePath)) continue;
 
       const importPath = this.computeImportPath(currentUri, sym.filePath);
@@ -133,6 +133,28 @@ export class AutoImportProvider {
       seen.add(c.importPath);
       return true;
     });
+  }
+
+  private filterImportCandidateSymbols<T extends { filePath: string }>(
+    currentUri: string,
+    symbols: T[],
+  ): T[] {
+    const currentTier = this.getImportTier(currentUri);
+    if (currentTier === "tests") return symbols;
+    return symbols.filter((sym) => this.getImportTier(sym.filePath) !== "tests");
+  }
+
+  private getImportTier(uri: string): FileTier | "unknown" {
+    const tier = (this.workspace as Partial<WorkspaceManager>).getFileTier?.(uri);
+    if (tier) return tier;
+
+    const fsPath = URI.parse(uri).fsPath.replace(/\\/g, "/");
+    if (/\/(test|tests|script|scripts)\//.test(fsPath) || /\.t\.sol$/i.test(fsPath)) {
+      return "tests";
+    }
+    if (/\/lib\//.test(fsPath) || /\/node_modules\//.test(fsPath)) return "deps";
+    if (/\/(src|contracts)\//.test(fsPath)) return "project";
+    return "unknown";
   }
 
   /**

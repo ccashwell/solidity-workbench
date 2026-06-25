@@ -158,6 +158,80 @@ contract App { Widget public w; }`;
       const remapped = titles.find((t) => t.includes("@lib/Widget.sol"));
       assert.ok(remapped, `expected @lib/ remapped path, got ${JSON.stringify(titles)}`);
     });
+
+    it("does not suggest test-only declarations from source files", () => {
+      const parser = new SolidityParser();
+      const workspace = makeFakeWorkspace({});
+      const idx = new SymbolIndex(parser, workspace);
+
+      indexFile(
+        parser,
+        idx,
+        URI.file("/project/src/Widget.sol").toString(),
+        "pragma solidity ^0.8.0; contract Widget {}",
+      );
+      indexFile(
+        parser,
+        idx,
+        URI.file("/project/test/Widget.sol").toString(),
+        "pragma solidity ^0.8.0; contract Widget {}",
+      );
+
+      const consumerUri = URI.file("/project/src/App.sol").toString();
+      const consumerText = `pragma solidity ^0.8.0;
+contract App { Widget public w; }`;
+      indexFile(parser, idx, consumerUri, consumerText);
+
+      const provider = new AutoImportProvider(idx, workspace, parser);
+      const doc = TextDocument.create(consumerUri, "solidity", 1, consumerText);
+      const diag = makeUndeclaredDiag(
+        { line: 1, character: 15 },
+        "Widget".length,
+        `Undeclared identifier "Widget"`,
+      );
+
+      const titles = provider.provideImportActions(doc, [diag]).map((a) => a.title);
+      assert.ok(
+        titles.some((title) => title.includes("./Widget.sol")),
+        `expected source import candidate, got ${JSON.stringify(titles)}`,
+      );
+      assert.ok(
+        titles.every((title) => !title.includes("../test/Widget.sol")),
+        `source file must not suggest test import candidates: ${JSON.stringify(titles)}`,
+      );
+    });
+
+    it("allows test declarations when the current file is a test", () => {
+      const parser = new SolidityParser();
+      const workspace = makeFakeWorkspace({});
+      const idx = new SymbolIndex(parser, workspace);
+
+      indexFile(
+        parser,
+        idx,
+        URI.file("/project/test/WidgetHelper.sol").toString(),
+        "pragma solidity ^0.8.0; contract WidgetHelper {}",
+      );
+
+      const consumerUri = URI.file("/project/test/App.t.sol").toString();
+      const consumerText = `pragma solidity ^0.8.0;
+contract AppTest { WidgetHelper helper; }`;
+      indexFile(parser, idx, consumerUri, consumerText);
+
+      const provider = new AutoImportProvider(idx, workspace, parser);
+      const doc = TextDocument.create(consumerUri, "solidity", 1, consumerText);
+      const diag = makeUndeclaredDiag(
+        { line: 1, character: 19 },
+        "WidgetHelper".length,
+        `Undeclared identifier "WidgetHelper"`,
+      );
+
+      const titles = provider.provideImportActions(doc, [diag]).map((a) => a.title);
+      assert.ok(
+        titles.some((title) => title.includes("./WidgetHelper.sol")),
+        `test file should still get test helper imports, got ${JSON.stringify(titles)}`,
+      );
+    });
   });
 
   describe("diagnostic filtering", () => {
