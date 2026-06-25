@@ -709,20 +709,30 @@ contract Comments {
       assert.ok(mockPreview, "expected unrelated MockERC4626.previewRedeem node");
 
       const calls = graph.getOutgoingEdges(poolVaultEntry.id, "calls");
+      const previewRedeemEdge = calls.find((edge) => edge.target === interfacePreview.id);
       assert.ok(
-        calls.some((edge) => edge.target === interfacePreview.id),
+        previewRedeemEdge,
         "expected previewRedeem receiver call to resolve to imported IERC4626",
       );
+      assert.equal(previewRedeemEdge.metadata?.receiver, "vault");
+      assert.equal(previewRedeemEdge.metadata?.receiverType, "IERC4626");
+      assert.equal(previewRedeemEdge.metadata?.receiverResolution, "localVariable");
+      assert.match(previewRedeemEdge.evidence?.summary ?? "", /calls: IERC4626\.previewRedeem/);
       assert.ok(
         calls.every((edge) => edge.target !== mockPreview.id),
         "did not expect previewRedeem receiver call to resolve to unrelated mock",
       );
 
       const assetCalls = graph.getOutgoingEdges(poolVaultAssetBalance.id, "calls");
+      const convertToAssetsEdge = assetCalls.find((edge) => edge.target === interfaceConvert.id);
       assert.ok(
-        assetCalls.some((edge) => edge.target === interfaceConvert.id),
+        convertToAssetsEdge,
         "expected convertToAssets receiver call to resolve to imported IERC4626",
       );
+      assert.equal(convertToAssetsEdge.metadata?.receiver, "vault");
+      assert.equal(convertToAssetsEdge.metadata?.receiverType, "IERC4626");
+      assert.equal(convertToAssetsEdge.metadata?.receiverResolution, "localVariable");
+      assert.match(convertToAssetsEdge.evidence?.summary ?? "", /calls: IERC4626\.convertToAssets/);
       assert.ok(
         assetCalls.every((edge) => edge.target !== mockConvert.id),
         "did not expect convertToAssets receiver call to resolve to unrelated mock",

@@ -43,7 +43,11 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { ResolvedContract, SemanticResolver } from "./semantic-resolver.js";
 import { CALL_LIKE_KEYWORDS, extractDottedReceiver, isSolidityBuiltinType } from "../utils/text.js";
 import { SOLIDITY_KEYWORDS } from "../utils/text.js";
-import { normalizeTypeName, resolveDottedReceiverTypeName } from "../utils/receiver-type.js";
+import {
+  normalizeTypeName,
+  resolveDottedReceiverTypeInfo,
+  type ReceiverTypeResolution,
+} from "../utils/receiver-type.js";
 import { findUsingForFunction } from "../utils/using-for.js";
 
 export type SolidityGraphNodeKind = ProjectGraphNodeKind;
@@ -2003,6 +2007,10 @@ export class GraphIndex {
       const absoluteStart = match.index + match[0].lastIndexOf(calleeName);
       const range = this.bodyOffsetToRange(body, absoluteStart, calleeName.length);
       const receiver = this.extractReceiverAtCall(body, absoluteStart);
+      const receiverInfo =
+        receiver || qualifier
+          ? this.resolveReceiverInfo(uri, contract, receiver ?? qualifier ?? "", range.start)
+          : undefined;
       const target = this.resolveCallTarget(
         uri,
         contract,
@@ -2030,6 +2038,7 @@ export class GraphIndex {
           metadata: {
             calleeName,
             qualifier,
+            ...this.receiverMetadata(receiver ?? qualifier, receiverInfo),
             unresolvedTarget: true,
             ...resolved.metadata,
           },
@@ -2045,6 +2054,7 @@ export class GraphIndex {
         metadata: {
           calleeName,
           qualifier,
+          ...this.receiverMetadata(receiver ?? qualifier, receiverInfo),
           ...resolved.metadata,
         },
       });
@@ -2064,10 +2074,11 @@ export class GraphIndex {
       this.indexRawDelegateCall(uri, contract, sourceId, callee);
       return;
     }
+    const receiverInfo = callee.receiver
+      ? this.resolveReceiverInfo(uri, contract, callee.receiver, callee.range.start)
+      : undefined;
     if (LOW_LEVEL_EXTERNAL_CALL_NAMES.has(callee.name)) {
-      const receiverType = callee.receiver
-        ? this.resolveReceiverType(uri, contract, callee.receiver, callee.range.start)
-        : undefined;
+      const receiverType = receiverInfo?.typeName;
       const contractTarget = receiverType
         ? this.resolver.resolveContract(receiverType, uri)
         : undefined;
@@ -2075,7 +2086,7 @@ export class GraphIndex {
         ? this.resolveMemberNode(contractTarget, callee.name, call.arguments?.length ?? 0)
         : undefined;
       if (!memberTarget) {
-        this.indexRawLowLevelExternalCall(uri, sourceId, callee, receiverType);
+        this.indexRawLowLevelExternalCall(uri, sourceId, callee, receiverType, receiverInfo);
         return;
       }
     }
@@ -2109,7 +2120,7 @@ export class GraphIndex {
         metadata: {
           calleeName: callee.name,
           qualifier: callee.receiverLeaf,
-          receiver: callee.receiver,
+          ...this.receiverMetadata(callee.receiver, receiverInfo),
           unresolvedTarget: true,
           ...resolved.metadata,
         },
@@ -2125,6 +2136,7 @@ export class GraphIndex {
       metadata: {
         calleeName: callee.name,
         qualifier: callee.receiverLeaf,
+        ...this.receiverMetadata(callee.receiver, receiverInfo),
         ...resolved.metadata,
       },
     });
@@ -2137,7 +2149,7 @@ export class GraphIndex {
         range: callee.range,
         metadata: {
           calleeName: callee.name,
-          receiver: callee.receiver,
+          ...this.receiverMetadata(callee.receiver, receiverInfo),
           receiverLeaf: callee.receiverLeaf,
           ...resolved.metadata,
         },
@@ -2165,6 +2177,7 @@ export class GraphIndex {
       range: SourceRange;
     },
     receiverType: string | undefined,
+    receiverResolution?: ReceiverTypeResolution,
   ): void {
     this.addEdge({
       source: sourceId,
@@ -2176,6 +2189,7 @@ export class GraphIndex {
         receiver: callee.receiver,
         receiverLeaf: callee.receiverLeaf,
         receiverType,
+        ...(receiverResolution?.source ? { receiverResolution: receiverResolution.source } : {}),
         lowLevelCall: true,
         unresolvedTarget: true,
         ...this.resolutionMetadata(uri, callee.range.start, "heuristic"),
@@ -2221,9 +2235,10 @@ export class GraphIndex {
     },
   ): void {
     const receiver = callee.receiver ?? callee.receiverLeaf;
-    const receiverType = receiver
-      ? this.resolveReceiverType(uri, contract, receiver, callee.range.start)
+    const receiverInfo = receiver
+      ? this.resolveReceiverInfo(uri, contract, receiver, callee.range.start)
       : undefined;
+    const receiverType = receiverInfo?.typeName;
     const target = receiverType ? this.resolver.resolveContract(receiverType, uri) : undefined;
     const parserTarget = target ? this.nodes.get(target.id) : undefined;
     const resolved = parserTarget
@@ -2237,8 +2252,7 @@ export class GraphIndex {
       : undefined;
     if (resolved) {
       this.addResolvedGraphEdge(sourceId, resolved, "delegateCall", callee.range, {
-        receiver,
-        receiverType,
+        ...this.receiverMetadata(receiver, receiverInfo),
       });
       return;
     }
@@ -2249,8 +2263,7 @@ export class GraphIndex {
       range: callee.range,
       unresolvedTarget: true,
       metadata: {
-        receiver,
-        receiverType,
+        ...this.receiverMetadata(receiver, receiverInfo),
         unresolvedTarget: true,
         ...this.resolutionMetadata(uri, callee.range.start, "heuristic"),
       },
@@ -2505,21 +2518,46 @@ export class GraphIndex {
     receiver: string,
     position: SourceRange["start"],
   ): string | undefined {
-    if (receiver === "this") return contract.name;
-    if (receiver === "super") return contract.baseContracts[0]?.baseName;
+    return this.resolveReceiverInfo(uri, contract, receiver, position)?.typeName;
+  }
+
+  private resolveReceiverInfo(
+    uri: string,
+    contract: ContractDefinition,
+    receiver: string,
+    position: SourceRange["start"],
+  ): (ReceiverTypeResolution & { typeName: string }) | undefined {
+    if (receiver === "this") {
+      return { typeName: contract.name, source: "this", receiver };
+    }
+    if (receiver === "super") {
+      const typeName = contract.baseContracts[0]?.baseName;
+      return typeName ? { typeName, source: "super", receiver } : undefined;
+    }
 
     if (this.symbolIndex) {
-      const resolved = resolveDottedReceiverTypeName(
+      const resolved = resolveDottedReceiverTypeInfo(
         this.parser,
         this.symbolIndex,
         uri,
         position,
         receiver,
       );
-      if (resolved) return normalizeTypeName(resolved);
+      if (resolved) return { ...resolved, typeName: normalizeTypeName(resolved.typeName) };
     }
 
-    return normalizeTypeName(receiver);
+    return { typeName: normalizeTypeName(receiver), source: "globalType", receiver };
+  }
+
+  private receiverMetadata(
+    receiver: string | null | undefined,
+    resolution: ReceiverTypeResolution | undefined,
+  ): Record<string, unknown> {
+    return {
+      ...(receiver ? { receiver } : {}),
+      ...(resolution?.typeName ? { receiverType: resolution.typeName } : {}),
+      ...(resolution?.source ? { receiverResolution: resolution.source } : {}),
+    };
   }
 
   private resolveUsingForTarget(
@@ -3191,7 +3229,7 @@ export class GraphIndex {
         return [value("memberName"), value("baseName")].filter(Boolean).join(" from ");
       case "calls":
       case "externalCall":
-        return value("calleeName") ?? "";
+        return this.callEdgeDetail(edge);
       case "delegateCall":
         return value("receiver", "receiverType") ?? "";
       case "creates":
@@ -3210,6 +3248,19 @@ export class GraphIndex {
       default:
         return "";
     }
+  }
+
+  private callEdgeDetail(edge: SolidityGraphEdge): string {
+    const metadata = edge.metadata;
+    const calleeName = metadata?.calleeName;
+    if (typeof calleeName !== "string" || calleeName.length === 0) return "";
+    const receiverType = metadata?.receiverType;
+    if (typeof receiverType === "string" && receiverType.length > 0) {
+      return `${receiverType}.${calleeName}`;
+    }
+    const receiver = metadata?.receiver;
+    if (typeof receiver === "string" && receiver.length > 0) return `${receiver}.${calleeName}`;
+    return calleeName;
   }
 
   private edgeResolutionConfidence(edge: SolidityGraphEdge): ProjectGraphResolutionConfidence {

@@ -70,6 +70,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph state, event, error, type, creation, and delegatecall edges now
   use the same solc-unmapped guard instead of preserving wrong parser fallback
   targets.
+- Project Graph call and external-call edges now include receiver provenance
+  metadata such as `receiverType` and `receiverResolution`, and evidence
+  summaries include resolved receiver types when available.
 
 ### Fixed
 
