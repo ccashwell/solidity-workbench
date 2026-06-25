@@ -553,6 +553,59 @@ contract MockERC4626 {
       }
     });
 
+    it("resolves calls through state variable receiver types", async () => {
+      const stateReceiver = setupFixture({
+        "src/IAsset.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+interface IAsset {
+    function transfer(address to, uint256 amount) external returns (bool);
+}
+`,
+        "src/Vault.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "./IAsset.sol";
+
+contract Vault {
+    IAsset internal asset;
+
+    function pay(address to, uint256 amount) external {
+        asset.transfer(to, amount);
+    }
+}
+`,
+        "test/MockAsset.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract MockAsset {
+    function transfer(address to) external returns (bool) {
+        to;
+        return true;
+    }
+}
+`,
+      });
+
+      try {
+        const vaultUri = URI.file(path.join(stateReceiver.tmpDir, "src/Vault.sol")).toString();
+        const calls = await stateReceiver.provider.getOutgoingCalls({
+          name: "pay",
+          kind: SymbolKind.Function,
+          uri: vaultUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "Vault",
+        });
+        const transfer = calls.find((call) => call.to.name === "transfer");
+        assert.ok(transfer, "expected state-variable receiver transfer call");
+        assert.equal(transfer.to.detail, "IAsset");
+        assert.notEqual(transfer.to.detail, "MockAsset");
+      } finally {
+        teardownFixture(stateReceiver);
+      }
+    });
+
     it("drops only the changed file's call sites on invalidate, leaving other callers intact", async () => {
       // Regression test for the per-keystroke invalidate hot path:
       // `invalidateFile` used to walk every callee name in the

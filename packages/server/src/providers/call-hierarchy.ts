@@ -11,7 +11,7 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { URI } from "vscode-uri";
-import type { ContractDefinition, FunctionDefinition } from "@solidity-workbench/common";
+import type { ContractDefinition } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
@@ -19,6 +19,7 @@ import type { SolcBridge } from "../compiler/solc-bridge.js";
 import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { GraphIndex, SolidityGraphNode } from "../analyzer/graph-index.js";
 import { getWordAtPosition, CALL_LIKE_KEYWORDS, isSolidityBuiltinType } from "../utils/text.js";
+import { resolveDottedReceiverTypeInfo } from "../utils/receiver-type.js";
 
 const CALL_HIERARCHY_INDEX_BATCH_SIZE = 24;
 
@@ -580,13 +581,6 @@ export class CallHierarchyProvider {
           if (isSolidityBuiltinType(calleeName)) continue;
 
           const absoluteMatchStart = match.index + match[0].lastIndexOf(calleeName);
-          const qualifier = this.resolveQualifier(
-            rawQualifier,
-            func,
-            contract,
-            bodyText.slice(0, absoluteMatchStart),
-          );
-
           // Binary-search the precomputed newline offsets to locate
           // (line, column) for `absoluteMatchStart`. `newlinesBefore`
           // is the count of newlines strictly before the offset; the
@@ -604,6 +598,7 @@ export class CallHierarchyProvider {
             start: { line: callLine, character: Math.max(0, callCol) },
             end: { line: callLine, character: Math.max(0, callCol) + calleeName.length },
           };
+          const qualifier = this.resolveQualifier(rawQualifier, uri, contract, callRange.start);
           const target = this.resolveSemanticCallTarget(uri, text, callRange);
 
           const outgoing = this.outgoingCalls.get(callerKey) ?? [];
@@ -701,9 +696,9 @@ export class CallHierarchyProvider {
    */
   private resolveQualifier(
     rawQualifier: string | undefined,
-    func: FunctionDefinition,
+    uri: string,
     contract: ContractDefinition,
-    bodyPrefix: string,
+    position: Position,
   ): string | undefined {
     if (!rawQualifier) return undefined;
 
@@ -715,36 +710,12 @@ export class CallHierarchyProvider {
       return firstBase && firstBase.length > 0 ? firstBase : undefined;
     }
 
-    for (const p of func.parameters) {
-      if (p.name && p.name === rawQualifier) {
-        return this.stripTypeDecorations(p.typeName) ?? rawQualifier;
-      }
-    }
-
-    const localType = this.findLocalVariableType(bodyPrefix, rawQualifier);
-    if (localType) return localType;
-
-    for (const v of contract.stateVariables) {
-      if (v.name === rawQualifier) {
-        return this.stripTypeDecorations(v.typeName) ?? rawQualifier;
-      }
-    }
-
-    return rawQualifier;
-  }
-
-  private findLocalVariableType(bodyPrefix: string, name: string): string | undefined {
-    const escapedName = escapeRegExp(name);
-    const declarationRe = new RegExp(
-      String.raw`(?:^|[;{}\n])\s*([A-Za-z_$][\w$]*(?:\s*\[[^\]]*\])*)\s+(?:(?:memory|storage|calldata)\s+)?${escapedName}\s*(?:=|;|,|\))`,
-      "g",
+    return (
+      this.stripTypeDecorations(
+        resolveDottedReceiverTypeInfo(this.parser, this.symbolIndex, uri, position, rawQualifier)
+          ?.typeName,
+      ) ?? rawQualifier
     );
-    let match: RegExpExecArray | null;
-    let typeName: string | undefined;
-    while ((match = declarationRe.exec(bodyPrefix)) !== null) {
-      typeName = this.stripTypeDecorations(match[1]);
-    }
-    return typeName;
   }
 
   private resolveCalleeSymbol(site: CallSite): CallTarget | undefined {
@@ -1004,10 +975,6 @@ interface CallTarget {
   range: Range;
   selectionRange: Range;
   containerName?: string;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /**

@@ -73,6 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph call and external-call edges now include receiver provenance
   metadata such as `receiverType` and `receiverResolution`, and evidence
   summaries include resolved receiver types when available.
+- Call hierarchy now uses the shared receiver provenance resolver for qualified
+  calls, including state-variable receivers.
 
 ### Fixed
 
