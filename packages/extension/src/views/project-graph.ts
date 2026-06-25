@@ -345,6 +345,7 @@ function codeGraphEdge(edge: ProjectGraphEdge): unknown {
     range: edge.range,
     resolutionConfidence: edge.resolutionConfidence,
     unresolvedTarget: edge.unresolvedTarget,
+    evidence: edge.evidence,
     metadata: edge.metadata,
     provenance: "solidity-workbench",
   };
@@ -976,6 +977,14 @@ export class ProjectGraphExporter {
     text-align: right;
     font-size: 11px;
   }
+  .edge-evidence {
+    grid-column: 2 / 4;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+  }
   .node-row {
     display: grid;
     grid-template-columns: 18px 1fr;
@@ -1460,7 +1469,10 @@ export class ProjectGraphExporter {
       const confidence = document.createElement("span");
       confidence.className = "edge-quality";
       confidence.textContent = edgeQualityLabel(edge);
-      row.append(kind, target, confidence);
+      const evidence = document.createElement("span");
+      evidence.className = "edge-evidence";
+      evidence.textContent = edgeEvidenceLabel(edge);
+      row.append(kind, target, confidence, evidence);
       summary.append(row);
     }
     if (!summary.childElementCount) {
@@ -1473,14 +1485,24 @@ export class ProjectGraphExporter {
   }
 
   function edgeTitle(edge, other) {
+    const evidence = edge.evidence
+      ? "\\n" + [edge.evidence.summary, edge.evidence.source, edge.evidence.target].filter(Boolean).join("\\n")
+      : "";
     const metadata = edge.metadata && Object.keys(edge.metadata).length
       ? "\\n" + JSON.stringify(edge.metadata, null, 2)
       : "";
-    return edge.kind + " · " + other.qualifiedName + "\\n" + edgeQualityLabel(edge) + metadata;
+    return edge.kind + " · " + other.qualifiedName + "\\n" + edgeQualityLabel(edge) + evidence + metadata;
   }
 
   function edgeQualityLabel(edge) {
     return (edgeIsUnresolved(edge) ? "unresolved/" : "") + edgeConfidence(edge);
+  }
+
+  function edgeEvidenceLabel(edge) {
+    if (edge.evidence && typeof edge.evidence.summary === "string") {
+      return edge.evidence.summary;
+    }
+    return edge.kind;
   }
 
   function render() {

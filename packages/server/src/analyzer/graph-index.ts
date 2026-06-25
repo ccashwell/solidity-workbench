@@ -8,6 +8,7 @@ import type {
   ModifierDefinition,
   ProjectGraphEdge,
   ProjectGraphEdgeKind,
+  ProjectGraphEdgeEvidence,
   ProjectGraphNode,
   ProjectGraphNodeKind,
   ProjectGraphPathResult,
@@ -2911,13 +2912,78 @@ export class GraphIndex {
       this.metadataResolutionConfidence(edge.metadata);
     const unresolvedTarget =
       edge.unresolvedTarget ?? (edge.metadata?.unresolvedTarget === true ? true : undefined);
+    const evidence =
+      edge.evidence ??
+      this.edgeEvidence(edge, resolutionConfidence ?? "unknown", unresolvedTarget === true);
 
-    if (!resolutionConfidence && unresolvedTarget === undefined) return edge;
     return {
       ...edge,
       ...(resolutionConfidence ? { resolutionConfidence } : {}),
       ...(unresolvedTarget !== undefined ? { unresolvedTarget } : {}),
+      evidence,
     };
+  }
+
+  private edgeEvidence(
+    edge: SolidityGraphEdge,
+    resolver: ProjectGraphResolutionConfidence,
+    unresolved: boolean,
+  ): ProjectGraphEdgeEvidence {
+    const sourceNode = this.nodes.get(edge.source);
+    const targetNode = this.nodes.get(edge.target);
+    const detail = this.edgeDetail(edge);
+    const unresolvedPrefix = unresolved ? "unresolved " : "";
+    return {
+      summary: `${unresolvedPrefix}${edge.kind}${detail ? `: ${detail}` : ""}`,
+      resolver,
+      source: sourceNode?.qualifiedName ?? edge.source,
+      target: targetNode?.qualifiedName ?? edge.target,
+      sourceUri: sourceNode?.uri || this.edgeSourceUri(edge),
+      sourceRange: edge.range,
+      targetUri: targetNode?.uri,
+      targetRange: targetNode?.selectionRange,
+    };
+  }
+
+  private edgeDetail(edge: SolidityGraphEdge): string {
+    const metadata = edge.metadata;
+    const value = (...keys: string[]): string | undefined => {
+      for (const key of keys) {
+        const raw = metadata?.[key];
+        if (typeof raw === "string" && raw.length > 0) return raw;
+      }
+      return undefined;
+    };
+
+    switch (edge.kind) {
+      case "imports":
+        return value("importPath") ?? "";
+      case "inherits":
+        return value("baseName") ?? "";
+      case "implements":
+      case "overrides":
+        return [value("memberName"), value("baseName")].filter(Boolean).join(" from ");
+      case "calls":
+      case "externalCall":
+        return value("calleeName") ?? "";
+      case "delegateCall":
+        return value("receiver", "receiverType") ?? "";
+      case "creates":
+        return value("contractName") ?? "";
+      case "usesModifier":
+        return value("modifierName") ?? "";
+      case "reads":
+      case "writes":
+        return value("variableName") ?? "";
+      case "emits":
+        return value("eventName") ?? "";
+      case "revertsWith":
+        return value("errorName") ?? "";
+      case "usesType":
+        return [value("typeName"), value("usage")].filter(Boolean).join(" as ");
+      default:
+        return "";
+    }
   }
 
   private edgeResolutionConfidence(edge: SolidityGraphEdge): ProjectGraphResolutionConfidence {

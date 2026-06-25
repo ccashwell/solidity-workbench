@@ -206,6 +206,12 @@ describe("Feature coverage — project graph export", () => {
         target: "external:IERC20",
         kind: "usesType",
         resolutionConfidence: "parser",
+        evidence: {
+          summary: "usesType: IERC20 as parameter",
+          resolver: "parser",
+          source: "Vault.deposit",
+          target: "external:IERC20",
+        },
         metadata: { resolutionConfidence: "parser" },
       },
       {
@@ -214,6 +220,12 @@ describe("Feature coverage — project graph export", () => {
         kind: "externalCall",
         resolutionConfidence: "heuristic",
         unresolvedTarget: true,
+        evidence: {
+          summary: "unresolved externalCall: call",
+          resolver: "heuristic",
+          source: "Vault.deposit",
+          target: "external:unknown-call",
+        },
         metadata: { resolutionConfidence: "heuristic", unresolvedTarget: true },
       },
     ],
@@ -251,6 +263,7 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(parsedJson.relationshipStatus.state, "partial");
     assert.equal(parsedJson.relationshipStatus.pending, 3);
     assert.equal(parsedJson.edgeQuality.unresolved, 1);
+    assert.equal(parsedJson.edges[0].evidence.summary, "usesType: IERC20 as parameter");
     assert.ok(
       parsedJson.nodes.some(
         (node: { id?: string; kind?: string }) =>
@@ -284,8 +297,10 @@ describe("Feature coverage — project graph export", () => {
     assert.match(parsed.graph.relationshipStatus.detail, /full-workspace edges may be partial/);
     assert.equal(parsed.edges[0].resolutionConfidence, "parser");
     assert.equal(parsed.edges[0].unresolvedTarget, undefined);
+    assert.equal(parsed.edges[0].evidence.summary, "usesType: IERC20 as parameter");
     assert.equal(parsed.edges[1].resolutionConfidence, "heuristic");
     assert.equal(parsed.edges[1].unresolvedTarget, true);
+    assert.equal(parsed.edges[1].evidence.summary, "unresolved externalCall: call");
     assert.ok(
       parsed.nodes.some(
         (node: { id?: string; kind?: string }) =>

@@ -149,9 +149,14 @@ contract Child is Base {
       );
       assert.equal(inheritedCall?.metadata?.resolutionConfidence, "solc");
       assert.equal(inheritedCall?.resolutionConfidence, "solc");
+      assert.equal(inheritedCall?.evidence?.resolver, "solc");
+      assert.match(inheritedCall?.evidence?.summary ?? "", /calls: inherited/);
+      assert.equal(inheritedCall?.evidence?.source, "Child.entry");
+      assert.equal(inheritedCall?.evidence?.target, "Base.inherited");
       const helperCall = calls.find((edge) => edge.target === helper.id);
       assert.equal(helperCall?.metadata?.resolutionConfidence, "parser");
       assert.equal(helperCall?.resolutionConfidence, "parser");
+      assert.equal(helperCall?.evidence?.resolver, "parser");
 
       const writes = graph.getOutgoingEdges(entry.id, "writes");
       assert.ok(
@@ -330,6 +335,13 @@ contract Child is Base {
           .find((edge) => edge.target === inherited.id)?.resolutionConfidence,
         "solc",
         "expected cached graph to restore promoted edge confidence",
+      );
+      assert.match(
+        restoredGraph
+          .getOutgoingEdges(entry.id, "calls")
+          .find((edge) => edge.target === inherited.id)?.evidence?.summary ?? "",
+        /calls: inherited/,
+        "expected cached graph to restore edge evidence",
       );
 
       const cacheFiles = fs.readdirSync(cacheDir).filter((name) => name.endsWith(".json"));
@@ -1792,6 +1804,8 @@ contract Impl is IFoo, Base {
       assert.equal(delegateCalls[0].metadata?.unresolvedTarget, true);
       assert.equal(delegateCalls[0].unresolvedTarget, true);
       assert.equal(delegateCalls[0].resolutionConfidence, "heuristic");
+      assert.equal(delegateCalls[0].evidence?.resolver, "heuristic");
+      assert.match(delegateCalls[0].evidence?.summary ?? "", /unresolved delegateCall/);
 
       const lowLevelExternalCalls = graph.getOutgoingEdges(lowLevel.id, "externalCall");
       assert.equal(lowLevelExternalCalls.length, 2);
@@ -1813,6 +1827,12 @@ contract Impl is IFoo, Base {
           (edge) => edge.unresolvedTarget === true && edge.resolutionConfidence === "heuristic",
         ),
         "expected unresolved low-level external call fields to be promoted onto graph edges",
+      );
+      assert.ok(
+        lowLevelExternalCalls.every((edge) =>
+          /unresolved externalCall/.test(edge.evidence?.summary ?? ""),
+        ),
+        "expected unresolved low-level external call evidence",
       );
       assert.ok(
         (graph.getStats().unresolvedEdgeCount ?? 0) >= 3,

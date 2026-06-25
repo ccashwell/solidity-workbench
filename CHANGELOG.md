@@ -44,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   heuristic, unknown, and unresolved edges.
 - The Project Graph view can now filter visible edges by resolution quality and
   labels heuristic or unresolved edges directly in the graph details panel.
+- Project Graph edges now include normalized evidence with source/target labels,
+  syntax ranges, resolver, and a short reason for why the edge exists.
 
 ### Fixed
 

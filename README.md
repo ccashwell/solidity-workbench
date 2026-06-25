@@ -129,6 +129,8 @@ exports and stats distinguish solc-confirmed edges from parser, heuristic, and
 unresolved edges.
 The Project Graph view can filter by the same edge-quality categories and marks
 heuristic or unresolved edges visually.
+Each edge includes evidence with the source syntax range, target declaration,
+resolver, and a short summary explaining why the edge exists.
 Dependency files under configured Foundry `libs` are excluded from Project Graph
 by default; set `solidity-workbench.projectGraph.dependencyIndexing` to
 `declarations` or `relationships` to opt into dependency declarations or full

@@ -215,6 +215,23 @@ export type ProjectGraphEdgeKind =
 
 export type ProjectGraphResolutionConfidence = "solc" | "parser" | "heuristic" | "unknown";
 
+export interface ProjectGraphEdgeEvidence {
+  /** Short user-facing explanation for why this edge exists. */
+  summary: string;
+  /** Resolution path used to choose the target, when applicable. */
+  resolver: ProjectGraphResolutionConfidence;
+  /** Source endpoint label captured when the edge was produced. */
+  source?: string;
+  /** Target endpoint label captured when the edge was produced. */
+  target?: string;
+  /** URI/range of the source syntax that produced the edge. */
+  sourceUri?: string;
+  sourceRange?: SourceRange;
+  /** URI/range of the target declaration, when known. */
+  targetUri?: string;
+  targetRange?: SourceRange;
+}
+
 export interface GetProjectGraphParams {
   /** Optional edge-kind filter. Omit to return every known edge kind. */
   edgeKinds?: ProjectGraphEdgeKind[];
@@ -296,6 +313,8 @@ export interface ProjectGraphEdge {
   resolutionConfidence?: ProjectGraphResolutionConfidence;
   /** True when the source operation is known but the concrete target is not. */
   unresolvedTarget?: boolean;
+  /** Human-readable evidence explaining why the edge exists. */
+  evidence?: ProjectGraphEdgeEvidence;
   metadata?: Record<string, unknown>;
 }
 
