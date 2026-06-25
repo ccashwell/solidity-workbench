@@ -12,6 +12,8 @@ import {
  */
 export class InheritanceGraphPanel {
   private panel: vscode.WebviewPanel | undefined;
+  private includeTests = false;
+  private includeDependencies = false;
 
   constructor(private client: LanguageClient) {}
 
@@ -30,16 +32,7 @@ export class InheritanceGraphPanel {
       return;
     }
 
-    const focus = this.findActiveContract();
-    const params: GetInheritanceGraphParams = {
-      contractPath: focus?.filePath,
-      contractName: focus?.name,
-    };
-
-    const graph = await this.client.sendRequest<InheritanceGraphResult>(
-      GetInheritanceGraph,
-      params,
-    );
+    const graph = await this.loadGraph();
     if (graph.nodes.length === 0) {
       vscode.window.showInformationMessage("No contracts found in the workspace.");
       return;
@@ -72,11 +65,28 @@ export class InheritanceGraphPanel {
                 )
               : undefined;
           await vscode.window.showTextDocument(doc, { preview: true, selection });
+        } else if (msg.type === "reload") {
+          this.includeTests = msg.includeTests === true;
+          this.includeDependencies = msg.includeDependencies === true;
+          const nextGraph = await this.loadGraph();
+          if (this.panel) this.panel.webview.html = this.buildHtml(nextGraph);
         }
       });
     }
 
     this.panel.webview.html = this.buildHtml(graph);
+  }
+
+  private async loadGraph(): Promise<InheritanceGraphResult> {
+    const focus = this.findActiveContract();
+    const params: GetInheritanceGraphParams = {
+      contractPath: focus?.filePath,
+      contractName: focus?.name,
+      includeTests: this.includeTests,
+      includeDependencies: this.includeDependencies,
+    };
+
+    return this.client.sendRequest<InheritanceGraphResult>(GetInheritanceGraph, params);
   }
 
   private findActiveContract(): { name: string; filePath: string } | undefined {
@@ -121,6 +131,8 @@ export class InheritanceGraphPanel {
 
   private buildHtml(graph: InheritanceGraphResult): string {
     const graphJson = JSON.stringify(graph).replace(/</g, "\\u003c");
+    const includeTestsJson = JSON.stringify(this.includeTests);
+    const includeDependenciesJson = JSON.stringify(this.includeDependencies);
 
     return `<!DOCTYPE html>
 <html lang="en">
@@ -277,8 +289,8 @@ export class InheritanceGraphPanel {
     const state = {
       search: "",
       focused: Boolean(graph.focusId),
-      tests: false,
-      deps: false,
+      tests: ${includeTestsJson},
+      deps: ${includeDependenciesJson},
       zoom: 1,
       autoFit: true,
     };
@@ -301,6 +313,8 @@ export class InheritanceGraphPanel {
     };
     els.focused.checked = state.focused;
     els.focused.disabled = !graph.focusId;
+    els.tests.checked = state.tests;
+    els.deps.checked = state.deps;
 
     const nodesById = new Map(graph.nodes.map((n) => [n.id, n]));
     const ancestors = new Set();
@@ -508,8 +522,18 @@ export class InheritanceGraphPanel {
       render();
     });
     els.focused.addEventListener("change", () => { state.focused = els.focused.checked; render(); });
-    els.tests.addEventListener("change", () => { state.tests = els.tests.checked; render(); });
-    els.deps.addEventListener("change", () => { state.deps = els.deps.checked; render(); });
+    function reloadScope() {
+      state.tests = els.tests.checked;
+      state.deps = els.deps.checked;
+      els.canvas.innerHTML = '<div class="empty">Loading graph...</div>';
+      vscode.postMessage({
+        type: "reload",
+        includeTests: state.tests,
+        includeDependencies: state.deps,
+      });
+    }
+    els.tests.addEventListener("change", reloadScope);
+    els.deps.addEventListener("change", reloadScope);
     els.zoomOut.addEventListener("click", () => {
       setZoom(state.zoom - 0.15, { x: els.canvas.clientWidth / 2, y: els.canvas.clientHeight / 2 });
     });

@@ -154,6 +154,10 @@ export const GetInheritanceGraph = "solidity-workbench/getInheritanceGraph";
 export interface GetInheritanceGraphParams {
   contractPath?: string;
   contractName?: string;
+  /** Include test files and contracts that extend Foundry's Test base. Defaults to false. */
+  includeTests?: boolean;
+  /** Include dependency contracts. Defaults to false. */
+  includeDependencies?: boolean;
 }
 
 export interface InheritanceGraphResult {

@@ -4,7 +4,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vm from "node:vm";
 import * as vscode from "vscode";
-import type { ProjectGraphResult, ProjectGraphStatsResult } from "@solidity-workbench/common";
+import type {
+  InheritanceGraphResult,
+  ProjectGraphResult,
+  ProjectGraphStatsResult,
+} from "@solidity-workbench/common";
 import {
   ProjectGraphExporter,
   PROJECT_GRAPH_CALLER_TARGET_NODE_KINDS,
@@ -26,6 +30,7 @@ import {
   summarizeProjectGraphResultDiagnostics,
   summarizeProjectGraphRelationshipStatus,
 } from "../../views/project-graph";
+import { InheritanceGraphPanel } from "../../views/inheritance-graph";
 
 /**
  * End-to-end coverage of the feature surface that landed across the
@@ -198,6 +203,44 @@ describe("Feature coverage — webview commands", () => {
     ]) {
       assert.ok(all.includes(cmd), `expected '${cmd}' to be registered`);
     }
+  });
+
+  it("renders inheritance graph scope controls as explicit reload requests", () => {
+    type InheritanceGraphPanelInternals = {
+      includeTests: boolean;
+      includeDependencies: boolean;
+      buildHtml(graph: InheritanceGraphResult): string;
+    };
+    const panel = new InheritanceGraphPanel(
+      {} as ConstructorParameters<typeof InheritanceGraphPanel>[0],
+    ) as unknown as InheritanceGraphPanelInternals;
+    panel.includeTests = true;
+    panel.includeDependencies = true;
+
+    const html = panel.buildHtml({
+      focusId: "src/A.sol:A",
+      nodes: [
+        {
+          id: "src/A.sol:A",
+          name: "A",
+          filePath: "/workspace/src/A.sol",
+          uri: "file:///workspace/src/A.sol",
+          kind: "contract",
+          tier: "project",
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 13 } },
+          selectionRange: { start: { line: 0, character: 9 }, end: { line: 0, character: 10 } },
+        },
+      ],
+      edges: [],
+    });
+
+    assert.match(html, /id="tests"/);
+    assert.match(html, /id="deps"/);
+    assert.match(html, /tests: true/);
+    assert.match(html, /deps: true/);
+    assert.match(html, /type: "reload"/);
+    assert.match(html, /includeTests: state\.tests/);
+    assert.match(html, /includeDependencies: state\.deps/);
   });
 });
 
