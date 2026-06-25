@@ -11,8 +11,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { URI } from "vscode-uri";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
+import type { SolSymbol } from "@solidity-workbench/common";
 import { getWordAtPosition, isInsideString, SOLIDITY_KEYWORDS } from "../utils/text.js";
 
 /**
@@ -39,6 +41,7 @@ export class RenameProvider {
     private symbolIndex: SymbolIndex,
     private workspace: WorkspaceManager,
     private documents: TextDocuments<TextDocument>,
+    private resolver?: SemanticResolver,
   ) {}
 
   /**
@@ -81,7 +84,7 @@ export class RenameProvider {
 
     if (SOLIDITY_KEYWORDS.has(word.text)) return null;
 
-    const symbols = this.symbolIndex.findSymbols(word.text);
+    const symbols = this.visibleSymbols(word.text, document.uri);
 
     if (symbols.length > 0) {
       const uniqueKinds = Array.from(new Set(symbols.map((s) => s.kind))).sort();
@@ -148,7 +151,8 @@ export class RenameProvider {
     // Prefer the solc path for identifiers that aren't in the global
     // symbol index — those are locals / parameters / block-scoped
     // bindings.
-    if (this.symbolIndex.findSymbols(oldName).length === 0) {
+    const symbols = this.visibleSymbols(oldName, document.uri);
+    if (symbols.length === 0) {
       return this.provideLocalRename(document, position, newName);
     }
 
@@ -164,10 +168,12 @@ export class RenameProvider {
     };
 
     const changes: Record<string, TextEdit[]> = {};
+    const scanUris = this.renameScanUris(document.uri, oldName, position, symbols);
 
     // 1. Find all occurrences in currently open documents (skip lib/).
     for (const doc of this.documents.all()) {
       if (token?.isCancellationRequested) return null;
+      if (!scanUris.has(doc.uri)) continue;
       if (isInLibDir(doc.uri)) continue;
       const edits = this.findOccurrencesInText(doc.getText(), oldName);
       if (edits.length > 0) {
@@ -176,8 +182,7 @@ export class RenameProvider {
     }
 
     // 2. Scan all workspace files (not currently open), skipping lib/.
-    const allUris = this.workspace.getAllFileUris();
-    for (const uri of allUris) {
+    for (const uri of scanUris) {
       if (token?.isCancellationRequested) return null;
       if (changes[uri]) continue; // Already processed from open docs
       if (isInLibDir(uri)) continue;
@@ -197,6 +202,68 @@ export class RenameProvider {
     if (Object.keys(changes).length === 0) return null;
 
     return { changes };
+  }
+
+  private visibleSymbols(name: string, fromUri: string): SolSymbol[] {
+    const symbols = this.symbolIndex.findSymbols(name);
+    return this.resolver ? this.resolver.filterVisibleSymbols(fromUri, symbols) : symbols;
+  }
+
+  private renameScanUris(
+    currentUri: string,
+    oldName: string,
+    position: Position,
+    visibleSymbols: SolSymbol[],
+  ): Set<string> {
+    if (!this.resolver) return new Set(this.workspace.getAllFileUris());
+
+    const selected = this.selectRenameSymbol(currentUri, oldName, position, visibleSymbols);
+    if (!selected) return new Set(this.workspace.getAllFileUris());
+
+    const scanUris = new Set<string>([selected.filePath, currentUri]);
+    for (const uri of this.workspace.getAllFileUris()) {
+      if (this.resolver.collectReachableUris(uri).has(selected.filePath)) {
+        scanUris.add(uri);
+      }
+    }
+    return scanUris;
+  }
+
+  private selectRenameSymbol(
+    currentUri: string,
+    oldName: string,
+    position: Position,
+    visibleSymbols: SolSymbol[],
+  ): SolSymbol | undefined {
+    const declarationAtCursor = visibleSymbols.find(
+      (symbol) => symbol.filePath === currentUri && this.rangeContains(symbol.nameRange, position),
+    );
+    if (declarationAtCursor) return declarationAtCursor;
+
+    if (visibleSymbols.length === 1) return visibleSymbols[0];
+
+    const sameFile = visibleSymbols.filter((symbol) => symbol.filePath === currentUri);
+    if (sameFile.length === 1) return sameFile[0];
+
+    const imported = this.resolver?.resolveImportedSymbol(oldName, currentUri);
+    if (imported) {
+      return visibleSymbols.find(
+        (symbol) => symbol.filePath === imported.uri && symbol.name === imported.name,
+      );
+    }
+
+    return undefined;
+  }
+
+  private rangeContains(range: Range, position: Position): boolean {
+    if (position.line < range.start.line || position.line > range.end.line) return false;
+    if (position.line === range.start.line && position.character < range.start.character) {
+      return false;
+    }
+    if (position.line === range.end.line && position.character > range.end.character) {
+      return false;
+    }
+    return true;
   }
 
   /**

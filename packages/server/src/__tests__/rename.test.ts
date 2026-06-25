@@ -7,6 +7,7 @@ import { URI } from "vscode-uri";
 
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
+import { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { RenameProvider } from "../providers/rename.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
@@ -27,11 +28,16 @@ type RenameSolcBridge = Parameters<RenameProvider["setSolcBridge"]>[0];
  * Minimal WorkspaceManager stand-in. The rename provider only pulls
  * three members off of it: getAllFileUris, uriToPath, and libDirs.
  */
-function makeFakeWorkspace(files: TestFile[], libDirs: string[]): WorkspaceManager {
+function makeFakeWorkspace(
+  files: TestFile[],
+  libDirs: string[],
+  resolveImport: (importPath: string, from: string) => string | null = () => null,
+): WorkspaceManager {
   const uris = files.map((f) => URI.file(f.path).toString());
   return {
     getAllFileUris: () => uris,
     uriToPath: (uri: string) => URI.parse(uri).fsPath,
+    resolveImport,
     libDirs,
   } as unknown as WorkspaceManager;
 }
@@ -48,9 +54,16 @@ function makeFakeDocuments(docs: TextDocument[]): TextDocuments<TextDocument> {
   } as unknown as TextDocuments<TextDocument>;
 }
 
-function setupHarness(files: TestFile[], libDirs: string[] = []): TestHarness {
+function setupHarness(
+  files: TestFile[],
+  libDirs: string[] = [],
+  options: {
+    resolveImport?: (importPath: string, from: string) => string | null;
+    useResolver?: boolean;
+  } = {},
+): TestHarness {
   const parser = new SolidityParser();
-  const workspace = makeFakeWorkspace(files, libDirs);
+  const workspace = makeFakeWorkspace(files, libDirs, options.resolveImport);
   const symbolIndex = new SymbolIndex(parser, workspace);
 
   const docs: TextDocument[] = [];
@@ -62,7 +75,10 @@ function setupHarness(files: TestFile[], libDirs: string[] = []): TestHarness {
   }
 
   const fakeDocs = makeFakeDocuments(docs);
-  const provider = new RenameProvider(symbolIndex, workspace, fakeDocs);
+  const resolver = options.useResolver
+    ? new SemanticResolver(parser, workspace, symbolIndex)
+    : undefined;
+  const provider = new RenameProvider(symbolIndex, workspace, fakeDocs, resolver);
 
   const byPath = new Map<string, TextDocument>(docs.map((d, i) => [files[i].path, d]));
   return {
@@ -259,6 +275,54 @@ describe("RenameProvider", () => {
         !edits.some((e) => e.range.start.line === 5),
         "semantic rename must not rewrite B.ping(uint256)",
       );
+    });
+
+    it("limits text fallback rename to files that can reach the selected declaration", async () => {
+      const helperFile: TestFile = {
+        path: path.join(SRC_DIR, "Helpers.sol"),
+        text: "function helper() pure returns (uint256) {\n    return 1;\n}\n",
+      };
+      const useFile: TestFile = {
+        path: path.join(SRC_DIR, "Use.sol"),
+        text:
+          'import "./Helpers.sol";\n' +
+          "contract Use {\n" +
+          "    function run() external pure returns (uint256) {\n" +
+          "        return helper();\n" +
+          "    }\n" +
+          "}\n",
+      };
+      const testHelperFile: TestFile = {
+        path: path.join(VIRTUAL_ROOT, "test", "Helpers.sol"),
+        text: "function helper() pure returns (uint256) {\n    return 2;\n}\n",
+      };
+      const h = setupHarness([helperFile, useFile, testHelperFile], [], {
+        useResolver: true,
+        resolveImport: (importPath, from) =>
+          importPath === "./Helpers.sol" && from.endsWith(`${path.sep}src${path.sep}Use.sol`)
+            ? helperFile.path
+            : null,
+      });
+      const doc = h.docForPath(helperFile.path);
+
+      const result = await h.provider.provideRename(
+        doc,
+        { line: 0, character: "function ".length + 1 },
+        "renamedHelper",
+      );
+
+      assert.ok(result?.changes);
+      const helperUri = h.uriFor(helperFile.path);
+      const useUri = h.uriFor(useFile.path);
+      const testHelperUri = h.uriFor(testHelperFile.path);
+      assert.ok(result.changes[helperUri], "expected declaration file edit");
+      assert.ok(result.changes[useUri], "expected importing source file edit");
+      assert.equal(
+        result.changes[testHelperUri],
+        undefined,
+        "unrelated same-name test helper must not be renamed",
+      );
+      assert.deepEqual(Object.keys(result.changes).sort(), [helperUri, useUri].sort());
     });
   });
 });
