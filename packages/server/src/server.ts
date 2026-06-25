@@ -2,15 +2,17 @@ import {
   createConnection,
   TextDocuments,
   ProposedFeatures,
-  InitializeParams,
-  InitializeResult,
   TextDocumentSyncKind,
-  CompletionItem,
-  Hover,
   DidChangeConfigurationNotification,
+  FileChangeType,
+} from "vscode-languageserver/node.js";
+import type {
   CodeAction,
   CancellationToken,
-  FileChangeType,
+  CompletionItem,
+  Hover,
+  InitializeParams,
+  InitializeResult,
   WorkspaceFoldersChangeEvent,
 } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
@@ -523,6 +525,7 @@ async function handleWorkspaceFoldersChanged(event: WorkspaceFoldersChangeEvent)
   await symbolIndex.indexWorkspace();
   cancelGraphRelationshipIndex();
   graphIndex.rebuildWorkspaceDeclarations();
+  graphIndex.writeCache(graphCacheDir);
   if (shouldRunBackgroundGraphRelationshipIndex()) scheduleGraphRelationshipIndex();
 }
 
@@ -559,6 +562,7 @@ connection.onDidChangeWatchedFiles(async (params) => {
     await symbolIndex.indexWorkspace();
     cancelGraphRelationshipIndex();
     graphIndex.rebuildWorkspaceDeclarations();
+    graphIndex.writeCache(graphCacheDir);
     if (shouldRunBackgroundGraphRelationshipIndex()) scheduleGraphRelationshipIndex();
     return;
   }
