@@ -384,6 +384,19 @@ contract Child is Base {
         "expected callees query to include outgoing call-like targets",
       );
 
+      const nonCallableCallers = graph.query({
+        kind: "callers",
+        target: { nodeId: count.id },
+        targetKinds: ["function"],
+      });
+      assert.equal(
+        nonCallableCallers.found,
+        false,
+        "explicit callers targets must also respect callable target constraints",
+      );
+      assert.deepEqual(nonCallableCallers.nodes, []);
+      assert.deepEqual(nonCallableCallers.edges, []);
+
       const countImpact = graph.query({
         kind: "impact",
         target: { nodeId: count.id },

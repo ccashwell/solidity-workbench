@@ -1013,7 +1013,14 @@ export class GraphIndex {
   }
 
   private resolveGraphQueryTarget(params: QueryProjectGraphParams): SolidityGraphNode | undefined {
-    if (params.target) return this.resolveGraphEndpoint(params.target);
+    if (params.target) {
+      const target = this.resolveGraphEndpoint(params.target);
+      if (!target) return undefined;
+      const allowedKinds = params.targetKinds?.length
+        ? new Set<ProjectGraphNodeKind>(params.targetKinds)
+        : null;
+      return !allowedKinds || allowedKinds.has(target.kind) ? target : undefined;
+    }
     const query = params.query?.trim();
     if (!query) return undefined;
     return this.search({

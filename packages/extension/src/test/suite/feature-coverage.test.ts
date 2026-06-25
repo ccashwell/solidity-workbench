@@ -391,8 +391,9 @@ describe("Feature coverage — project graph export", () => {
     );
 
     assert.match(source, /PROJECT_GRAPH_CALLABLE_NODE_KINDS/);
-    assert.match(source, /targetKinds:\s*target \? undefined : this\.projectGraphQueryTargetKinds/);
+    assert.match(source, /targetKinds:\s*this\.projectGraphQueryTargetKinds\(kind\)/);
     assert.match(source, /projectGraphQueryTargetKinds\(pickedKind\.queryKind\)/);
+    assert.match(source, /No callable project graph query target found\./);
   });
 
   it("summarizes project graph edge quality", () => {

@@ -396,7 +396,7 @@ export interface QueryProjectGraphParams {
   target?: ProjectGraphEndpoint;
   /** Symbol query used when target is omitted. The best ranked match is queried. */
   query?: string;
-  /** Restrict query target candidates when resolving by text query. */
+  /** Restrict query targets by node kind. Applies to explicit targets and text queries. */
   targetKinds?: ProjectGraphNodeKind[];
   /** Optional edge-kind filter. Defaults depend on query kind. */
   edgeKinds?: ProjectGraphEdgeKind[];

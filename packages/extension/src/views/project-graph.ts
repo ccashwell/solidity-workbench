@@ -580,11 +580,11 @@ export class ProjectGraphExporter {
             kind,
             target,
             query: target ? undefined : query,
-            targetKinds: target ? undefined : this.projectGraphQueryTargetKinds(kind),
+            targetKinds: this.projectGraphQueryTargetKinds(kind),
             maxNodes: 240,
           });
           if (!result.found) {
-            await this.postProjectGraphStatus("No project graph query target found.");
+            await this.postProjectGraphStatus(this.projectGraphQueryMissLabel(kind));
             return;
           }
           const stats = await this.getProjectGraphStats();
@@ -786,15 +786,12 @@ export class ProjectGraphExporter {
           ? { uri: focused.uri.toString(), position: focused.position }
           : undefined,
       query: textQuery,
-      targetKinds:
-        focused && useCursor?.value !== false
-          ? undefined
-          : this.projectGraphQueryTargetKinds(pickedKind.queryKind),
+      targetKinds: this.projectGraphQueryTargetKinds(pickedKind.queryKind),
       maxNodes: 120,
     });
 
     if (!result.found) {
-      vscode.window.showInformationMessage("No project graph query target found.");
+      vscode.window.showInformationMessage(this.projectGraphQueryMissLabel(pickedKind.queryKind));
       return;
     }
 
@@ -940,6 +937,12 @@ export class ProjectGraphExporter {
     kind: ProjectGraphQueryKind,
   ): ProjectGraphNodeKind[] | undefined {
     return kind === "impact" ? undefined : PROJECT_GRAPH_CALLABLE_NODE_KINDS;
+  }
+
+  private projectGraphQueryMissLabel(kind: ProjectGraphQueryKind): string {
+    return kind === "impact"
+      ? "No project graph query target found."
+      : "No callable project graph query target found.";
   }
 
   private graphQueryLabel(kind: ProjectGraphQueryKind): string {

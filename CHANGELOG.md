@@ -57,6 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Text-driven Project Graph callers/callees queries now constrain target
   selection to callable declarations, avoiding same-name contracts, events,
   types, or state variables being selected as call-hierarchy roots.
+- Cursor and selected-node Project Graph callers/callees queries now apply the
+  same callable-target constraint, so state variables and type nodes do not
+  produce misleading call-hierarchy-style results.
 
 ### Fixed
 
