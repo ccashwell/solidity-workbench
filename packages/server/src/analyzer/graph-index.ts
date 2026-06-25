@@ -1264,13 +1264,12 @@ export class GraphIndex {
     const signatureQuery = normalizeGraphDeclarationSignature(query);
     if (signatureQuery) {
       const signatureMatches = this.findGraphDeclarationSignatureMatches(signatureQuery);
-      const target = signatureMatches.find((node) =>
-        excluded.has(node.id)
-          ? false
-          : this.isAllowedGraphQueryTarget(params.kind, node, allowedKinds),
+      const visibleSignatureMatches = signatureMatches.filter((node) => !excluded.has(node.id));
+      const target = visibleSignatureMatches.find((node) =>
+        this.isAllowedGraphQueryTarget(params.kind, node, allowedKinds),
       );
       if (target) return { target, missReason: "targetNotFound" };
-      return signatureMatches.length > 0
+      return visibleSignatureMatches.length > 0
         ? { missReason: "targetKindMismatch" }
         : { missReason: "targetNotFound" };
     }

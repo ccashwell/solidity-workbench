@@ -1064,6 +1064,32 @@ contract ProdTest { function test_Run() external {} }
         true,
         "includeTests should propagate through graph query target resolution",
       );
+      const hiddenSignatureQuery = graph.query({
+        kind: "callers",
+        query: "SourceHarness.test_run()",
+        targetKinds: ["function"],
+      });
+      assert.equal(
+        hiddenSignatureQuery.found,
+        false,
+        "exact signature queries should respect the default test scope",
+      );
+      assert.equal(
+        hiddenSignatureQuery.missReason,
+        "targetNotFound",
+        "hidden exact signature matches should not be reported as kind mismatches",
+      );
+      const visibleSignatureQuery = graph.query({
+        kind: "callers",
+        query: "SourceHarness.test_run()",
+        targetKinds: ["function"],
+        includeTests: true,
+      });
+      assert.equal(
+        visibleSignatureQuery.found,
+        true,
+        "includeTests should expose exact signature query targets",
+      );
 
       const sourceHarness = graph
         .getNodes()
