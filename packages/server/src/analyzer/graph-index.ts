@@ -688,7 +688,7 @@ export class GraphIndex {
     const excluded = this.excludedGraphNodeIds(scope);
     let nodes = this.getNodes().filter((node) => !excluded.has(node.id));
     let edges = allowed ? this.edges.filter((edge) => allowed.has(edge.kind)) : this.edges;
-    edges = edges.filter((edge) => !excluded.has(edge.source) && !excluded.has(edge.target));
+    edges = edges.filter((edge) => this.graphEdgeEndpointsVisible(edge, excluded));
     const limit = maxNodes === undefined ? undefined : Math.max(1, Math.min(maxNodes, 10_000));
     let truncated = false;
     if (limit !== undefined && nodes.length > limit) {
@@ -755,7 +755,7 @@ export class GraphIndex {
           match.node.id,
           params.edgeDirection ?? "both",
           edgeKinds,
-        ).filter((edge) => !excluded.has(edge.source) && !excluded.has(edge.target));
+        ).filter((edge) => this.graphEdgeEndpointsVisible(edge, excluded));
         match.edges = adjacent.slice(0, maxEdgesPerNode);
         const related = new Map<string, SolidityGraphNode>();
         for (const edge of match.edges) {
@@ -1317,6 +1317,15 @@ export class GraphIndex {
     if (allowedKinds && !allowedKinds.has(node.kind)) return false;
     return (
       kind !== "callers" || node.kind !== "stateVariable" || node.metadata?.publicGetter === true
+    );
+  }
+
+  private graphEdgeEndpointsVisible(edge: SolidityGraphEdge, excluded: Set<string>): boolean {
+    return (
+      this.nodes.has(edge.source) &&
+      this.nodes.has(edge.target) &&
+      !excluded.has(edge.source) &&
+      !excluded.has(edge.target)
     );
   }
 

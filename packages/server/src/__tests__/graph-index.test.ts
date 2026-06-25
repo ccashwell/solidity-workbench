@@ -1066,6 +1066,23 @@ contract ProdTest { function test_Run() external {} }
         defaultGraph.nodes.some((node) => node.name === "UsesNonFoundryTest"),
         "project contracts extending a non-Foundry dependency named Test should stay visible",
       );
+      const defaultGraphNodeIds = new Set(defaultGraph.nodes.map((node) => node.id));
+      assert.ok(
+        defaultGraph.edges.every(
+          (edge) => defaultGraphNodeIds.has(edge.source) && defaultGraphNodeIds.has(edge.target),
+        ),
+        "default graph snapshots should not include edges to hidden or unindexed dependency nodes",
+      );
+      const depSearch = graph.search({ query: "UsesDep", includeEdges: true });
+      assert.ok(depSearch.matches.length > 0, "expected UsesDep search match");
+      assert.ok(
+        depSearch.matches.every((match) =>
+          (match.edges ?? []).every(
+            (edge) => defaultGraphNodeIds.has(edge.source) && defaultGraphNodeIds.has(edge.target),
+          ),
+        ),
+        "search edge previews should not include edges to hidden or unindexed dependency nodes",
+      );
 
       const withTests = graph.toProjectGraph(undefined, undefined, true);
       assert.ok(withTests.nodes.some((node) => node.name === "ProdTest"));
