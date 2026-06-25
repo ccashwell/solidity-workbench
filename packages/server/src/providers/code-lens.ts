@@ -226,6 +226,20 @@ export class CodeLensProvider {
       });
     }
 
+    for (const event of result.sourceUnit.events) {
+      const topic = this.computeEventTopic(event.name, event.parameters);
+      if (topic) {
+        lenses.push({
+          range: event.range,
+          command: {
+            title: `topic0: ${topic}`,
+            command: "solidity-workbench.copySelector",
+            arguments: [topic],
+          },
+        });
+      }
+    }
+
     return lenses;
   }
 

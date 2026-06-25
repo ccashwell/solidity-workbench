@@ -68,6 +68,9 @@ export class SelectionRangesProvider {
     for (const enumDef of sourceUnit.enums) {
       if (this.contains(enumDef.range, position)) ranges.push(enumDef.range);
     }
+    for (const event of sourceUnit.events) {
+      if (this.contains(event.range, position)) ranges.push(event.range);
+    }
     for (const err of sourceUnit.errors) {
       if (this.contains(err.range, position)) ranges.push(err.range);
     }

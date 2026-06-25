@@ -109,6 +109,10 @@ contract User2 { Foo public b; }`;
       return `0x${keccak256(sig).slice(0, 8)}`;
     }
 
+    function expectedEventTopic(sig: string): string {
+      return `0x${keccak256(sig)}`;
+    }
+
     it("emits a `selector: 0x...` lens for a contract-level error", () => {
       const uri = "file:///w/A.sol";
       const text = `contract C {
@@ -186,6 +190,26 @@ contract X {}`;
           l.range.start.line === 0,
       );
       assert.ok(errorLens, `expected a file-level error lens; got ${JSON.stringify(lenses)}`);
+    });
+
+    it("emits a topic0 lens for a file-level event", () => {
+      const uri = "file:///w/FileEvent.sol";
+      const text = `event FileClaimed(address indexed account, uint256 amount);
+contract X {}`;
+      const { doc, provider } = setup(uri, text);
+      const lenses = provider.provideCodeLenses(doc);
+      const expected = expectedEventTopic("FileClaimed(address,uint256)");
+      const eventLens = lenses.find(
+        (l) =>
+          l.command?.command === "solidity-workbench.copySelector" &&
+          l.command.title === `topic0: ${expected}` &&
+          l.range.start.line === 0,
+      );
+      assert.ok(
+        eventLens,
+        `expected file-level event topic0 lens; got ${JSON.stringify(lenses.map((l) => l.command?.title))}`,
+      );
+      assert.deepEqual(eventLens.command?.arguments, [expected]);
     });
 
     it("renders a distinct selector for each error in the same contract", () => {

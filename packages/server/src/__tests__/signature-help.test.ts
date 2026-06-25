@@ -144,6 +144,27 @@ contract C {
       assert.match(sig!.signatures[0].label, /add\(uint256 a, uint256 b\)/);
     });
 
+    it("returns signatures for file-level events", () => {
+      const text = `pragma solidity ^0.8.24;
+event FileClaimed(address indexed account, uint256 amount);
+
+contract C {
+    function f() external {
+        emit FileClaimed(address(0), 1);
+    }
+}`;
+      const { doc, provider } = setup("file:///w/FileEventSig.sol", text);
+      const lines = text.split("\n");
+      const callLine = lines.findIndex((l) => l.includes("FileClaimed(address"));
+      const col = lines[callLine].indexOf("FileClaimed(") + "FileClaimed(".length;
+      const sig = provider.provideSignatureHelp(doc, { line: callLine, character: col });
+      assert.ok(sig, "expected signature help for file-level event");
+      assert.match(
+        sig!.signatures[0].label,
+        /event FileClaimed\(address indexed account, uint256 amount\)/,
+      );
+    });
+
     it("resolves receiver variables declared with imported interface aliases", () => {
       const files = {
         "src/IVault.sol": `pragma solidity ^0.8.24;

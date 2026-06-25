@@ -231,6 +231,12 @@ export class SignatureHelpProvider {
           if (err) {
             signatures.push(this.buildErrorSignature(err));
           }
+        } else if (sym.kind === "event") {
+          const parsed = this.parser.get(sym.filePath);
+          const event = parsed?.sourceUnit.events.find((e) => e.name === funcName);
+          if (event) {
+            signatures.push(this.buildEventSignature(event));
+          }
         }
       }
     }

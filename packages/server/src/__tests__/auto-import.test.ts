@@ -282,7 +282,7 @@ contract Counter {
       }
     });
 
-    it("includes UDVTs, free functions, and file-level errors in the local-name set", () => {
+    it("includes UDVTs, free functions, file-level events, and file-level errors in the local-name set", () => {
       const parser = new SolidityParser();
       const workspace = makeFakeWorkspace({});
       const idx = new SymbolIndex(parser, workspace);
@@ -294,6 +294,7 @@ contract Counter {
         URI.file("/project/src/Shared.sol").toString(),
         `pragma solidity ^0.8.0;
 type MarketId is uint256;
+event FileClaimed(address indexed account);
 error GlobalErr(uint256 code);
 function globalHelper(uint256 x) pure returns (uint256) { return x; }`,
       );
@@ -302,11 +303,13 @@ function globalHelper(uint256 x) pure returns (uint256) { return x; }`,
       const consumerUri = URI.file("/project/src/App.sol").toString();
       const consumerText = `pragma solidity ^0.8.0;
 type MarketId is uint256;
+event FileClaimed(address indexed account);
 error GlobalErr(uint256 code);
 function globalHelper(uint256 x) pure returns (uint256) { return x; }
 
 contract App {
     function usesAll(MarketId id) external pure returns (uint256) {
+        emit FileClaimed(address(0));
         if (id == MarketId.wrap(0)) revert GlobalErr(1);
         return globalHelper(id.unwrap());
     }
@@ -327,6 +330,10 @@ contract App {
         assert.ok(
           !a.title.includes("GlobalErr"),
           `local file-level error must not surface an import: ${a.title}`,
+        );
+        assert.ok(
+          !a.title.includes("FileClaimed"),
+          `local file-level event must not surface an import: ${a.title}`,
         );
       }
     });

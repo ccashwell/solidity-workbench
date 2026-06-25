@@ -204,6 +204,32 @@ contract C {
     assert.ok(ranges[0].parent?.parent, "expected nested parent ranges");
   });
 
+  it("builds selection ranges for file-level events", () => {
+    const text = `pragma solidity ^0.8.24;
+
+event FileClaimed(
+    address indexed account,
+    uint256 amount
+);
+
+contract C {}`;
+    const { doc, parser } = setup(text, "file:///w/FileEvent.sol");
+    const line = text.split("\n")[2];
+    const col = line.indexOf("FileClaimed");
+    const ranges = new SelectionRangesProvider(parser).provideSelectionRanges(doc, [
+      { line: 2, character: col + 1 },
+    ]);
+
+    assert.deepEqual(ranges[0].range, {
+      start: { line: 2, character: col },
+      end: { line: 2, character: col + "FileClaimed".length },
+    });
+    assert.deepEqual(ranges[0].parent?.parent?.range, {
+      start: { line: 2, character: 0 },
+      end: { line: 5, character: 1 },
+    });
+  });
+
   it("finds concrete implementations for interface methods", () => {
     const text = `pragma solidity ^0.8.0;
 interface IFoo {

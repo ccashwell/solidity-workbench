@@ -254,8 +254,8 @@ export class AutoImportProvider {
    *   - Contract, interface, and library names
    *   - Struct, enum, event, error, modifier, and function names
    *     declared inside any of those contracts
-   *   - File-level user-defined value types, free functions, and
-   *     custom errors (Solidity ≥ 0.8.4)
+   *   - File-level user-defined value types, free functions, events,
+   *     and custom errors (Solidity ≥ 0.8.4)
    *   - Every imported symbol alias
    *
    * The scan regex matches uppercase-starting words in the raw text.
@@ -330,6 +330,7 @@ export class AutoImportProvider {
     for (const constant of su.fileConstants) names.add(constant.name);
     for (const struct of su.structs) names.add(struct.name);
     for (const enumDef of su.enums) names.add(enumDef.name);
+    for (const event of su.events) names.add(event.name);
     for (const err of su.errors) names.add(err.name);
     for (const fn of su.freeFunctions) if (fn.name) names.add(fn.name);
 
