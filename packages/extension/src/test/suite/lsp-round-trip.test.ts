@@ -180,6 +180,7 @@ describe("LSP round-trip", () => {
         }),
       20,
       500,
+      { allowEmptyArray: true },
     );
     if (edits == null) {
       // VS Code can return undefined before the language client binds
@@ -203,7 +204,12 @@ function findSampleFile(rel: string): vscode.Uri {
  * cold test host. Retry a command a few times with short backoff
  * rather than making the whole test flaky.
  */
-async function retry<T>(fn: () => Thenable<T>, attempts = 10, delayMs = 500): Promise<T> {
+async function retry<T>(
+  fn: () => Thenable<T>,
+  attempts = 10,
+  delayMs = 500,
+  options: { allowEmptyArray?: boolean } = {},
+): Promise<T> {
   let lastErr: unknown;
   for (let i = 0; i < attempts; i++) {
     try {
@@ -211,7 +217,9 @@ async function retry<T>(fn: () => Thenable<T>, attempts = 10, delayMs = 500): Pr
       if (result !== undefined && result !== null) {
         // Keep polling when workspace-symbol indexing has not produced
         // matches yet (an empty array is a valid but premature response).
-        if (!Array.isArray(result) || result.length > 0) return result;
+        if (!Array.isArray(result) || result.length > 0 || options.allowEmptyArray) {
+          return result;
+        }
       }
     } catch (err) {
       lastErr = err;

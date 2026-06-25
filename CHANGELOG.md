@@ -166,6 +166,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph callers queries now resolve exact event and custom-error
   signatures, such as `Vault.Deposit(address,uint256)`, instead of limiting
   signature lookup to functions.
+- Document formatting now bounds `forge fmt` execution time so a stalled
+  formatter process cannot hang the editor formatting request.
 - Live Project Graph updates now refresh declarations and dependents
   immediately but queue relationship reindexing in the background, avoiding
   synchronous full edge rebuilds on every edit.

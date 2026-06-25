@@ -466,6 +466,7 @@ export class WorkspaceManager {
   async runForge(
     args: string[],
     cwd?: string,
+    options: { timeoutMs?: number } = {},
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const { execFile } = await import("node:child_process");
     const { promisify } = await import("node:util");
@@ -475,7 +476,7 @@ export class WorkspaceManager {
       const result = await execFileAsync(this.forgePath, args, {
         cwd: cwd ?? this.root,
         maxBuffer: 10 * 1024 * 1024,
-        timeout: 120_000,
+        timeout: options.timeoutMs ?? 120_000,
       });
       return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
     } catch (err: unknown) {

@@ -7,6 +7,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 import * as crypto from "node:crypto";
 
+const FORGE_FMT_TIMEOUT_MS = 5_000;
+
 /**
  * Provides document formatting via `forge fmt`.
  *
@@ -69,7 +71,9 @@ export class FormattingProvider {
     try {
       fs.writeFileSync(tmpFile, text, "utf-8");
 
-      const result = await this.workspace.runForge(["fmt", tmpFile]);
+      const result = await this.workspace.runForge(["fmt", tmpFile], undefined, {
+        timeoutMs: FORGE_FMT_TIMEOUT_MS,
+      });
 
       if (result.exitCode !== 0) {
         // forge fmt failed — return no edits rather than corrupting the file
