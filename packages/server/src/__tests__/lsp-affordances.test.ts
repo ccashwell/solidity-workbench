@@ -329,6 +329,35 @@ contract Consumer {
     assert.equal(locs[0].range.start.line, 2);
   });
 
+  it("does not resolve implementations for unimported test-only interfaces in source files", () => {
+    const files = {
+      "src/Current.sol": `pragma solidity ^0.8.24;
+contract Current {
+    Ghost ghost;
+}`,
+      "test/Ghost.sol": `pragma solidity ^0.8.24;
+interface Ghost {
+    function ping() external;
+}`,
+      "test/MockGhost.sol": `pragma solidity ^0.8.24;
+import "./Ghost.sol";
+contract MockGhost is Ghost {
+    function ping() external {}
+}`,
+    };
+    const { docs, idx, resolver } = setupFiles(files);
+    const doc = docs["src/Current.sol"];
+    const line = files["src/Current.sol"].split("\n")[2];
+    const col = line.indexOf("Ghost");
+
+    const impl = new ImplementationProvider(idx, resolver).provideImplementation(doc, {
+      line: 2,
+      character: col,
+    });
+
+    assert.equal(impl, null);
+  });
+
   it("prepares type hierarchy items through imported base aliases", () => {
     const files = {
       "src/Base.sol": `pragma solidity ^0.8.24;

@@ -30,9 +30,9 @@ export class ImplementationProvider {
 
     const locations: Location[] = [];
 
-    const resolvedContract = this.resolver?.resolveContract(word, document.uri);
-    if (resolvedContract) {
-      locations.push(...this.contractImplementationsForResolved(resolvedContract));
+    const importedContract = this.resolveImportedContract(word, document.uri);
+    if (importedContract) {
+      locations.push(...this.contractImplementationsForResolved(importedContract));
     }
 
     const symbols = this.selectSymbols(word, document.uri, position);
@@ -72,6 +72,11 @@ export class ImplementationProvider {
     const deduped = this.dedupe(locations);
     if (deduped.length === 0) return null;
     return deduped;
+  }
+
+  private resolveImportedContract(word: string, documentUri: string): ResolvedContract | null {
+    if (!this.resolver?.resolveImportedSymbol(word, documentUri)) return null;
+    return this.resolver.resolveContract(word, documentUri) ?? null;
   }
 
   private selectSymbols(word: string, documentUri: string, position: Position): SolSymbol[] {
