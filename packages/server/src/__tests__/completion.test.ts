@@ -247,6 +247,34 @@ contract XTest { \n }`,
       assert.ok(ls.has("encodeCall"));
     });
 
+    it("returns address members for variables declared as address", () => {
+      const text = `pragma solidity ^0.8.0;
+contract A {
+    function f(address owner) external view returns (uint256) {
+        return owner.balance;
+    }
+}`;
+      const { doc, provider } = setup("file:///w/AddressMembers.sol", text);
+      const items = provider.provideCompletions(doc, { line: 3, character: 21 });
+      const ls = labels(items);
+      assert.ok(ls.has("balance"), "address-typed receiver should expose balance");
+      assert.ok(ls.has("call"), "address-typed receiver should expose call");
+    });
+
+    it("does not infer address members from variable names alone", () => {
+      const text = `pragma solidity ^0.8.0;
+contract A {
+    function f(uint256 owner) external pure returns (uint256) {
+        return owner.balance;
+    }
+}`;
+      const { doc, provider } = setup("file:///w/NotAddressMembers.sol", text);
+      const items = provider.provideCompletions(doc, { line: 3, character: 21 });
+      const ls = labels(items);
+      assert.equal(ls.has("balance"), false, "uint256 named owner must not expose address members");
+      assert.equal(ls.has("call"), false, "uint256 named owner must not expose address members");
+    });
+
     it("returns a contract's public members for a static `Contract.` lookup", () => {
       // The file is syntactically valid; the user is simply asking for
       // completions immediately after the dot in `Bank.deposit`. The

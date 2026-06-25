@@ -204,8 +204,8 @@ export class CompletionProvider {
       if (viaSolcStruct.length > 0) return viaSolcStruct;
     }
 
-    // 3. Address member completions (heuristic + name hint)
-    if (this.isAddressLike(target)) {
+    // 3. Address member completions
+    if (this.isAddressLike(document, position, target)) {
       return this.provideAddressMembers();
     }
 
@@ -798,22 +798,15 @@ export class CompletionProvider {
     ];
   }
 
-  private isAddressLike(target: string): boolean {
-    // Check symbol index for the variable's type
-    const symbols = this.symbolIndex.findSymbols(target);
-    for (const sym of symbols) {
-      if (sym.detail === "address" || sym.detail === "address payable") return true;
-    }
-    // Heuristic: common address variable names
-    const lowerTarget = target.toLowerCase();
-    return (
-      lowerTarget.includes("addr") ||
-      lowerTarget === "sender" ||
-      lowerTarget === "recipient" ||
-      lowerTarget === "owner" ||
-      lowerTarget === "to" ||
-      lowerTarget === "from"
-    );
+  private isAddressLike(document: TextDocument, position: Position, target: string): boolean {
+    const parserResolvedType =
+      resolveReceiverTypeName(this.parser, this.symbolIndex, document.uri, position, {
+        simpleName: target,
+      }) ?? this.resolveVariableTypeName(document, position, target);
+    if (!parserResolvedType) return false;
+
+    const typeName = parserResolvedType.replace(/\s+(memory|storage|calldata)\b/g, "").trim();
+    return typeName === "address" || typeName === "address payable";
   }
 
   private symbolToCompletionKind(kind: SymbolKind): CompletionItemKind {
