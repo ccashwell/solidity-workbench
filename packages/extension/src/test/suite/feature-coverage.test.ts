@@ -339,6 +339,27 @@ describe("Feature coverage — project graph export", () => {
     assert.match(html, /"targetUri":"file:\/\/\/workspace\/src\/IERC20\.sol"/);
   });
 
+  it("renders project graph edge trust warnings", () => {
+    type ProjectGraphExporterInternals = {
+      buildHtml(
+        graph: ProjectGraphResult,
+        focusId?: string,
+        graphStats?: ProjectGraphStatsResult,
+      ): string;
+    };
+    const exporter = new ProjectGraphExporter(
+      {} as ConstructorParameters<typeof ProjectGraphExporter>[0],
+    ) as unknown as ProjectGraphExporterInternals;
+
+    const html = exporter.buildHtml(sampleGraph, sampleGraph.focusId);
+
+    assert.match(html, /function edgeTrustWarningLabel\(edge\)/);
+    assert.match(html, /Unresolved target - source edge is known/);
+    assert.match(html, /Heuristic resolution - verify before relying on this edge/);
+    assert.match(html, /row\.classList\.add\("unresolved"\)/);
+    assert.match(html, /confidence\.classList\.add\("warning"\)/);
+  });
+
   it("summarizes project graph edge quality", () => {
     const status = summarizeProjectGraphEdgeQuality({
       nodeCount: 10,

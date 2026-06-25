@@ -48,6 +48,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   syntax ranges, resolver, and a short reason for why the edge exists.
 - Project Graph edge evidence in the details panel can now jump directly to the
   source expression or target declaration when locations are available.
+- Project Graph details now call out unresolved, heuristic, and unknown-confidence
+  edges with warning styling so users can distinguish trusted compiler-backed
+  edges from edges that need manual verification.
 
 ### Fixed
 

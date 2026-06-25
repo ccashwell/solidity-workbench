@@ -959,6 +959,13 @@ export class ProjectGraphExporter {
     width: 100%;
   }
   .edge-row:hover { color: var(--accent); }
+  .edge-row.unresolved {
+    border-left: 2px solid var(--vscode-editorWarning-foreground, #d97706);
+    padding-left: 6px;
+  }
+  .edge-row.low-confidence {
+    opacity: 0.92;
+  }
   .edge-kind {
     color: var(--muted);
     overflow: hidden;
@@ -978,6 +985,9 @@ export class ProjectGraphExporter {
     text-align: right;
     font-size: 11px;
   }
+  .edge-quality.warning {
+    color: var(--vscode-editorWarning-foreground, #d97706);
+  }
   .edge-evidence {
     grid-column: 2 / 4;
     display: grid;
@@ -994,6 +1004,14 @@ export class ProjectGraphExporter {
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 11px;
+  }
+  .edge-warning {
+    grid-column: 1 / 4;
+    color: var(--vscode-editorWarning-foreground, #d97706);
+    font-size: 11px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .edge-evidence-actions {
     display: flex;
@@ -1479,6 +1497,8 @@ export class ProjectGraphExporter {
       if (!other || !ids.has(other.id)) continue;
       const row = document.createElement("div");
       row.className = "edge-row";
+      if (edgeIsUnresolved(edge)) row.classList.add("unresolved");
+      if (edgeIsLowConfidence(edge)) row.classList.add("low-confidence");
       row.tabIndex = 0;
       row.setAttribute("role", "button");
       row.title = edgeTitle(edge, other);
@@ -1501,7 +1521,12 @@ export class ProjectGraphExporter {
       target.textContent = other.qualifiedName;
       const confidence = document.createElement("span");
       confidence.className = "edge-quality";
+      if (edgeNeedsTrustWarning(edge)) confidence.classList.add("warning");
       confidence.textContent = edgeQualityLabel(edge);
+      const warningLabel = edgeTrustWarningLabel(edge);
+      const warning = document.createElement("div");
+      warning.className = "edge-warning";
+      warning.textContent = warningLabel;
       const evidence = document.createElement("div");
       evidence.className = "edge-evidence";
       const evidenceText = document.createElement("span");
@@ -1511,6 +1536,7 @@ export class ProjectGraphExporter {
       const evidenceActions = edgeEvidenceActions(edge);
       if (evidenceActions) evidence.append(evidenceActions);
       row.append(kind, target, confidence, evidence);
+      if (warningLabel) row.append(warning);
       summary.append(row);
     }
     if (!summary.childElementCount) {
@@ -1534,6 +1560,23 @@ export class ProjectGraphExporter {
 
   function edgeQualityLabel(edge) {
     return (edgeIsUnresolved(edge) ? "unresolved/" : "") + edgeConfidence(edge);
+  }
+
+  function edgeIsLowConfidence(edge) {
+    const confidence = edgeConfidence(edge);
+    return confidence === "heuristic" || confidence === "unknown";
+  }
+
+  function edgeNeedsTrustWarning(edge) {
+    return edgeIsUnresolved(edge) || edgeIsLowConfidence(edge);
+  }
+
+  function edgeTrustWarningLabel(edge) {
+    if (edgeIsUnresolved(edge)) return "Unresolved target - source edge is known, target declaration was not resolved.";
+    const confidence = edgeConfidence(edge);
+    if (confidence === "heuristic") return "Heuristic resolution - verify before relying on this edge.";
+    if (confidence === "unknown") return "Unknown resolution - structural edge without resolver confidence.";
+    return "";
   }
 
   function edgeEvidenceLabel(edge) {
