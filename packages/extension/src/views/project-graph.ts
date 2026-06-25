@@ -59,6 +59,38 @@ const RESOLUTION_CONFIDENCE_VALUES: ProjectGraphResolutionConfidence[] = [
   "unknown",
 ];
 
+export type ProjectGraphNodeKindFilter = "all" | ProjectGraphNodeKind;
+
+export const PROJECT_GRAPH_NODE_KIND_FILTER_ITEMS: readonly {
+  label: string;
+  value: ProjectGraphNodeKindFilter;
+}[] = [
+  { label: "All Node Kinds", value: "all" },
+  { label: "Files", value: "file" },
+  { label: "Contracts", value: "contract" },
+  { label: "Interfaces", value: "interface" },
+  { label: "Libraries", value: "library" },
+  { label: "Functions", value: "function" },
+  { label: "Constructors", value: "constructor" },
+  { label: "Receive", value: "receive" },
+  { label: "Fallback", value: "fallback" },
+  { label: "Modifiers", value: "modifier" },
+  { label: "Events", value: "event" },
+  { label: "Errors", value: "error" },
+  { label: "State Variables", value: "stateVariable" },
+  { label: "File Constants", value: "fileConstant" },
+  { label: "Structs", value: "struct" },
+  { label: "Enums", value: "enum" },
+  { label: "User-Defined Value Types", value: "userDefinedValueType" },
+];
+
+export function projectGraphNodeMatchesKindFilter(
+  node: Pick<ProjectGraphNode, "kind">,
+  filter: ProjectGraphNodeKindFilter,
+): boolean {
+  return filter === "all" || node.kind === filter;
+}
+
 export const PROJECT_GRAPH_CALLABLE_NODE_KINDS: ProjectGraphNodeKind[] = [
   "function",
   "constructor",
@@ -1376,6 +1408,10 @@ export class ProjectGraphExporter {
       /</g,
       "\\u003c",
     );
+    const nodeKindItemsJson = JSON.stringify(PROJECT_GRAPH_NODE_KIND_FILTER_ITEMS).replace(
+      /</g,
+      "\\u003c",
+    );
     const nonce = crypto.randomBytes(16).toString("base64");
 
     return `<!DOCTYPE html>
@@ -1794,6 +1830,7 @@ export class ProjectGraphExporter {
       <option value="callables">Callables</option>
       <option value="state">State & Types</option>
     </select>
+    <select id="nodeKind" title="Filter nodes by declaration kind"></select>
     <select id="quality" title="Filter edges by resolution quality">
       <option value="all">All Edge Quality</option>
       <option value="solc">Solc-confirmed</option>
@@ -1839,9 +1876,11 @@ export class ProjectGraphExporter {
   const payload = ${graphJson};
   const edgeItems = ${edgeItemsJson};
   const confidenceItems = ${confidenceItemsJson};
+  const nodeKindItems = ${nodeKindItemsJson};
   const persisted = vscode.getState ? (vscode.getState() || {}) : {};
   const scopeValues = new Set(["neighbors", "all", "project", "contracts", "callables", "state"]);
   const qualityValues = new Set(["all", "solc", "parser", "heuristic", "unresolved", "unknown"]);
+  const nodeKindValues = new Set(nodeKindItems.map((item) => item.value));
   let graph = payload.graph;
   let graphStats = payload.stats || null;
   let resultDiagnostics = payload.resultDiagnostics || null;
@@ -1850,6 +1889,7 @@ export class ProjectGraphExporter {
     : payload.focusId || "";
   let query = typeof persisted.query === "string" ? persisted.query : "";
   let scope = typeof persisted.scope === "string" && scopeValues.has(persisted.scope) ? persisted.scope : (activeId ? "neighbors" : "all");
+  let nodeKind = typeof persisted.nodeKind === "string" && nodeKindValues.has(persisted.nodeKind) ? persisted.nodeKind : "all";
   let quality = typeof persisted.quality === "string" && qualityValues.has(persisted.quality) ? persisted.quality : "all";
   let zoom = typeof persisted.zoom === "number" ? Math.max(0.45, Math.min(1.8, persisted.zoom)) : 1;
   let pathMode = Boolean(persisted.pathMode);
@@ -1874,6 +1914,7 @@ export class ProjectGraphExporter {
   const details = document.getElementById("details");
   const search = document.getElementById("search");
   const scopeSelect = document.getElementById("scope");
+  const nodeKindSelect = document.getElementById("nodeKind");
   const qualitySelect = document.getElementById("quality");
   const serverQueryKind = document.getElementById("serverQueryKind");
   const zoomLabel = document.getElementById("zoomLabel");
@@ -1900,6 +1941,15 @@ export class ProjectGraphExporter {
     if (scope === "callables") return nodeLane(node) === "callable";
     if (scope === "state") return nodeLane(node) === "state" || node.kind === "struct" || node.kind === "enum" || node.kind === "userDefinedValueType";
     return true;
+  }
+
+  function matchesNodeKind(node) {
+    return nodeKind === "all" || node.kind === nodeKind;
+  }
+
+  function matchesNodeKindById(id) {
+    const node = nodesById.get(id);
+    return Boolean(node && matchesNodeKind(node));
   }
 
   function searchable(node) {
@@ -2069,8 +2119,8 @@ export class ProjectGraphExporter {
         for (const edge of graph.edges) {
           if (!visibleEdges.has(edge.kind)) continue;
           if (!edgeMatchesQuality(edge)) continue;
-          if (frontier.has(edge.source)) next.add(edge.target);
-          if (frontier.has(edge.target)) next.add(edge.source);
+          if (frontier.has(edge.source) && matchesNodeKindById(edge.target)) next.add(edge.target);
+          if (frontier.has(edge.target) && matchesNodeKindById(edge.source)) next.add(edge.source);
         }
         for (const id of next) {
           direct.add(id);
@@ -2080,12 +2130,19 @@ export class ProjectGraphExporter {
       if (q) {
         for (const id of Array.from(direct)) {
           const node = nodesById.get(id);
-          if (node && id !== activeId && !searchable(node).includes(q)) direct.delete(id);
+          if (
+            node &&
+            id !== activeId &&
+            (!searchable(node).includes(q) || !matchesNodeKind(node))
+          ) {
+            direct.delete(id);
+          }
         }
       }
     } else {
       for (const node of graph.nodes) {
         if (!matchesScope(node)) continue;
+        if (!matchesNodeKind(node)) continue;
         if (q && !searchable(node).includes(q)) continue;
         direct.add(node.id);
       }
@@ -2103,8 +2160,8 @@ export class ProjectGraphExporter {
     for (const edge of graph.edges) {
       if (!visibleEdges.has(edge.kind)) continue;
       if (!edgeMatchesQuality(edge)) continue;
-      if (direct.has(edge.source)) connected.add(edge.target);
-      if (direct.has(edge.target)) connected.add(edge.source);
+      if (direct.has(edge.source) && matchesNodeKindById(edge.target)) connected.add(edge.target);
+      if (direct.has(edge.target) && matchesNodeKindById(edge.source)) connected.add(edge.source);
     }
 
     const sorted = Array.from(connected)
@@ -2186,6 +2243,17 @@ export class ProjectGraphExporter {
       label.append(checkbox, item.label);
       edgeList.append(label);
     }
+  }
+
+  function renderNodeKindOptions() {
+    nodeKindSelect.innerHTML = "";
+    for (const item of nodeKindItems) {
+      const option = document.createElement("option");
+      option.value = item.value;
+      option.textContent = item.label;
+      nodeKindSelect.append(option);
+    }
+    nodeKindSelect.value = nodeKind;
   }
 
   function renderList(ids) {
@@ -2535,6 +2603,12 @@ export class ProjectGraphExporter {
     saveUiState();
     render();
   });
+  nodeKindSelect.addEventListener("change", () => {
+    nodeKind = nodeKindSelect.value;
+    resetRenderedNodeLimit();
+    saveUiState();
+    render();
+  });
   scopeSelect.value = scope;
   qualitySelect.value = quality;
   search.value = query;
@@ -2634,6 +2708,7 @@ export class ProjectGraphExporter {
       activeId,
       query,
       scope,
+      nodeKind,
       quality,
       zoom,
       pathMode,
@@ -2643,6 +2718,7 @@ export class ProjectGraphExporter {
   }
 
   renderEdgeControls();
+  renderNodeKindOptions();
   render();
 </script>
 </body>

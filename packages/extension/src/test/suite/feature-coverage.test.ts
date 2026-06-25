@@ -9,9 +9,11 @@ import {
   PROJECT_GRAPH_CALLER_TARGET_NODE_KINDS,
   PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT,
   PROJECT_GRAPH_MAX_RENDERED_NODE_LIMIT,
+  PROJECT_GRAPH_NODE_KIND_FILTER_ITEMS,
   PROJECT_GRAPH_RENDER_NODE_LIMIT_STEP,
   expandProjectGraphRenderedNodeLimit,
   normalizeProjectGraphRenderedNodeLimit,
+  projectGraphNodeMatchesKindFilter,
   projectGraphRenderedNodeState,
   summarizeProjectGraphCompilerStatus,
   projectGraphQueryMissLabel,
@@ -539,6 +541,30 @@ describe("Feature coverage — project graph export", () => {
     assert.match(html, /message\.clearQuery === true/);
   });
 
+  it("renders project graph node-kind filtering controls", () => {
+    type ProjectGraphExporterInternals = {
+      buildHtml(
+        graph: ProjectGraphResult,
+        focusId?: string,
+        graphStats?: ProjectGraphStatsResult,
+      ): string;
+    };
+    const exporter = new ProjectGraphExporter(
+      {} as ConstructorParameters<typeof ProjectGraphExporter>[0],
+    ) as unknown as ProjectGraphExporterInternals;
+
+    const html = exporter.buildHtml(sampleGraph, sampleGraph.focusId);
+
+    assert.match(html, /id="nodeKind"/);
+    assert.match(html, /const nodeKindItems = /);
+    assert.match(html, /persisted\.nodeKind/);
+    assert.match(html, /function matchesNodeKind\(node\)/);
+    assert.match(html, /function matchesNodeKindById\(id\)/);
+    assert.match(html, /function renderNodeKindOptions\(\)/);
+    assert.match(html, /nodeKindSelect\.addEventListener\("change"/);
+    assert.match(html, /nodeKind,/);
+  });
+
   it("constrains graph call queries to callable targets", () => {
     assert.deepEqual(PROJECT_GRAPH_CALLABLE_NODE_KINDS, [
       "function",
@@ -567,6 +593,22 @@ describe("Feature coverage — project graph export", () => {
       "Project graph callees queries require a function, constructor, receive/fallback, or modifier target.",
     );
     assert.equal(projectGraphQueryMissLabel("impact"), "No project graph query target found.");
+  });
+
+  it("computes project graph node-kind filters", () => {
+    assert.ok(
+      PROJECT_GRAPH_NODE_KIND_FILTER_ITEMS.some(
+        (item) => item.value === "all" && item.label === "All Node Kinds",
+      ),
+    );
+    assert.ok(PROJECT_GRAPH_NODE_KIND_FILTER_ITEMS.some((item) => item.value === "function"));
+    assert.ok(PROJECT_GRAPH_NODE_KIND_FILTER_ITEMS.some((item) => item.value === "fallback"));
+
+    const [deposit, balances] = sampleGraph.nodes;
+    assert.equal(projectGraphNodeMatchesKindFilter(deposit, "all"), true);
+    assert.equal(projectGraphNodeMatchesKindFilter(deposit, "function"), true);
+    assert.equal(projectGraphNodeMatchesKindFilter(deposit, "stateVariable"), false);
+    assert.equal(projectGraphNodeMatchesKindFilter(balances, "stateVariable"), true);
   });
 
   it("computes project graph render cap state", () => {
