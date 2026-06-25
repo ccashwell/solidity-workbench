@@ -101,6 +101,16 @@ export class DocumentSymbolProvider {
       });
     }
 
+    for (const constant of result.sourceUnit.fileConstants) {
+      symbols.push({
+        name: constant.name,
+        detail: constant.typeName,
+        kind: SymbolKind.Constant,
+        range: constant.range,
+        selectionRange: constant.nameRange,
+      });
+    }
+
     return symbols;
   }
 

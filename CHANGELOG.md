@@ -90,6 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native call hierarchy now treats state-variable getter calls as first-class
   call targets, so switching between outgoing getter calls and incoming callers
   works in both parser fallback and graph-backed modes.
+- Document symbols now include file-level constants, so breadcrumbs and the
+  outline tree match the parser/indexer for top-level declarations.
 - Selected-node Project Graph callees queries now force-index the selected
   declaration's file before traversing outgoing call edges, avoiding empty
   partial-index results when declarations are warm but relationships are queued.

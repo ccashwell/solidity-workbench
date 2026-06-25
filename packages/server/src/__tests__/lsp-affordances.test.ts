@@ -3,10 +3,11 @@ import * as assert from "node:assert/strict";
 import * as path from "node:path";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
-import { FoldingRangeKind } from "vscode-languageserver/node.js";
+import { FoldingRangeKind, SymbolKind } from "vscode-languageserver/node.js";
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
 import { FoldingRangesProvider } from "../providers/folding-ranges.js";
+import { DocumentSymbolProvider } from "../providers/document-symbols.js";
 import { SelectionRangesProvider } from "../providers/selection-ranges.js";
 import { DocumentLinksProvider } from "../providers/document-links.js";
 import { ImplementationProvider } from "../providers/implementation.js";
@@ -135,6 +136,29 @@ contract C {}`;
       ranges.some((r) => r.startLine === 11 && r.endLine === 15),
       "expected file-level function fold",
     );
+  });
+
+  it("returns document symbols for file-level constants", () => {
+    const text = `pragma solidity ^0.8.24;
+
+uint256 constant MAX_SUPPLY = 1_000_000 ether;
+bytes32 constant ROOT = bytes32(0);
+
+contract Token {}`;
+    const { doc, parser } = setup(text, "file:///w/FileConstants.sol");
+    const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
+
+    const maxSupply = symbols.find((symbol) => symbol.name === "MAX_SUPPLY");
+    assert.ok(maxSupply, "expected file-level constant in document symbols");
+    assert.equal(maxSupply.kind, SymbolKind.Constant);
+    assert.equal(maxSupply.detail, "uint256");
+    assert.equal(maxSupply.selectionRange.start.line, 2);
+
+    const root = symbols.find((symbol) => symbol.name === "ROOT");
+    assert.ok(root, "expected second file-level constant in document symbols");
+    assert.equal(root.kind, SymbolKind.Constant);
+    assert.equal(root.detail, "bytes32");
+    assert.equal(root.selectionRange.start.line, 3);
   });
 
   it("turns import strings into document links", () => {
