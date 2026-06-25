@@ -10,6 +10,8 @@ import {
   RebuildProjectGraph,
   SearchProjectGraph,
   ServerStateNotification,
+  type GetProjectGraphParams,
+  type GetProjectGraphPathParams,
   type ProjectGraphEdge,
   type ProjectGraphEdgeQuality,
   type ProjectGraphEdgeKind,
@@ -25,6 +27,8 @@ import {
   type ProjectGraphSearchMatch,
   type ProjectGraphSearchResult,
   type ProjectGraphStatsResult,
+  type QueryProjectGraphParams,
+  type SearchProjectGraphParams,
   type ServerStateParams,
 } from "@solidity-workbench/common";
 
@@ -50,6 +54,11 @@ type ProjectGraphExportFormat = "json" | "dot" | "graphml" | "codegraph-json";
 export interface ProjectGraphCommandOptions {
   includeTests?: boolean;
 }
+type ProjectGraphInternalRequest =
+  | { method: "graph"; params?: GetProjectGraphParams }
+  | { method: "search"; params: SearchProjectGraphParams }
+  | { method: "query"; params: QueryProjectGraphParams }
+  | { method: "path"; params: GetProjectGraphPathParams };
 
 const INTERACTIVE_GRAPH_NODE_LIMIT = 750;
 export const PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT = 240;
@@ -675,6 +684,10 @@ export class ProjectGraphExporter {
         "solidity-workbench.queryProjectGraph",
         (options?: ProjectGraphCommandOptions) => this.queryProjectGraph(options),
       ),
+      vscode.commands.registerCommand(
+        "solidity-workbench.internal.projectGraphRequest",
+        (request?: ProjectGraphInternalRequest) => this.sendInternalProjectGraphRequest(request),
+      ),
       vscode.commands.registerCommand("solidity-workbench.projectGraphStats", () =>
         this.showProjectGraphStats(),
       ),
@@ -1129,6 +1142,26 @@ export class ProjectGraphExporter {
       content: JSON.stringify({ ...stats, requestDurationMs }, null, 2),
     });
     await vscode.window.showTextDocument(doc, { preview: false });
+  }
+
+  private async sendInternalProjectGraphRequest(
+    request?: ProjectGraphInternalRequest,
+  ): Promise<unknown> {
+    switch (request?.method) {
+      case "graph":
+        return this.client.sendRequest<ProjectGraphResult>(GetProjectGraph, request.params ?? {});
+      case "search":
+        return this.client.sendRequest<ProjectGraphSearchResult>(
+          SearchProjectGraph,
+          request.params,
+        );
+      case "query":
+        return this.client.sendRequest<ProjectGraphQueryResult>(QueryProjectGraph, request.params);
+      case "path":
+        return this.client.sendRequest<ProjectGraphPathResult>(GetProjectGraphPath, request.params);
+      default:
+        throw new Error("Unsupported internal project graph request.");
+    }
   }
 
   private async promptProjectGraphIncludeTests(

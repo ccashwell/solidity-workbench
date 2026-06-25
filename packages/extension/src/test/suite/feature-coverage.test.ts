@@ -14,7 +14,10 @@ import {
   type ForgeArtifact,
   type FileCoverage,
   type InheritanceGraphResult,
+  type ProjectGraphPathResult,
+  type ProjectGraphQueryResult,
   type ProjectGraphResult,
+  type ProjectGraphSearchResult,
   type ProjectGraphStatsResult,
 } from "@solidity-workbench/common";
 import {
@@ -1361,6 +1364,84 @@ describe("Feature coverage — live project graph", () => {
       await vscode.workspace.openTextDocument(findSampleFile("src/Counter.sol")),
     );
   });
+
+  it("serves live graph search, query, and path requests over the LSP transport", async function () {
+    this.timeout(60_000);
+
+    await vscode.commands.executeCommand("solidity-workbench.rebuildProjectGraph");
+
+    const hiddenTests = await requestProjectGraph<ProjectGraphSearchResult>("search", {
+      query: "CounterTest",
+      maxResults: 10,
+    });
+    assert.equal(
+      hiddenTests.matches.some((match) => match.node.name === "CounterTest"),
+      false,
+      "test contracts should remain hidden from graph search unless includeTests is explicit",
+    );
+
+    const testSearch = await requestProjectGraph<ProjectGraphSearchResult>("search", {
+      query: "CounterTest",
+      includeTests: true,
+      maxResults: 10,
+    });
+    const testContract = testSearch.matches.find(
+      (match) => match.node.name === "CounterTest",
+    )?.node;
+    assert.ok(testContract, "includeTests should expose the sample test contract");
+
+    const testFunctionSearch = await requestProjectGraph<ProjectGraphSearchResult>("search", {
+      query: "test_Increment",
+      kinds: ["function"],
+      includeTests: true,
+      maxResults: 20,
+    });
+    const testIncrement = testFunctionSearch.matches.find(
+      (match) => match.node.name === "test_Increment",
+    )?.node;
+    assert.ok(testIncrement, "expected the sample test function in graph search");
+
+    const incrementSearch = await requestProjectGraph<ProjectGraphSearchResult>("search", {
+      query: "Counter.increment",
+      kinds: ["function"],
+      includeTests: true,
+      maxResults: 20,
+    });
+    const increment = incrementSearch.matches.find(
+      (match) => match.node.name === "increment" && match.node.containerName === "Counter",
+    )?.node;
+    assert.ok(increment, "expected Counter.increment in graph search");
+
+    const callers = await requestProjectGraph<ProjectGraphQueryResult>("query", {
+      kind: "callers",
+      target: { nodeId: increment.id },
+      includeTests: true,
+      maxNodes: 80,
+    });
+    assert.equal(callers.found, true, "expected callers query to find Counter.increment");
+    assert.ok(
+      callers.edges.some(
+        (edge) => edge.source === testIncrement.id && edge.target === increment.id,
+      ),
+      "expected callers query to include CounterTest.test_Increment -> Counter.increment",
+    );
+
+    const pathGraph = await requestProjectGraph<ProjectGraphPathResult>("path", {
+      from: { nodeId: testIncrement.id },
+      to: { nodeId: increment.id },
+      direction: "outgoing",
+      maxDepth: 2,
+      includeTests: true,
+    });
+    assert.equal(pathGraph.found, true, "expected graph path from test to source function");
+    assert.ok(
+      pathGraph.edges.some(
+        (edge) =>
+          edge.kind === "calls" && edge.source === testIncrement.id && edge.target === increment.id,
+      ),
+      "expected graph path to include the direct call edge",
+    );
+  });
 });
 
 describe("Feature coverage — Test Explorer", () => {
@@ -1513,6 +1594,13 @@ function findSampleFile(rel: string): vscode.Uri {
   const folder = vscode.workspace.workspaceFolders?.[0];
   assert.ok(folder, "workspace folder must be open for these tests");
   return vscode.Uri.joinPath(folder.uri, rel);
+}
+
+function requestProjectGraph<T>(method: string, params: unknown): Thenable<T> {
+  return vscode.commands.executeCommand("solidity-workbench.internal.projectGraphRequest", {
+    method,
+    params,
+  });
 }
 
 async function retry<T>(fn: () => Thenable<T>, attempts = 10, delayMs = 500): Promise<T> {
