@@ -296,17 +296,27 @@ export class CompletionProvider {
 
   private contractMemberCompletions(contractName: string, fromUri?: string): CompletionItem[] {
     const items: CompletionItem[] = [];
-    const chain =
-      this.resolver?.getInheritanceChain(contractName, fromUri).map((entry) => entry.contract) ??
-      this.symbolIndex.getInheritanceChain(contractName);
-    for (const c of chain) {
+    const chain = this.resolver?.getInheritanceChain(contractName, fromUri) ?? null;
+    const entries =
+      chain ??
+      this.symbolIndex.getInheritanceChain(contractName).map((contract) => ({
+        uri: this.symbolIndex.getContract(contract.name)?.uri,
+        contract,
+      }));
+    for (const entry of entries) {
+      const c = entry.contract;
       for (const func of c.functions) {
         if (func.name && func.visibility !== "private") {
           items.push({
             label: func.name,
             kind: CompletionItemKind.Method,
             detail: `${func.visibility} ${func.mutability}`,
-            data: { symbolName: func.name },
+            data: {
+              symbolName: func.name,
+              filePath: entry.uri,
+              kind: "function",
+              containerName: c.name,
+            },
           });
         }
       }

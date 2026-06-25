@@ -448,6 +448,50 @@ struct Box {
       );
     });
 
+    it("resolves member completion docs from the selected declaration file", () => {
+      const currentUri = "file:///w/src/Pool.sol";
+      const current = `pragma solidity ^0.8.24;
+import {IVault as RenamedVault} from "./IVault.sol";
+
+contract Pool {
+    RenamedVault internal vault;
+
+    function f() external view {
+        vault.convertToAssets(1);
+    }
+}`;
+      const { doc, provider } = setupFiles(currentUri, {
+        "file:///w/test/IVault.sol": `pragma solidity ^0.8.24;
+interface IVault {
+    /// @notice Test-only conversion docs.
+    function convertToAssets(uint256 shares) external view returns (uint256 assets);
+}
+`,
+        "file:///w/src/IVault.sol": `pragma solidity ^0.8.24;
+interface IVault {
+    /// @notice Source conversion docs.
+    function convertToAssets(uint256 shares) external view returns (uint256 assets);
+}
+`,
+        [currentUri]: current,
+      });
+
+      const lines = current.split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("vault.convertToAssets"));
+      const character = lines[line].indexOf("vault.") + "vault.".length;
+      const items = provider.provideCompletions(doc, { line, character });
+      const item = items.find((candidate) => candidate.label === "convertToAssets");
+      assert.ok(item, "expected convertToAssets member completion");
+
+      const resolved = provider.resolveCompletion({ ...item });
+      assert.ok(
+        resolved.documentation && typeof resolved.documentation !== "string",
+        "expected markdown documentation on resolved member completion",
+      );
+      assert.match(resolved.documentation.value, /Source conversion docs/);
+      assert.doesNotMatch(resolved.documentation.value, /Test-only conversion docs/);
+    });
+
     it("does not resolve member completions from unimported test-only receiver types", () => {
       const currentUri = "file:///w/src/UsesGhost.sol";
       const current = `pragma solidity ^0.8.24;
