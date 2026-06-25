@@ -17,7 +17,7 @@ export function collectUsingForDirectives(
 ): UsingForDirective[] {
   const directives: UsingForDirective[] = [];
   for (const directive of sourceUnit.usingFor) {
-    if (directive.isGlobal) directives.push(directive);
+    directives.push(directive);
   }
   if (contract) {
     directives.push(...contract.usingFor);
@@ -58,17 +58,61 @@ export function findUsingForFunction(
       return { fn, filePath: libraryEntry.uri, containerName: library.name };
     }
 
-    if (directive.functionNames && !directive.functionNames.includes(memberName)) {
+    const functionName = directiveFunctionName(directive, memberName);
+    if (!functionName) {
       continue;
     }
 
-    const fn = selectUsingForFunction(sourceUnit.freeFunctions, memberName, argumentCount);
+    const hit = selectVisibleFreeFunction(
+      parser,
+      symbolIndex,
+      uri,
+      functionName,
+      argumentCount,
+      resolver,
+    );
+    const fn = hit?.fn;
     if (!fn || fn.parameters.length === 0) continue;
     if (!isSameTypeName(fn.parameters[0].typeName, receiverType)) continue;
-    return { fn, filePath: uri };
+    return { fn, filePath: hit.filePath };
   }
 
   return null;
+}
+
+function selectVisibleFreeFunction(
+  parser: SolidityParser,
+  symbolIndex: SymbolIndex,
+  uri: string,
+  functionName: string,
+  argumentCount: number | undefined,
+  resolver?: SemanticResolver,
+): { fn: FunctionDefinition; filePath: string } | undefined {
+  const local = parser.get(uri)?.sourceUnit.freeFunctions ?? [];
+  const localMatch = selectUsingForFunction(local, functionName, argumentCount);
+  if (localMatch) return { fn: localMatch, filePath: uri };
+
+  const symbols = symbolIndex
+    .findSymbols(functionName)
+    .filter((symbol) => symbol.kind === "function" && !symbol.containerName);
+  const visible = resolver ? resolver.filterVisibleSymbols(uri, symbols) : symbols;
+  for (const symbol of visible) {
+    const sourceUnit = parser.get(symbol.filePath)?.sourceUnit;
+    if (!sourceUnit) continue;
+    const fn = selectUsingForFunction(sourceUnit.freeFunctions, functionName, argumentCount);
+    if (fn) return { fn, filePath: symbol.filePath };
+  }
+  return undefined;
+}
+
+function directiveFunctionName(
+  directive: UsingForDirective,
+  memberName: string,
+): string | undefined {
+  const alias = directive.functionAliases?.find((entry) => entry.memberName === memberName);
+  if (alias) return alias.functionName;
+  if (directive.functionNames && !directive.functionNames.includes(memberName)) return undefined;
+  return memberName;
 }
 
 function selectUsingForFunction(

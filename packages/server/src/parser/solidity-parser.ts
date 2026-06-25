@@ -45,6 +45,7 @@ export class SolidityParser {
    * one `parse` call at a time, so holding this state on the instance is safe.
    */
   private currentLines: string[] | null = null;
+  private currentText: string | null = null;
 
   /**
    * Optional `worker_threads` pool for off-main-thread bulk parsing.
@@ -76,6 +77,7 @@ export class SolidityParser {
    */
   parse(uri: string, text: string): ParseResult {
     this.currentLines = text.split("\n");
+    this.currentText = text;
     try {
       const ast = parser.parse(text, {
         tolerant: true,
@@ -119,6 +121,7 @@ export class SolidityParser {
       return errorResult;
     } finally {
       this.currentLines = null;
+      this.currentText = null;
     }
   }
 
@@ -308,16 +311,48 @@ export class SolidityParser {
   }
 
   private mapUsingFor(node: any): UsingForDirective {
-    const functionNames = Array.isArray(node.functions)
-      ? node.functions.filter((name: string | null) => !!name)
-      : undefined;
+    const functionAliases = this.mapUsingForFunctionAliases(node);
+    const functionNames =
+      functionAliases.length > 0
+        ? functionAliases.map((entry) => entry.memberName)
+        : Array.isArray(node.functions)
+          ? node.functions.filter((name: string | null) => !!name)
+          : undefined;
     return {
       type: "UsingForDirective",
       libraryName: node.libraryName ?? undefined,
       functionNames: functionNames?.length ? functionNames : undefined,
+      functionAliases: functionAliases.length > 0 ? functionAliases : undefined,
       typeName: node.typeName ? this.typeNameToString(node.typeName) : undefined,
       isGlobal: node.isGlobal ?? false,
     };
+  }
+
+  private mapUsingForFunctionAliases(node: {
+    functions?: unknown;
+    range?: unknown;
+  }): { functionName: string; memberName: string }[] {
+    if (!this.currentText || !Array.isArray(node.functions) || node.functions.length === 0) {
+      return [];
+    }
+    const range = Array.isArray(node.range) ? node.range : undefined;
+    if (!range || typeof range[0] !== "number" || typeof range[1] !== "number") return [];
+
+    const source = this.currentText.slice(range[0], range[1]);
+    const list = /\busing\s*\{([\s\S]*?)\}\s*for\b/.exec(source)?.[1];
+    if (!list) return [];
+
+    const aliases: { functionName: string; memberName: string }[] = [];
+    for (const rawEntry of list.split(",")) {
+      const entry = rawEntry.trim();
+      if (!entry) continue;
+      const match = /^([A-Za-z_$][\w$.]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/.exec(entry);
+      if (!match) continue;
+      const functionName = match[1].split(".").pop();
+      if (!functionName) continue;
+      aliases.push({ functionName, memberName: match[2] ?? functionName });
+    }
+    return aliases;
   }
 
   private mapImport(node: any): ImportDirective {

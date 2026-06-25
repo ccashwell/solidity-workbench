@@ -400,9 +400,14 @@ export class CompletionProvider {
         if (!hit?.fn.name) continue;
         seen.add(name);
         items.push({
-          label: hit.fn.name,
+          label: name,
           kind: CompletionItemKind.Function,
-          detail: directive.libraryName ? `using ${directive.libraryName}` : "using (global)",
+          detail:
+            name === hit.fn.name
+              ? directive.libraryName
+                ? `using ${directive.libraryName}`
+                : "using (global)"
+              : `using ${hit.fn.name} as ${name}`,
         });
       }
     }

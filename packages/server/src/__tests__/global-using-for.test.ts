@@ -76,6 +76,25 @@ describe("global using-for free functions", () => {
     assert.equal(result.sourceUnit.usingFor[0].typeName, "Owner");
   });
 
+  it("parses free-function using aliases as exposed member names", () => {
+    const parser = new SolidityParser();
+    const result = parser.parse(
+      "file:///w/Alias.sol",
+      `pragma solidity 0.8.26;
+struct Data {
+    uint256 value;
+}
+function clear(Data storage self) {}
+using {clear as wipe} for Data;
+`,
+    );
+    assert.equal(result.sourceUnit.usingFor.length, 1);
+    assert.deepEqual(result.sourceUnit.usingFor[0].functionNames, ["wipe"]);
+    assert.deepEqual(result.sourceUnit.usingFor[0].functionAliases, [
+      { functionName: "clear", memberName: "wipe" },
+    ]);
+  });
+
   it("hovers on a globally bound free function call", () => {
     const uri = "file:///w/Owner.sol";
     const { doc, parser, idx } = setup(uri, OWNER_FIXTURE);

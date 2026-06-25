@@ -11,6 +11,7 @@ import { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { CallHierarchyProvider } from "../providers/call-hierarchy.js";
+import { CompletionProvider } from "../providers/completion.js";
 import { DefinitionProvider } from "../providers/definition.js";
 import { HoverProvider } from "../providers/hover.js";
 import { SignatureHelpProvider } from "../providers/signature-help.js";
@@ -307,6 +308,165 @@ library DataLib {
       assert.equal(
         callHierarchyTarget.to.uri,
         URI.file(path.join(tmpDir, "src/DataLib.sol")).toString(),
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves imported free-function using-for member aliases consistently", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "semantic-consistency-"));
+    try {
+      const files = {
+        "src/DataTypes.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+struct Data {
+    uint256 value;
+}
+`,
+        "src/FreeOps.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "./DataTypes.sol";
+
+/// @notice Clears the stored value.
+function clear(Data storage self, uint256 replacement) returns (uint256 oldValue) {
+    oldValue = self.value;
+    self.value = replacement;
+}
+`,
+        "src/UsesFreeOps.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import { Data } from "./DataTypes.sol";
+import { clear } from "./FreeOps.sol";
+
+using {clear as wipe} for Data;
+
+contract UsesFreeOps {
+    Data internal data;
+
+    function run(uint256 replacement) external returns (uint256) {
+        return data.wipe(replacement);
+    }
+}
+`,
+        "test/FreeOps.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+function clear(uint256 self) pure returns (uint256) {
+    return self;
+}
+`,
+      };
+
+      const uris: string[] = [];
+      const parser = new SolidityParser();
+      const docs: Record<string, TextDocument> = {};
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+        docs[name] = TextDocument.create(uri, "solidity", 1, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const definitionProvider = new DefinitionProvider(symbolIndex, parser, workspace, resolver);
+      const hoverProvider = new HoverProvider(symbolIndex, parser, workspace, resolver);
+      const signatureProvider = new SignatureHelpProvider(symbolIndex, parser, resolver);
+      const completionProvider = new CompletionProvider(symbolIndex, parser, workspace, resolver);
+      const callHierarchyProvider = new CallHierarchyProvider(
+        symbolIndex,
+        workspace,
+        parser,
+        resolver,
+        graph,
+      );
+
+      const usesDoc = docs["src/UsesFreeOps.sol"];
+      const usesText = files["src/UsesFreeOps.sol"];
+      const callLine = usesText.split("\n").findIndex((line) => line.includes("data.wipe"));
+      const callColumn = usesText.split("\n")[callLine].indexOf("wipe");
+      const callPosition = { line: callLine, character: callColumn + 1 };
+      const signaturePosition = { line: callLine, character: callColumn + "wipe(".length };
+      const completionPosition = {
+        line: callLine,
+        character: usesText.split("\n")[callLine].indexOf("data.") + "data.".length,
+      };
+
+      const sourceClear = graph
+        .getNodes()
+        .find((node) => node.name === "clear" && node.filePath.endsWith("src/FreeOps.sol"));
+      const testClear = graph
+        .getNodes()
+        .find((node) => node.name === "clear" && node.filePath.endsWith("test/FreeOps.sol"));
+      const runNode = graph
+        .getNodes()
+        .find((node) => node.name === "run" && node.containerName === "UsesFreeOps");
+      assert.ok(sourceClear, "expected imported source clear graph node");
+      assert.ok(testClear, "expected same-name test clear graph node");
+      assert.ok(runNode, "expected UsesFreeOps.run graph node");
+
+      const graphCalls = graph.getOutgoingEdges(runNode.id, "calls");
+      assert.ok(
+        graphCalls.some((edge) => edge.target === sourceClear.id),
+        "Project Graph should target imported clear() through data.wipe()",
+      );
+      assert.ok(
+        graphCalls.every((edge) => edge.target !== testClear.id),
+        "Project Graph must not target same-name test clear()",
+      );
+
+      const definition = definitionProvider.provideDefinition(usesDoc, callPosition);
+      assert.ok(definition, "expected definition for using-for alias call");
+      const definitionLocation = Array.isArray(definition) ? definition[0] : definition;
+      assert.ok("uri" in definitionLocation, "expected Location definition");
+      assert.equal(
+        definitionLocation.uri,
+        URI.file(path.join(tmpDir, "src/FreeOps.sol")).toString(),
+      );
+
+      const hover = hoverProvider.provideHover(usesDoc, callPosition);
+      assert.ok(hover && typeof hover.contents === "object" && "value" in hover.contents);
+      assert.match(hover.contents.value, /clear/);
+      assert.match(hover.contents.value, /Clears the stored value/);
+      assert.doesNotMatch(hover.contents.value, /test\/FreeOps/);
+
+      const signature = signatureProvider.provideSignatureHelp(usesDoc, signaturePosition);
+      assert.ok(signature, "expected signature help for using-for alias call");
+      assert.equal(signature.signatures.length, 1);
+      assert.match(signature.signatures[0].label, /clear\(uint256 replacement\)/);
+      assert.doesNotMatch(signature.signatures[0].label, /Data storage self/);
+
+      const completionLabels = completionProvider
+        .provideCompletions(usesDoc, completionPosition)
+        .map((item) => item.label);
+      assert.ok(completionLabels.includes("wipe"), "expected completion for exposed alias");
+      assert.equal(completionLabels.includes("clear"), false, "did not expect raw function name");
+
+      const outgoing = await callHierarchyProvider.getOutgoingCalls({
+        name: "run",
+        kind: SymbolKind.Function,
+        uri: usesDoc.uri,
+        range: runNode.range,
+        selectionRange: runNode.selectionRange,
+        detail: "UsesFreeOps",
+      });
+      const callHierarchyTarget = outgoing.find((call) => call.to.name === "clear");
+      assert.ok(callHierarchyTarget, "expected call hierarchy target");
+      assert.equal(
+        callHierarchyTarget.to.uri,
+        URI.file(path.join(tmpDir, "src/FreeOps.sol")).toString(),
       );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
