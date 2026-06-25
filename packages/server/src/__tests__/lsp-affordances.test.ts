@@ -38,6 +38,14 @@ function setup(text: string, uri = "file:///w/A.sol", workspace = makeFakeWorksp
   };
 }
 
+interface TestLocation {
+  range: { start: { line: number } };
+}
+
+function asTestLocation(value: unknown): TestLocation {
+  return value as TestLocation;
+}
+
 function setupFiles(files: Record<string, string>) {
   const parser = new SolidityParser();
   const filePaths = new Set(Object.keys(files).map((name) => path.join("/w", name)));
@@ -151,7 +159,7 @@ contract Foo is IFoo {
     assert.ok(impl, "expected implementation locations");
     const locs = Array.isArray(impl) ? impl : [impl];
     assert.equal(locs.length, 1);
-    assert.equal((locs[0] as any).range.start.line, 5);
+    assert.equal(asTestLocation(locs[0]).range.start.line, 5);
   });
 
   it("finds implementations through imported interface aliases", () => {

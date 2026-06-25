@@ -26,6 +26,8 @@ function setup(uri: string, text: string) {
   };
 }
 
+type DocumentHighlightSolcBridge = Parameters<DocumentHighlightProvider["setSolcBridge"]>[0];
+
 describe("DocumentHighlightProvider", () => {
   it("returns highlights for every occurrence of the word-at-cursor", () => {
     const text = `contract C {
@@ -198,7 +200,7 @@ describe("DocumentHighlightProvider", () => {
         declaration: null,
         references: [{ filePath: "/C.sol", offset: firstUse, length: "count".length }],
       }),
-    } as any);
+    } as unknown as DocumentHighlightSolcBridge);
 
     const hits = provider.provideDocumentHighlights(doc, {
       line: 1,

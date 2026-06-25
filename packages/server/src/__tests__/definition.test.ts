@@ -27,6 +27,15 @@ function doc(uri: string, text: string): TextDocument {
   return TextDocument.create(uri, "solidity", 1, text);
 }
 
+interface DefinitionLocation {
+  uri: string;
+  range: { start: { line: number } };
+}
+
+function asDefinitionLocation(value: unknown): DefinitionLocation {
+  return value as DefinitionLocation;
+}
+
 function setup(files: Record<string, string>) {
   const parser = new SolidityParser();
   const workspace = makeFakeWorkspace();
@@ -68,8 +77,8 @@ contract A {
       assert.ok(def, "expected a definition result");
       const locs = Array.isArray(def) ? def : [def];
       assert.equal(locs.length, 1);
-      assert.equal((locs[0] as any).uri, "file:///w/A.sol");
-      assert.equal((locs[0] as any).range.start.line, 2);
+      assert.equal(asDefinitionLocation(locs[0]).uri, "file:///w/A.sol");
+      assert.equal(asDefinitionLocation(locs[0]).range.start.line, 2);
     });
 
     it("jumps to the matching function declaration", () => {
@@ -91,7 +100,7 @@ contract B {
       const locs = Array.isArray(def) ? def : [def];
       assert.ok(locs.length >= 1);
       // Should point to line 2 where doThing is declared
-      assert.equal((locs[0] as any).range.start.line, 2);
+      assert.equal(asDefinitionLocation(locs[0]).range.start.line, 2);
     });
   });
 
@@ -159,7 +168,7 @@ contract Wrapper {}`;
       const def = provider.provideDefinition(d, { line: 1, character: 12 });
       assert.ok(def, "expected import resolution");
       const loc = Array.isArray(def) ? def[0] : def;
-      assert.equal((loc as any).uri, "file:///w/lib/Token.sol");
+      assert.equal(asDefinitionLocation(loc).uri, "file:///w/lib/Token.sol");
     });
   });
 
@@ -183,7 +192,7 @@ contract D {
 
       assert.ok(def, "expected member resolution");
       const locs = Array.isArray(def) ? def : [def];
-      assert.equal((locs[0] as any).range.start.line, 2);
+      assert.equal(asDefinitionLocation(locs[0]).range.start.line, 2);
     });
 
     it("uses the importing file to disambiguate duplicate receiver contracts", () => {

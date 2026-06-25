@@ -45,6 +45,14 @@ function setupFiles(
   };
 }
 
+type HoverResult = NonNullable<ReturnType<HoverProvider["provideHover"]>>;
+
+function hoverValue(hover: HoverResult): string {
+  const { contents } = hover;
+  assert.ok(!Array.isArray(contents) && typeof contents !== "string");
+  return contents.value;
+}
+
 describe("HoverProvider", () => {
   describe("built-in globals", () => {
     it("returns a hover for `msg`", () => {
@@ -59,7 +67,7 @@ contract A {
       // Cursor on "msg" at line 2
       const h = provider.provideHover(doc, { line: 2, character: 48 });
       assert.ok(h, "expected hover");
-      const value = (h!.contents as any).value as string;
+      const value = hoverValue(h);
       // The hover renders `msg`'s shape as an inline struct description;
       // assert on the descriptive fields rather than the literal syntax
       // since we don't dictate the exact wording of the doc blurb.
@@ -92,7 +100,7 @@ contract B {
       );
       const h = provider.provideHover(doc, { line: 2, character: 58 });
       assert.ok(h, "expected hover");
-      const value = (h!.contents as any).value as string;
+      const value = hoverValue(h);
       assert.match(value, /Keccak-256/);
     });
   });
@@ -113,7 +121,7 @@ contract C {
       // Cursor on "doubled"
       const h = provider.provideHover(doc, { line: 6, character: 18 });
       assert.ok(h, "expected hover");
-      const value = (h!.contents as any).value as string;
+      const value = hoverValue(h);
       assert.match(value, /doubled/);
       assert.match(value, /Does the thing/);
       assert.match(value, /Reverts on overflow/);
@@ -132,7 +140,7 @@ contract Ctor {
       );
       const h = provider.provideHover(doc, { line: 4, character: 6 });
       assert.ok(h, "expected hover on constructor");
-      const value = (h!.contents as any).value as string;
+      const value = hoverValue(h);
       assert.match(value, /constructor\s*\(/);
       assert.match(value, /Deploys the contract/);
       assert.match(value, /owner/);
@@ -167,7 +175,7 @@ contract D {}`,
       );
       const h = provider.provideHover(doc, { line: 1, character: 9 });
       assert.ok(h, "expected hover");
-      const value = (h!.contents as any).value as string;
+      const value = hoverValue(h);
       assert.match(value, /contract D/);
     });
 
@@ -207,7 +215,7 @@ contract FluidDexLiteAggregatorUnitTest {
       const col = line.indexOf("poolId)") + 1;
       const h = provider.provideHover(doc, { line: 4, character: col });
       assert.ok(h, "expected hover on local poolId parameter");
-      const value = (h!.contents as any).value as string;
+      const value = hoverValue(h);
       assert.match(value, /PoolId poolId/);
       assert.match(value, /Parameter of.*_requireDepositAuth/);
       assert.match(value, /pool to check authorization/);
@@ -265,7 +273,7 @@ contract ImportedType {}`;
       const col = line.indexOf("ImportedType") + 1;
       const h = provider.provideHover(doc, { line: 3, character: col });
       assert.ok(h, "expected hover for imported symbol");
-      const value = (h!.contents as any).value as string;
+      const value = hoverValue(h);
       assert.match(value, /contract ImportedType/);
     });
 
@@ -403,7 +411,7 @@ contract F { function f(address a) external {} }`,
       );
       const h = provider.provideHover(doc, { line: 1, character: 26 });
       assert.ok(h, "expected hover");
-      const value = (h!.contents as any).value as string;
+      const value = hoverValue(h);
       assert.match(value, /address/);
     });
 
@@ -418,7 +426,7 @@ contract F { function f(address a) external {} }`,
         const col = code.indexOf(type) + 2; // cursor inside the type word
         const h = provider.provideHover(doc, { line: 0, character: col });
         assert.ok(h, `expected hover on ${type}`);
-        const value = (h!.contents as any).value as string;
+        const value = hoverValue(h);
         assert.match(
           value,
           new RegExp(`Unsigned ${bits}-bit`),
@@ -442,7 +450,7 @@ contract F { function f(address a) external {} }`,
         const col = code.indexOf(type) + 1;
         const h = provider.provideHover(doc, { line: 0, character: col });
         assert.ok(h, `expected hover on ${type}`);
-        const value = (h!.contents as any).value as string;
+        const value = hoverValue(h);
         assert.match(value, pattern);
       }
     });
@@ -461,7 +469,7 @@ contract F { function f(address a) external {} }`,
         const col = code.indexOf(type) + 1;
         const h = provider.provideHover(doc, { line: 0, character: col });
         assert.ok(h, `expected hover on ${type}`);
-        const value = (h!.contents as any).value as string;
+        const value = hoverValue(h);
         assert.match(value, pattern);
       }
     });
@@ -476,7 +484,7 @@ contract F { function f(address a) external {} }`,
         // symbol lookup (which returns null here since the symbol
         // doesn't exist). Either way, no elementary-type description.
         if (h) {
-          const value = (h!.contents as any).value as string;
+          const value = hoverValue(h);
           assert.doesNotMatch(value, /bit/i, `${type} should not receive an elementary-type hover`);
         }
       }
@@ -501,7 +509,7 @@ contract C {
       const mCol = line4.lastIndexOf(".m") + 1;
       const h = provider.provideHover(doc, { line: 4, character: mCol });
       assert.ok(h, "expected hover on Foo.m");
-      const value = (h!.contents as any).value as string;
+      const value = hoverValue(h);
       assert.match(value, /function m/);
       // MUST be the `Foo.m` signature (no parameters), NOT `Bar.m(uint256)`.
       assert.doesNotMatch(
@@ -563,7 +571,7 @@ contract C {
       const addCol = line8.indexOf("SafeMath.add") + "SafeMath.".length;
       const h = provider.provideHover(doc, { line: 8, character: addCol });
       assert.ok(h, "expected hover on SafeMath.add");
-      const value = (h!.contents as any).value as string;
+      const value = hoverValue(h);
       // Must be from SafeMath, not from the `Other` contract that also
       // has an `add` function.
       assert.match(value, /Defined in.*SafeMath/, `expected SafeMath container; got ${value}`);
@@ -824,7 +832,7 @@ contract C {
       const wrapCol = lines[wrapLine].indexOf(".wrap") + 1;
       const hWrap = provider.provideHover(doc, { line: wrapLine, character: wrapCol });
       assert.ok(hWrap, "expected wrap hover");
-      const wrapVal = (hWrap!.contents as any).value as string;
+      const wrapVal = hoverValue(hWrap);
       assert.match(wrapVal, /wrap/);
       assert.match(wrapVal, /Currency/);
       assert.match(wrapVal, /address/); // underlying type
@@ -833,7 +841,7 @@ contract C {
       const unwrapCol = lines[unwrapLine].indexOf(".unwrap") + 1;
       const hUn = provider.provideHover(doc, { line: unwrapLine, character: unwrapCol });
       assert.ok(hUn, "expected unwrap hover");
-      const unVal = (hUn!.contents as any).value as string;
+      const unVal = hoverValue(hUn);
       assert.match(unVal, /unwrap/);
       assert.match(unVal, /Currency/);
     });

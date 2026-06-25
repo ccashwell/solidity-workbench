@@ -21,6 +21,8 @@ interface TestHarness {
   uriFor: (p: string) => string;
 }
 
+type RenameSolcBridge = Parameters<RenameProvider["setSolcBridge"]>[0];
+
 /**
  * Minimal WorkspaceManager stand-in. The rename provider only pulls
  * three members off of it: getAllFileUris, uriToPath, and libDirs.
@@ -244,7 +246,7 @@ describe("RenameProvider", () => {
           },
           references: [{ filePath: file.path, offset: callOffset, length: "ping".length }],
         }),
-      } as any);
+      } as unknown as RenameSolcBridge);
 
       const result = await h.provider.provideRename(doc, doc.positionAt(declOffset), "pong");
 
