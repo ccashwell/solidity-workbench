@@ -6,6 +6,12 @@ import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import {
+  isNatspecReferenceTarget,
+  rangeSize,
+  resolveNatspecReference,
+  symbolTargetUri,
+} from "../utils/natspec-references.js";
 
 /**
  * Turns Solidity import paths into clickable document links.
@@ -68,7 +74,13 @@ export class DocumentLinksProvider {
         for (const match of text.matchAll(/\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\}/g)) {
           const ref = match[1];
           const start = match.index ?? 0;
-          const target = this.resolveNatspecReference(document.uri, ref, fromSymbol);
+          const target = resolveNatspecReference(
+            ref,
+            document.uri,
+            this.symbolIndex,
+            this.resolver,
+            fromSymbol,
+          );
           if (!target) continue;
 
           links.push({
@@ -76,7 +88,7 @@ export class DocumentLinksProvider {
               start: { line, character: start },
               end: { line, character: start + match[0].length },
             },
-            target: this.symbolTargetUri(target),
+            target: symbolTargetUri(target),
             tooltip: `Open ${target.containerName ? `${target.containerName}.` : ""}${target.name}`,
           });
         }
@@ -110,83 +122,13 @@ export class DocumentLinksProvider {
     if (!this.symbolIndex) return undefined;
     return this.symbolIndex
       .getFileSymbols(uri)
-      .filter((symbol) => this.isNatspecReferenceTarget(symbol))
+      .filter(isNatspecReferenceTarget)
       .filter((symbol) => symbol.range.start.line > commentEndLine)
       .sort(
         (a, b) =>
           a.range.start.line - b.range.start.line ||
           a.range.start.character - b.range.start.character ||
-          this.rangeSize(a.range) - this.rangeSize(b.range),
+          rangeSize(a.range) - rangeSize(b.range),
       )[0];
-  }
-
-  private resolveNatspecReference(
-    documentUri: string,
-    ref: string,
-    fromSymbol?: SolSymbol,
-  ): SolSymbol | undefined {
-    if (!this.symbolIndex) return undefined;
-
-    const parts = ref.split(".");
-    const symbolName = parts[parts.length - 1];
-    const containerName =
-      parts.length > 1 ? parts.slice(0, -1).join(".") : fromSymbol?.containerName;
-    let candidates = this.symbolIndex.findSymbols(symbolName);
-    if (this.resolver) candidates = this.resolver.filterVisibleSymbols(documentUri, candidates);
-    candidates = candidates.filter((candidate) => this.isNatspecReferenceTarget(candidate));
-    if (candidates.length === 0) return undefined;
-
-    const resolvedContainer =
-      containerName && this.resolver
-        ? this.resolver.resolveContract(containerName, documentUri)
-        : undefined;
-    if (resolvedContainer) {
-      const importedContainer = candidates.find(
-        (candidate) =>
-          candidate.containerName === resolvedContainer.contract.name &&
-          candidate.filePath === resolvedContainer.uri,
-      );
-      if (importedContainer) return importedContainer;
-    }
-
-    const sameContainer = containerName
-      ? (candidates.find(
-          (candidate) =>
-            candidate.containerName === containerName &&
-            candidate.filePath === fromSymbol?.filePath,
-        ) ?? candidates.find((candidate) => candidate.containerName === containerName))
-      : undefined;
-    if (sameContainer) return sameContainer;
-
-    return (
-      candidates.find((candidate) => candidate.filePath === fromSymbol?.filePath) ??
-      candidates.find((candidate) => candidate.filePath === documentUri) ??
-      candidates[0]
-    );
-  }
-
-  private isNatspecReferenceTarget(sym: SolSymbol): boolean {
-    return (
-      sym.kind === "contract" ||
-      sym.kind === "interface" ||
-      sym.kind === "library" ||
-      sym.kind === "function" ||
-      sym.kind === "modifier" ||
-      sym.kind === "event" ||
-      sym.kind === "error" ||
-      sym.kind === "struct" ||
-      sym.kind === "enum" ||
-      sym.kind === "userDefinedValueType"
-    );
-  }
-
-  private symbolTargetUri(sym: SolSymbol): string {
-    return `${sym.filePath}#L${sym.nameRange.start.line + 1},${sym.nameRange.start.character + 1}`;
-  }
-
-  private rangeSize(range: Range): number {
-    return (
-      (range.end.line - range.start.line) * 10_000 + (range.end.character - range.start.character)
-    );
   }
 }

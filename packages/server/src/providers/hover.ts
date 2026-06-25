@@ -24,6 +24,7 @@ import {
 } from "../utils/receiver-type.js";
 import { getEnclosingContract } from "../utils/scope.js";
 import { resolveEffectiveNatspec } from "../utils/natspec.js";
+import { resolveNatspecReference, symbolTargetUri } from "../utils/natspec-references.js";
 import { findUsingForFunction, usingForFunctionToSymbol } from "../utils/using-for.js";
 import { extractDottedReceiver } from "../utils/text.js";
 
@@ -744,69 +745,16 @@ export class HoverProvider {
 
   private linkNatspecReferences(text: string, fromSymbol?: SolSymbol): string {
     return text.replace(/\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\}/g, (match, ref) => {
-      const target = this.resolveNatspecReference(ref, fromSymbol);
-      if (!target) return match;
-      return `[${ref}](${this.symbolMarkdownUri(target)})`;
-    });
-  }
-
-  private resolveNatspecReference(ref: string, fromSymbol?: SolSymbol): SolSymbol | undefined {
-    const parts = ref.split(".");
-    const symbolName = parts[parts.length - 1];
-    const containerName =
-      parts.length > 1 ? parts.slice(0, -1).join(".") : fromSymbol?.containerName;
-    let candidates = this.symbolIndex.findSymbols(symbolName);
-    if (fromSymbol) candidates = this.filterVisibleSymbols(fromSymbol.filePath, candidates);
-    candidates = candidates.filter((candidate) => this.isNatspecReferenceTarget(candidate));
-    if (candidates.length === 0) return undefined;
-
-    const resolvedContainer =
-      containerName && this.resolver && fromSymbol
-        ? this.resolver.resolveContract(containerName, fromSymbol.filePath)
-        : undefined;
-    if (resolvedContainer) {
-      const importedContainer = candidates.find(
-        (candidate) =>
-          candidate.containerName === resolvedContainer.contract.name &&
-          candidate.filePath === resolvedContainer.uri,
+      const target = resolveNatspecReference(
+        ref,
+        fromSymbol?.filePath ?? "",
+        this.symbolIndex,
+        this.resolver,
+        fromSymbol,
       );
-      if (importedContainer) return importedContainer;
-    }
-
-    const sameContainer = containerName
-      ? (candidates.find(
-          (candidate) =>
-            candidate.containerName === containerName &&
-            candidate.filePath === fromSymbol?.filePath,
-        ) ?? candidates.find((candidate) => candidate.containerName === containerName))
-      : undefined;
-    if (sameContainer) return sameContainer;
-
-    return (
-      candidates.find((candidate) => candidate.filePath === fromSymbol?.filePath) ?? candidates[0]
-    );
-  }
-
-  private isNatspecReferenceTarget(sym: SolSymbol): boolean {
-    return (
-      sym.kind === "contract" ||
-      sym.kind === "interface" ||
-      sym.kind === "library" ||
-      sym.kind === "function" ||
-      sym.kind === "modifier" ||
-      sym.kind === "event" ||
-      sym.kind === "error" ||
-      sym.kind === "struct" ||
-      sym.kind === "enum" ||
-      sym.kind === "userDefinedValueType"
-    );
-  }
-
-  private symbolMarkdownUri(sym: SolSymbol): string {
-    const line = sym.nameRange.start.line + 1;
-    const character = sym.nameRange.start.character + 1;
-    const uri = sym.filePath.startsWith("file:") ? sym.filePath : URI.file(sym.filePath).toString();
-    return `${uri}#L${line},${character}`;
+      if (!target) return match;
+      return `[${ref}](${symbolTargetUri(target)})`;
+    });
   }
 
   private formatCustomNatspecLabel(tag: string): string {
