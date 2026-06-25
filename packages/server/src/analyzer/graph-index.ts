@@ -2636,7 +2636,16 @@ export class GraphIndex {
     const receiverInfo = this.resolveReceiverInfo(uri, contract, receiver, range.start);
     const receiverType = receiverInfo?.typeName;
     if (!receiverType) return;
-    const target = this.resolveUsingForTarget(uri, contract, receiverType, operator, 1);
+    const target = this.resolveUsingForTarget(
+      uri,
+      contract,
+      receiverType,
+      operator,
+      1,
+      operation.right
+        ? [this.inferRawArgumentType(uri, contract, operation.right, range.start)]
+        : undefined,
+    );
     if (!target) return;
     const resolved = this.resolveGraphTargetWithSolc(
       uri,
@@ -3050,6 +3059,7 @@ export class GraphIndex {
         receiverType,
         calleeName,
         argumentCount,
+        argumentTypes,
       );
       if (usingForTarget) return usingForTarget;
 
@@ -3142,6 +3152,7 @@ export class GraphIndex {
     receiverType: string,
     calleeName: string,
     argumentCount: number | undefined,
+    argumentTypes?: (string | undefined)[],
   ): SolidityGraphNode | undefined {
     if (!this.symbolIndex) return undefined;
     const hit = findUsingForFunction(
@@ -3153,6 +3164,7 @@ export class GraphIndex {
       calleeName,
       argumentCount,
       this.resolver,
+      argumentTypes,
     );
     if (!hit) return undefined;
     return this.nodes.get(

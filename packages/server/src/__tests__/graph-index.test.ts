@@ -2479,15 +2479,17 @@ struct Data {
 library DataLib {
     function apply(Data storage self) internal {}
     function apply(Data storage self, uint256 value) internal {}
+    function apply(Data storage self, address account) internal {}
 }
 
 contract UsesUsingOverloads {
     using DataLib for Data;
     Data internal data;
 
-    function run() external {
+    function run(address account) external {
         data.apply();
         data.apply(1);
+        data.apply(account);
     }
 }
 `;
@@ -2517,9 +2519,16 @@ contract UsesUsingOverloads {
           (node) =>
             node.detail === "apply(Data self, uint256 value)" && node.containerName === "DataLib",
         );
+      const applyAddress = graph
+        .getNodes()
+        .find(
+          (node) =>
+            node.detail === "apply(Data self, address account)" && node.containerName === "DataLib",
+        );
       assert.ok(run, "expected run node");
       assert.ok(applyNoArgs, "expected receiver-only apply overload");
       assert.ok(applyUint, "expected receiver plus uint256 apply overload");
+      assert.ok(applyAddress, "expected receiver plus address apply overload");
 
       const calls = graph.getOutgoingEdges(run.id, "calls");
       assert.ok(
@@ -2529,6 +2538,15 @@ contract UsesUsingOverloads {
       assert.ok(
         calls.some((edge) => edge.target === applyUint.id),
         "expected data.apply(1) to target the uint256 overload",
+      );
+      assert.ok(
+        calls.some((edge) => edge.target === applyAddress.id),
+        "expected data.apply(account) to target the address overload",
+      );
+      assert.equal(
+        calls.filter((edge) => edge.target === applyAddress.id).length,
+        1,
+        "expected exactly one address using-for overload edge",
       );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });

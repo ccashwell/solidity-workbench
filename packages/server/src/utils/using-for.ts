@@ -8,7 +8,7 @@ import type {
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { ResolvedContract, SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
-import { isSameTypeName } from "./receiver-type.js";
+import { isSameTypeName, normalizeTypeName } from "./receiver-type.js";
 
 /** Directives in scope at `line` inside `uri` (contract-local + file-global). */
 export function collectUsingForDirectives(
@@ -58,6 +58,7 @@ export function findUsingForFunction(
   memberName: string,
   argumentCount?: number,
   resolver?: SemanticResolver,
+  argumentTypes?: (string | undefined)[],
 ): { fn: FunctionDefinition; filePath: string; containerName?: string } | null {
   const sourceUnit = parser.get(uri)?.sourceUnit;
   if (!sourceUnit) return null;
@@ -81,7 +82,12 @@ export function findUsingForFunction(
         resolver,
       );
       const library = libraryEntry?.contract;
-      const fn = selectUsingForFunction(library?.functions ?? [], memberName, argumentCount);
+      const fn = selectUsingForFunction(
+        library?.functions ?? [],
+        memberName,
+        argumentCount,
+        argumentTypes,
+      );
       if (!library || !fn || fn.parameters.length === 0) continue;
       if (!isSameTypeName(fn.parameters[0].typeName, receiverType)) continue;
       return { fn, filePath: libraryEntry.uri, containerName: library.name };
@@ -99,6 +105,7 @@ export function findUsingForFunction(
       functionName,
       argumentCount,
       resolver,
+      argumentTypes,
     );
     const fn = hit?.fn;
     if (!fn || fn.parameters.length === 0) continue;
@@ -135,6 +142,7 @@ function selectVisibleFreeFunction(
   functionName: string,
   argumentCount: number | undefined,
   resolver?: SemanticResolver,
+  argumentTypes?: (string | undefined)[],
 ): { fn: FunctionDefinition; filePath: string } | undefined {
   const imported = resolver?.resolveImportedSymbol(functionName, uri);
   if (imported) {
@@ -143,6 +151,7 @@ function selectVisibleFreeFunction(
       sourceUnit?.freeFunctions ?? [],
       imported.name,
       argumentCount,
+      argumentTypes,
     );
     if (importedMatch) return { fn: importedMatch, filePath: imported.uri };
   }
@@ -152,7 +161,7 @@ function selectVisibleFreeFunction(
     : functionName;
   if (functionName === unqualifiedName) {
     const local = parser.get(uri)?.sourceUnit.freeFunctions ?? [];
-    const localMatch = selectUsingForFunction(local, unqualifiedName, argumentCount);
+    const localMatch = selectUsingForFunction(local, unqualifiedName, argumentCount, argumentTypes);
     if (localMatch) return { fn: localMatch, filePath: uri };
   }
 
@@ -163,7 +172,12 @@ function selectVisibleFreeFunction(
   for (const symbol of visible) {
     const sourceUnit = parser.get(symbol.filePath)?.sourceUnit;
     if (!sourceUnit) continue;
-    const fn = selectUsingForFunction(sourceUnit.freeFunctions, unqualifiedName, argumentCount);
+    const fn = selectUsingForFunction(
+      sourceUnit.freeFunctions,
+      unqualifiedName,
+      argumentCount,
+      argumentTypes,
+    );
     if (fn) return { fn, filePath: symbol.filePath };
   }
   return undefined;
@@ -183,10 +197,45 @@ function selectUsingForFunction(
   functions: FunctionDefinition[],
   memberName: string,
   argumentCount: number | undefined,
+  argumentTypes?: (string | undefined)[],
 ): FunctionDefinition | undefined {
   const candidates = functions.filter((fn) => fn.name === memberName);
   if (argumentCount === undefined) return candidates[0];
-  return candidates.find((fn) => fn.parameters.length === argumentCount + 1) ?? candidates[0];
+  const arityMatches = candidates.filter((fn) => fn.parameters.length === argumentCount + 1);
+  if (arityMatches.length <= 1) return arityMatches[0] ?? candidates[0];
+  const typedMatches = argumentTypes?.some(Boolean)
+    ? arityMatches.filter((fn) => usingForExplicitParametersMatch(fn, argumentTypes))
+    : [];
+  if (typedMatches.length === 1) return typedMatches[0];
+  if (typedMatches.length > 1) return undefined;
+  return arityMatches[0] ?? candidates[0];
+}
+
+function usingForExplicitParametersMatch(
+  fn: FunctionDefinition,
+  argumentTypes: (string | undefined)[],
+): boolean {
+  return fn.parameters
+    .slice(1)
+    .every((param, index) => parameterMatchesArgumentType(param.typeName, argumentTypes[index]));
+}
+
+function parameterMatchesArgumentType(
+  parameterType: string,
+  argumentType: string | undefined,
+): boolean {
+  if (!argumentType) return true;
+  const parameter = canonicalArgumentType(parameterType);
+  if (argumentType === "integerLiteral") return /^u?int(?:\d+)?$/.test(parameter);
+  if (argumentType === "bytesLiteral") return /^bytes(?:\d+)?$/.test(parameter);
+  return parameter === canonicalArgumentType(argumentType);
+}
+
+function canonicalArgumentType(typeName: string): string {
+  return normalizeTypeName(typeName)
+    .replace(/\buint\b/g, "uint256")
+    .replace(/\bint\b/g, "int256")
+    .trim();
 }
 
 export function usingForFunctionToSymbol(hit: {
