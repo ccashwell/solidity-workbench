@@ -125,7 +125,7 @@ export class CallHierarchyProvider {
     if (!word) return [];
 
     const symbols = this.filterVisibleSymbols(document.uri, this.symbolIndex.findSymbols(word));
-    const funcSymbols = symbols.filter((s) => s.kind === "function" || s.kind === "modifier");
+    const funcSymbols = symbols.filter((s) => this.isCallHierarchySymbolKind(s.kind));
 
     if (funcSymbols.length === 0) return [];
 
@@ -138,7 +138,7 @@ export class CallHierarchyProvider {
 
     return prepared.map((sym) => ({
       name: sym.name,
-      kind: sym.kind === "modifier" ? SymbolKind.Method : SymbolKind.Function,
+      kind: this.symbolKindToCallHierarchyKind(sym.kind),
       uri: sym.filePath,
       range: sym.range,
       selectionRange: sym.nameRange,
@@ -248,7 +248,7 @@ export class CallHierarchyProvider {
         entry = {
           item: {
             name: calleeSym.name,
-            kind: SymbolKind.Function,
+            kind: this.symbolKindToCallHierarchyKind(calleeSym.kind),
             uri: calleeSym.uri,
             range: calleeSym.range,
             selectionRange: calleeSym.selectionRange,
@@ -360,7 +360,7 @@ export class CallHierarchyProvider {
   private graphNodeToCallHierarchyItem(node: SolidityGraphNode): CallHierarchyItem {
     return {
       name: node.name,
-      kind: node.kind === "modifier" ? SymbolKind.Method : SymbolKind.Function,
+      kind: this.graphNodeKindToCallHierarchyKind(node.kind),
       uri: node.uri,
       range: node.range,
       selectionRange: node.selectionRange,
@@ -375,8 +375,29 @@ export class CallHierarchyProvider {
       node.kind === "constructor" ||
       node.kind === "receive" ||
       node.kind === "fallback" ||
-      node.kind === "modifier"
+      node.kind === "modifier" ||
+      node.kind === "stateVariable"
     );
+  }
+
+  private isCallHierarchySymbolKind(kind: string): boolean {
+    return kind === "function" || kind === "modifier" || kind === "stateVariable";
+  }
+
+  private symbolKindToCallHierarchyKind(kind: string | undefined): SymbolKind {
+    return kind === "stateVariable"
+      ? SymbolKind.Field
+      : kind === "modifier"
+        ? SymbolKind.Method
+        : SymbolKind.Function;
+  }
+
+  private graphNodeKindToCallHierarchyKind(kind: SolidityGraphNode["kind"]): SymbolKind {
+    return kind === "stateVariable"
+      ? SymbolKind.Field
+      : kind === "modifier"
+        ? SymbolKind.Method
+        : SymbolKind.Function;
   }
 
   /**
@@ -678,6 +699,7 @@ export class CallHierarchyProvider {
         if (!this.rangeContains(fn.range, start, end)) continue;
         return {
           name: fn.name,
+          kind: "function",
           uri: targetUri,
           range: fn.range,
           selectionRange: fn.nameRange,
@@ -688,9 +710,21 @@ export class CallHierarchyProvider {
         if (!this.rangeContains(mod.range, start, end)) continue;
         return {
           name: mod.name,
+          kind: "modifier",
           uri: targetUri,
           range: mod.range,
           selectionRange: mod.nameRange,
+          containerName: entry.contract.name,
+        };
+      }
+      for (const svar of entry.contract.stateVariables) {
+        if (!this.rangeContains(svar.range, start, end)) continue;
+        return {
+          name: svar.name,
+          kind: "stateVariable",
+          uri: targetUri,
+          range: svar.range,
+          selectionRange: svar.nameRange,
           containerName: entry.contract.name,
         };
       }
@@ -742,7 +776,7 @@ export class CallHierarchyProvider {
   private resolveCalleeSymbol(site: CallSite): CallTarget | undefined {
     const candidates = this.symbolIndex
       .findSymbols(site.calleeName)
-      .filter((sym) => sym.kind === "function" || sym.kind === "modifier");
+      .filter((sym) => this.isCallHierarchySymbolKind(sym.kind));
     if (candidates.length === 0) return undefined;
 
     const visible = this.filterVisibleSymbols(site.callerUri, candidates);
@@ -754,7 +788,7 @@ export class CallHierarchyProvider {
         site.calleeName,
         site.callerUri,
       );
-      if (resolved && (resolved.kind === "function" || resolved.kind === "modifier")) {
+      if (resolved && this.isCallHierarchySymbolKind(resolved.kind)) {
         return this.symbolToTarget(resolved);
       }
 
@@ -773,6 +807,7 @@ export class CallHierarchyProvider {
 
   private symbolToTarget(sym: {
     name: string;
+    kind?: string;
     filePath: string;
     range: Range;
     nameRange: Range;
@@ -780,6 +815,7 @@ export class CallHierarchyProvider {
   }): CallTarget {
     return {
       name: sym.name,
+      kind: sym.kind,
       uri: sym.filePath,
       range: sym.range,
       selectionRange: sym.nameRange,
@@ -993,6 +1029,7 @@ interface CallSite {
 
 interface CallTarget {
   name: string;
+  kind?: string;
   uri: string;
   range: Range;
   selectionRange: Range;

@@ -806,6 +806,116 @@ contract MockAsset {
       }
     });
 
+    it("treats public state-variable getters as call hierarchy targets", async () => {
+      const getterFixture = setupFixture({
+        "src/Token.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract Token {
+    uint256 public totalSupply;
+    mapping(address => uint256) public balanceOf;
+}
+`,
+        "src/Reader.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "./Token.sol";
+
+contract Reader {
+    function read(Token token, address account) external view returns (uint256) {
+        return token.totalSupply() + token.balanceOf(account);
+    }
+}
+`,
+      });
+
+      try {
+        const tokenUri = URI.file(path.join(getterFixture.tmpDir, "src/Token.sol")).toString();
+        const readerUri = URI.file(path.join(getterFixture.tmpDir, "src/Reader.sol")).toString();
+        const tokenText = fs.readFileSync(
+          path.join(getterFixture.tmpDir, "src/Token.sol"),
+          "utf-8",
+        );
+        const tokenDoc = TextDocument.create(tokenUri, "solidity", 1, tokenText);
+        const totalSupplyLine = tokenText
+          .split("\n")
+          .findIndex((line) => line.includes("totalSupply"));
+
+        const prepared = getterFixture.provider.prepareCallHierarchy(tokenDoc, {
+          line: totalSupplyLine,
+          character: tokenText.split("\n")[totalSupplyLine].indexOf("totalSupply") + 1,
+        });
+        assert.equal(prepared.length, 1);
+        assert.equal(prepared[0].name, "totalSupply");
+        assert.equal(prepared[0].kind, SymbolKind.Field);
+
+        const outgoing = await getterFixture.provider.getOutgoingCalls({
+          name: "read",
+          kind: SymbolKind.Function,
+          uri: readerUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "Reader",
+        });
+        const totalSupply = outgoing.find((call) => call.to.name === "totalSupply");
+        assert.ok(totalSupply, "expected outgoing getter call to totalSupply");
+        assert.equal(totalSupply.to.kind, SymbolKind.Field);
+        assert.equal(totalSupply.to.detail, "Token");
+
+        const balanceOf = outgoing.find((call) => call.to.name === "balanceOf");
+        assert.ok(balanceOf, "expected outgoing getter call to balanceOf");
+        assert.equal(balanceOf.to.kind, SymbolKind.Field);
+        assert.equal(balanceOf.to.detail, "Token");
+
+        const incoming = await getterFixture.provider.getIncomingCalls(totalSupply.to);
+        assert.ok(
+          incoming.some((call) => call.from.name === "read"),
+          "expected switching to callers of totalSupply getter to include Reader.read",
+        );
+
+        const resolver = new SemanticResolver(
+          getterFixture.parser,
+          getterFixture.workspace,
+          getterFixture.symbolIndex,
+        );
+        const graphIndex = new GraphIndex(
+          getterFixture.parser,
+          getterFixture.workspace,
+          resolver,
+          getterFixture.symbolIndex,
+        );
+        graphIndex.rebuildWorkspace();
+        const graphBackedProvider = new CallHierarchyProvider(
+          getterFixture.symbolIndex,
+          getterFixture.workspace,
+          getterFixture.parser,
+          resolver,
+          graphIndex,
+        );
+
+        const graphOutgoing = await graphBackedProvider.getOutgoingCalls({
+          name: "read",
+          kind: SymbolKind.Function,
+          uri: readerUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "Reader",
+        });
+        const graphTotalSupply = graphOutgoing.find((call) => call.to.name === "totalSupply");
+        assert.ok(graphTotalSupply, "expected graph-backed getter call to totalSupply");
+        assert.equal(graphTotalSupply.to.kind, SymbolKind.Field);
+        assert.equal(graphTotalSupply.to.detail, "Token");
+
+        const graphIncoming = await graphBackedProvider.getIncomingCalls(graphTotalSupply.to);
+        assert.ok(
+          graphIncoming.some((call) => call.from.name === "read"),
+          "expected graph-backed callers of totalSupply getter to include Reader.read",
+        );
+      } finally {
+        teardownFixture(getterFixture);
+      }
+    });
+
     it("drops only the changed file's call sites on invalidate, leaving other callers intact", async () => {
       // Regression test for the per-keystroke invalidate hot path:
       // `invalidateFile` used to walk every callee name in the
