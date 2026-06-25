@@ -21,6 +21,7 @@ import {
   type ProjectGraphStatsResult,
 } from "@solidity-workbench/common";
 import {
+  buildProjectGraphScopeDiagnosticsReport,
   ProjectGraphExporter,
   PROJECT_GRAPH_CALLER_TARGET_NODE_KINDS,
   PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT,
@@ -231,6 +232,7 @@ describe("Feature coverage — webview commands", () => {
       "solidity-workbench.searchProjectGraph",
       "solidity-workbench.queryProjectGraph",
       "solidity-workbench.projectGraphStats",
+      "solidity-workbench.projectGraphScopeDiagnostics",
       "solidity-workbench.rebuildProjectGraph",
       "solidity-workbench.clearProjectGraphCache",
     ];
@@ -1309,6 +1311,45 @@ describe("Feature coverage — project graph export", () => {
     );
   });
 
+  it("builds project graph scope diagnostics reports", () => {
+    const stats: ProjectGraphStatsResult = {
+      nodeCount: 4,
+      edgeCount: 2,
+      nodesByKind: Object.assign(Object.create(null), { contract: 2, function: 2 }),
+      edgesByKind: Object.assign(Object.create(null), { contains: 2 }),
+      filesByTier: Object.assign(Object.create(null), { project: 1, tests: 1 }),
+      lastRebuildDurationMs: 11,
+      lastUpdateDurationMs: null,
+    };
+    const report = buildProjectGraphScopeDiagnosticsReport({
+      generatedAt: "2026-06-25T00:00:00.000Z",
+      requestDurationMs: 7,
+      stats,
+      scopes: [
+        {
+          label: "Project Sources Only",
+          includeTests: false,
+          includeDependencies: false,
+          nodeCount: 2,
+          edgeCount: 1,
+          scope: {
+            includeTests: false,
+            includeDependencies: false,
+            hiddenNodeCount: 2,
+            hiddenTestNodeCount: 2,
+            hiddenDependencyNodeCount: 0,
+            hiddenOtherNodeCount: 0,
+          },
+        },
+      ],
+    });
+
+    assert.equal(report.generatedAt, "2026-06-25T00:00:00.000Z");
+    assert.equal(report.requestDurationMs, 7);
+    assert.equal(report.scopes[0]?.label, "Project Sources Only");
+    assert.equal(report.scopes[0]?.scope?.hiddenTestNodeCount, 2);
+  });
+
   it("summarizes project graph relationship indexing status", () => {
     assert.equal(summarizeProjectGraphRelationshipStatus().state, "unknown");
 
@@ -1500,6 +1541,31 @@ describe("Feature coverage — live project graph", () => {
       "explicit rebuild should complete relationship indexing for the sample workspace",
     );
     assert.notEqual(stats.rebuildCanceled, true, "explicit sample rebuild should not be canceled");
+
+    await vscode.window.showTextDocument(
+      await vscode.workspace.openTextDocument(findSampleFile("src/Counter.sol")),
+    );
+  });
+
+  it("opens live project graph scope diagnostics", async function () {
+    this.timeout(60_000);
+
+    await vscode.commands.executeCommand("solidity-workbench.projectGraphScopeDiagnostics");
+
+    const editor = vscode.window.activeTextEditor;
+    assert.ok(editor, "expected project graph scope diagnostics to open a JSON document");
+    const report = JSON.parse(editor.document.getText()) as {
+      scopes?: Array<{ label: string; nodeCount: number; scope?: { hiddenNodeCount: number } }>;
+    };
+    assert.equal(report.scopes?.length, 4);
+    assert.ok(
+      report.scopes?.some((scope) => scope.label === "Project Sources Only"),
+      "expected project-source scope diagnostics",
+    );
+    assert.ok(
+      report.scopes?.every((scope) => typeof scope.nodeCount === "number"),
+      "expected node counts for every scope",
+    );
 
     await vscode.window.showTextDocument(
       await vscode.workspace.openTextDocument(findSampleFile("src/Counter.sol")),

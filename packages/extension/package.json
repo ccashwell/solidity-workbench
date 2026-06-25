@@ -414,6 +414,10 @@
         "title": "Solidity Workbench: Show Project Graph Stats"
       },
       {
+        "command": "solidity-workbench.projectGraphScopeDiagnostics",
+        "title": "Solidity Workbench: Show Project Graph Scope Diagnostics"
+      },
+      {
         "command": "solidity-workbench.rebuildProjectGraph",
         "title": "Solidity Workbench: Rebuild Project Graph Index"
       },

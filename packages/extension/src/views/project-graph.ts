@@ -269,6 +269,23 @@ export interface ProjectGraphResultDiagnostics {
   detail: string;
 }
 
+export interface ProjectGraphScopeDiagnosticsSnapshot {
+  label: string;
+  includeTests: boolean;
+  includeDependencies: boolean;
+  nodeCount: number;
+  edgeCount: number;
+  truncated?: boolean;
+  scope?: ProjectGraphScopeDiagnostics;
+}
+
+export interface ProjectGraphScopeDiagnosticsReport {
+  generatedAt: string;
+  requestDurationMs: number;
+  stats: ProjectGraphStatsResult;
+  scopes: ProjectGraphScopeDiagnosticsSnapshot[];
+}
+
 const EXPORT_FORMAT_ITEMS: {
   label: string;
   description: string;
@@ -486,6 +503,28 @@ export function projectGraphHiddenScopeHint(
   }
   if (hidden.length === 0) return undefined;
   return `Current scope hides ${joinEnglishList(hidden)}. Enable Tests or Deps to expand the result.`;
+}
+
+export function buildProjectGraphScopeDiagnosticsReport(input: {
+  generatedAt?: string;
+  requestDurationMs: number;
+  stats: ProjectGraphStatsResult;
+  scopes: ProjectGraphScopeDiagnosticsSnapshot[];
+}): ProjectGraphScopeDiagnosticsReport {
+  return {
+    generatedAt: input.generatedAt ?? new Date().toISOString(),
+    requestDurationMs: input.requestDurationMs,
+    stats: input.stats,
+    scopes: input.scopes.map((scope) => ({
+      label: scope.label,
+      includeTests: scope.includeTests,
+      includeDependencies: scope.includeDependencies,
+      nodeCount: scope.nodeCount,
+      edgeCount: scope.edgeCount,
+      truncated: scope.truncated,
+      scope: scope.scope,
+    })),
+  };
 }
 
 function joinEnglishList(values: string[]): string {
@@ -746,6 +785,9 @@ export class ProjectGraphExporter {
       ),
       vscode.commands.registerCommand("solidity-workbench.projectGraphStats", () =>
         this.showProjectGraphStats(),
+      ),
+      vscode.commands.registerCommand("solidity-workbench.projectGraphScopeDiagnostics", () =>
+        this.showProjectGraphScopeDiagnostics(),
       ),
       vscode.commands.registerCommand("solidity-workbench.rebuildProjectGraph", () =>
         this.rebuildProjectGraph(),
@@ -1222,6 +1264,48 @@ export class ProjectGraphExporter {
     const doc = await vscode.workspace.openTextDocument({
       language: "json",
       content: JSON.stringify({ ...stats, requestDurationMs }, null, 2),
+    });
+    await vscode.window.showTextDocument(doc, { preview: false });
+  }
+
+  private async showProjectGraphScopeDiagnostics(): Promise<void> {
+    const startedAt = Date.now();
+    const scopeRequests: Array<{
+      label: string;
+      includeTests: boolean;
+      includeDependencies: boolean;
+    }> = [
+      { label: "Project Sources Only", includeTests: false, includeDependencies: false },
+      { label: "Include Tests", includeTests: true, includeDependencies: false },
+      { label: "Include Dependencies", includeTests: false, includeDependencies: true },
+      { label: "Include Tests and Dependencies", includeTests: true, includeDependencies: true },
+    ];
+    const [stats, ...graphs] = await Promise.all([
+      this.getProjectGraphStats(),
+      ...scopeRequests.map((scope) =>
+        this.client.sendRequest<ProjectGraphResult>(GetProjectGraph, {
+          includeTests: scope.includeTests,
+          includeDependencies: scope.includeDependencies,
+        }),
+      ),
+    ]);
+    const report = buildProjectGraphScopeDiagnosticsReport({
+      stats,
+      requestDurationMs: Date.now() - startedAt,
+      scopes: scopeRequests.map((scope, index) => {
+        const graph = graphs[index];
+        return {
+          ...scope,
+          nodeCount: graph.nodes.length,
+          edgeCount: graph.edges.length,
+          truncated: graph.truncated,
+          scope: graph.scope,
+        };
+      }),
+    });
+    const doc = await vscode.workspace.openTextDocument({
+      language: "json",
+      content: JSON.stringify(report, null, 2),
     });
     await vscode.window.showTextDocument(doc, { preview: false });
   }

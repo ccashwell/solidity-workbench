@@ -142,6 +142,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directly from the graph webview.
 - Empty Project Graph search, query, and path results now report when the
   current scope is hiding test or dependency nodes that may explain the miss.
+- Added a Project Graph scope diagnostics command that opens a JSON report
+  comparing Project Sources, Tests, Dependencies, and combined graph scopes.
 - VSIX verification now lives in a shared `scripts/verify-vsix.mjs` checker,
   and local packaging, CI, and publish workflows all verify the same exact
   versioned artifact before upload or release.
