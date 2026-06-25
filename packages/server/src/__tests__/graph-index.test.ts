@@ -2888,11 +2888,13 @@ contract Other {
       const files = {
         "src/IFoo.sol": `pragma solidity ^0.8.24;
 interface IFoo {
+    function run(uint256 amount) external;
     function run() external;
 }
 `,
         "src/Base.sol": `pragma solidity ^0.8.24;
 contract Base {
+    function hook(uint256 amount) public virtual {}
     function hook() public virtual {}
 }
 `,
@@ -2966,10 +2968,24 @@ contract Impl is IFoo, Base {
       const nodes = graph.getNodes();
       const implRun = nodes.find((node) => node.name === "run" && node.containerName === "Impl");
       const interfaceRun = nodes.find(
-        (node) => node.name === "run" && node.containerName === "IFoo",
+        (node) => node.name === "run" && node.containerName === "IFoo" && node.detail === "run()",
+      );
+      const interfaceRunWithAmount = nodes.find(
+        (node) =>
+          node.name === "run" &&
+          node.containerName === "IFoo" &&
+          node.detail === "run(uint256 amount)",
       );
       const implHook = nodes.find((node) => node.name === "hook" && node.containerName === "Impl");
-      const baseHook = nodes.find((node) => node.name === "hook" && node.containerName === "Base");
+      const baseHook = nodes.find(
+        (node) => node.name === "hook" && node.containerName === "Base" && node.detail === "hook()",
+      );
+      const baseHookWithAmount = nodes.find(
+        (node) =>
+          node.name === "hook" &&
+          node.containerName === "Base" &&
+          node.detail === "hook(uint256 amount)",
+      );
       const callTarget = nodes.find(
         (node) => node.name === "callTarget" && node.containerName === "Impl",
       );
@@ -2989,8 +3005,10 @@ contract Impl is IFoo, Base {
       );
       assert.ok(implRun, "expected Impl.run node");
       assert.ok(interfaceRun, "expected IFoo.run node");
+      assert.ok(interfaceRunWithAmount, "expected overloaded IFoo.run(uint256) node");
       assert.ok(implHook, "expected Impl.hook node");
       assert.ok(baseHook, "expected Base.hook node");
+      assert.ok(baseHookWithAmount, "expected overloaded Base.hook(uint256) node");
       assert.ok(callTarget, "expected Impl.callTarget node");
       assert.ok(tryTarget, "expected Impl.tryTarget node");
       assert.ok(jump, "expected Impl.jump node");
@@ -3007,9 +3025,21 @@ contract Impl is IFoo, Base {
       );
       assert.ok(
         graph
+          .getOutgoingEdges(implRun.id, "implements")
+          .every((edge) => edge.target !== interfaceRunWithAmount.id),
+        "did not expect no-arg implementation to target overloaded interface function",
+      );
+      assert.ok(
+        graph
           .getOutgoingEdges(implHook.id, "overrides")
           .some((edge) => edge.target === baseHook.id),
         "expected override of base function to create overrides edge",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(implHook.id, "overrides")
+          .every((edge) => edge.target !== baseHookWithAmount.id),
+        "did not expect no-arg override to target overloaded base function",
       );
       assert.ok(
         graph.getOutgoingEdges(implRun.id, "creates").some((edge) => edge.target === created.id),

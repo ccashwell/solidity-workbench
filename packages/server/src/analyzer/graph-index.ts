@@ -2042,7 +2042,9 @@ export class GraphIndex {
       if (!fn.isOverride || !fn.name) continue;
       const sourceId = this.memberNodeId(uri, contract.name, "function", fn.name, fn.nameRange);
       for (const base of bases) {
-        const targetFn = base.contract.functions.find((candidate) => candidate.name === fn.name);
+        const targetFn = base.contract.functions.find((candidate) =>
+          this.functionOverrideMatches(fn, candidate),
+        );
         if (!targetFn?.name) continue;
         this.addEdge({
           source: sourceId,
@@ -2074,8 +2076,8 @@ export class GraphIndex {
         modifier.nameRange,
       );
       for (const base of bases) {
-        const targetModifier = base.contract.modifiers.find(
-          (candidate) => candidate.name === modifier.name,
+        const targetModifier = base.contract.modifiers.find((candidate) =>
+          this.modifierOverrideMatches(modifier, candidate),
         );
         if (!targetModifier) continue;
         this.addEdge({
@@ -2097,6 +2099,32 @@ export class GraphIndex {
         });
       }
     }
+  }
+
+  private functionOverrideMatches(
+    source: FunctionDefinition,
+    candidate: FunctionDefinition,
+  ): boolean {
+    return source.name === candidate.name && this.parameterTypesMatch(source, candidate);
+  }
+
+  private modifierOverrideMatches(
+    source: ModifierDefinition,
+    candidate: ModifierDefinition,
+  ): boolean {
+    return source.name === candidate.name && this.parameterTypesMatch(source, candidate);
+  }
+
+  private parameterTypesMatch(
+    source: Pick<FunctionDefinition | ModifierDefinition, "parameters">,
+    candidate: Pick<FunctionDefinition | ModifierDefinition, "parameters">,
+  ): boolean {
+    if (source.parameters.length !== candidate.parameters.length) return false;
+    return source.parameters.every(
+      (param, index) =>
+        normalizeTypeName(param.typeName) ===
+        normalizeTypeName(candidate.parameters[index].typeName),
+    );
   }
 
   private addUsesTypeEdges(
