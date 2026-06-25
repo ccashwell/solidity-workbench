@@ -518,12 +518,15 @@ connection.onDidChangeWatchedFiles(async (params) => {
   for (const uri of touchedSolFiles) {
     await symbolIndex.indexFile(uri);
     semanticResolver.invalidate();
-    for (const refreshedUri of graphIndex.updateFileAndDependents(uri)) {
+    for (const refreshedUri of graphIndex.updateFileAndDependents(uri, false)) {
       callHierarchyProvider.invalidateFile(refreshedUri);
     }
   }
   if (removedSolFiles.length > 0 || touchedSolFiles.length > 0) {
     graphIndex.writeCache(graphCacheDir);
+    if (touchedSolFiles.length > 0 && shouldRunBackgroundGraphRelationshipIndex()) {
+      scheduleGraphRelationshipIndex();
+    }
   }
 });
 
@@ -536,9 +539,10 @@ documents.onDidChangeContent(async (change) => {
   parser.parse(uri, text);
   symbolIndex.updateFile(uri);
   semanticResolver.invalidate();
-  for (const refreshedUri of graphIndex.updateFileAndDependents(uri)) {
+  for (const refreshedUri of graphIndex.updateFileAndDependents(uri, false)) {
     callHierarchyProvider.invalidateFile(refreshedUri);
   }
+  if (shouldRunBackgroundGraphRelationshipIndex()) scheduleGraphRelationshipIndex();
 
   // Eagerly index the document's transitive import graph so hover,
   // inlay hints, definition, etc. can resolve symbols across the
@@ -546,7 +550,7 @@ documents.onDidChangeContent(async (change) => {
   // reach `lib/`. Fire-and-forget — the diagnostics path below
   // shouldn't block on dep-tree indexing.
   void symbolIndex
-    .ensureImportsIndexed(uri, new Set(), (indexedUri) => graphIndex.updateFile(indexedUri))
+    .ensureImportsIndexed(uri, new Set(), (indexedUri) => graphIndex.updateFile(indexedUri, false))
     .catch((err) => {
       connection.console.warn(`ensureImportsIndexed(${uri}) failed: ${err}`);
     });

@@ -310,6 +310,8 @@ function codeGraphEdge(edge: ProjectGraphEdge): unknown {
     target: edge.target,
     kind: edge.kind,
     range: edge.range,
+    resolutionConfidence: edge.resolutionConfidence,
+    unresolvedTarget: edge.unresolvedTarget,
     metadata: edge.metadata,
     provenance: "solidity-workbench",
   };

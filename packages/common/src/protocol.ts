@@ -213,6 +213,8 @@ export type ProjectGraphEdgeKind =
   | "revertsWith"
   | "usesType";
 
+export type ProjectGraphResolutionConfidence = "solc" | "parser" | "heuristic" | "unknown";
+
 export interface GetProjectGraphParams {
   /** Optional edge-kind filter. Omit to return every known edge kind. */
   edgeKinds?: ProjectGraphEdgeKind[];
@@ -285,6 +287,15 @@ export interface ProjectGraphEdge {
   target: string;
   kind: ProjectGraphEdgeKind;
   range?: SourceRange;
+  /**
+   * How the target was resolved. `solc` means a warm compiler AST confirmed the
+   * target, `parser` means the parser/symbol index resolved it, `heuristic`
+   * means the edge is best-effort, and `unknown` means the edge kind is
+   * structural or predates confidence tagging.
+   */
+  resolutionConfidence?: ProjectGraphResolutionConfidence;
+  /** True when the source operation is known but the concrete target is not. */
+  unresolvedTarget?: boolean;
   metadata?: Record<string, unknown>;
 }
 
@@ -317,6 +328,8 @@ export interface ProjectGraphStatsResult {
   edgeCount: number;
   nodesByKind: Partial<Record<ProjectGraphNodeKind, number>>;
   edgesByKind: Partial<Record<ProjectGraphEdgeKind, number>>;
+  edgesByResolutionConfidence?: Partial<Record<ProjectGraphResolutionConfidence, number>>;
+  unresolvedEdgeCount?: number;
   filesByTier: Partial<Record<"project" | "tests" | "deps" | "unknown", number>>;
   lastRebuildDurationMs: number | null;
   lastUpdateDurationMs: number | null;

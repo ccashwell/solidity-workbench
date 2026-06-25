@@ -124,6 +124,9 @@ type usage. Its cache tracks Solidity files independently, while Foundry config
 and remapping changes invalidate the workspace graph configuration.
 When relationship indexing is still running, the graph view shows a partial
 index banner and graph exports include a normalized `relationshipStatus` object.
+Graph edges also expose `resolutionConfidence` and `unresolvedTarget` fields so
+exports and stats distinguish solc-confirmed edges from parser, heuristic, and
+unresolved edges.
 Dependency files under configured Foundry `libs` are excluded from Project Graph
 by default; set `solidity-workbench.projectGraph.dependencyIndexing` to
 `declarations` or `relationships` to opt into dependency declarations or full

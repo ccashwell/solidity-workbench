@@ -39,9 +39,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Project Graph view now shows a partial-index banner while relationship
   edges are still indexing, and JSON / CodeGraph exports include normalized
   `relationshipStatus` metadata.
+- Project Graph edges now expose normalized `resolutionConfidence` and
+  `unresolvedTarget` fields, and graph stats count solc-confirmed, parser,
+  heuristic, unknown, and unresolved edges.
 
 ### Fixed
 
+- Live Project Graph updates now refresh declarations and dependents
+  immediately but queue relationship reindexing in the background, avoiding
+  synchronous full edge rebuilds on every edit.
 - Project Graph rebuilds now index declarations before function bodies, so
   receiver-typed calls resolve correctly even when a caller file is visited
   before the imported interface or contract that declares the callee.

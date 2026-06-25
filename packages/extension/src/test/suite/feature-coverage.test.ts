@@ -204,6 +204,7 @@ describe("Feature coverage — project graph export", () => {
         source: "file:///workspace/src/Vault.sol#Vault:function:deposit:4:13",
         target: "external:IERC20",
         kind: "usesType",
+        resolutionConfidence: "parser",
         metadata: { resolutionConfidence: "parser" },
       },
     ],
@@ -215,6 +216,8 @@ describe("Feature coverage — project graph export", () => {
       edgeCount: 1,
       nodesByKind: Object.assign(Object.create(null), { function: 1 }),
       edgesByKind: Object.assign(Object.create(null), { usesType: 1 }),
+      edgesByResolutionConfidence: Object.assign(Object.create(null), { parser: 1 }),
+      unresolvedEdgeCount: 0,
       filesByTier: Object.assign(Object.create(null), { project: 1 }),
       lastRebuildDurationMs: 12,
       lastUpdateDurationMs: 3,
@@ -230,6 +233,8 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(parsedJson.truncated, true);
     assert.equal(parsedJson.stats.relationshipIndexComplete, false);
     assert.equal(parsedJson.stats.pendingRelationshipFiles, 3);
+    assert.equal(parsedJson.stats.edgesByResolutionConfidence.parser, 1);
+    assert.equal(parsedJson.stats.unresolvedEdgeCount, 0);
     assert.equal(parsedJson.relationshipStatus.state, "partial");
     assert.equal(parsedJson.relationshipStatus.pending, 3);
     assert.ok(
@@ -262,6 +267,8 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(parsed.graph.relationshipFilesIndexed, 7);
     assert.equal(parsed.graph.relationshipStatus.state, "partial");
     assert.match(parsed.graph.relationshipStatus.detail, /full-workspace edges may be partial/);
+    assert.equal(parsed.edges[0].resolutionConfidence, "parser");
+    assert.equal(parsed.edges[0].unresolvedTarget, undefined);
     assert.ok(
       parsed.nodes.some(
         (node: { id?: string; kind?: string }) =>
@@ -372,6 +379,12 @@ describe("Feature coverage — live project graph", () => {
         typeof stats.pendingRelationshipFiles === "number" &&
         typeof stats.relationshipIndexComplete === "boolean",
       "expected relationship indexing progress fields in live graph stats",
+    );
+    assert.ok(
+      stats.edgesByResolutionConfidence &&
+        typeof stats.edgesByResolutionConfidence.unknown === "number" &&
+        typeof stats.unresolvedEdgeCount === "number",
+      "expected edge confidence fields in live graph stats",
     );
     assert.equal(
       stats.relationshipIndexComplete,

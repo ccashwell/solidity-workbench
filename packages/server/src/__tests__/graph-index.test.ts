@@ -148,8 +148,10 @@ contract Child is Base {
         "expected warm SolcBridge declaration id to enrich call edges",
       );
       assert.equal(inheritedCall?.metadata?.resolutionConfidence, "solc");
+      assert.equal(inheritedCall?.resolutionConfidence, "solc");
       const helperCall = calls.find((edge) => edge.target === helper.id);
       assert.equal(helperCall?.metadata?.resolutionConfidence, "parser");
+      assert.equal(helperCall?.resolutionConfidence, "parser");
 
       const writes = graph.getOutgoingEdges(entry.id, "writes");
       assert.ok(
@@ -287,6 +289,19 @@ contract Child is Base {
       assert.equal(stats.nodesByKind.contract, 2);
       assert.equal(stats.edgesByKind.inherits, 1);
       assert.ok((stats.edgesByKind.usesType ?? 0) >= 3);
+      assert.ok(
+        (stats.edgesByResolutionConfidence?.solc ?? 0) >= 1,
+        "expected stats to count solc-confirmed edges",
+      );
+      assert.ok(
+        (stats.edgesByResolutionConfidence?.parser ?? 0) >= 1,
+        "expected stats to count parser-resolved edges",
+      );
+      assert.ok(
+        (stats.edgesByResolutionConfidence?.unknown ?? 0) >= 1,
+        "expected stats to count structural edges with unknown confidence",
+      );
+      assert.equal(stats.unresolvedEdgeCount, 0);
       assert.ok(stats.edgeCount >= graphSnapshot.edges.length);
       assert.equal(stats.filesByTier.project, 2);
       assert.ok(
@@ -308,6 +323,13 @@ contract Child is Base {
           .sort(),
         [helper.id, inherited.id].sort(),
         "expected cached graph to restore call edges",
+      );
+      assert.equal(
+        restoredGraph
+          .getOutgoingEdges(entry.id, "calls")
+          .find((edge) => edge.target === inherited.id)?.resolutionConfidence,
+        "solc",
+        "expected cached graph to restore promoted edge confidence",
       );
 
       const cacheFiles = fs.readdirSync(cacheDir).filter((name) => name.endsWith(".json"));
@@ -639,6 +661,91 @@ contract Gone {
         graph.getNode(oldNode.id),
         undefined,
         "expected stale nodes to be removed when no parser result is available",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("can refresh changed files and import dependents without synchronous relationship indexing", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-queued-update-test-"));
+    try {
+      const files = {
+        "src/Base.sol": `pragma solidity ^0.8.24;
+contract Base {
+    function ping() internal pure returns (uint256) {
+        return 1;
+    }
+}
+`,
+        "src/Child.sol": `pragma solidity ^0.8.24;
+import "./Base.sol";
+
+contract Child is Base {
+    function run() external pure returns (uint256) {
+        return ping();
+    }
+}
+`,
+      };
+
+      const uris: string[] = [];
+      const parser = new SolidityParser();
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const baseUri = URI.file(path.join(tmpDir, "src/Base.sol")).toString();
+      const childRun = graph
+        .getNodes()
+        .find((node) => node.name === "run" && node.containerName === "Child");
+      const basePing = graph
+        .getNodes()
+        .find((node) => node.name === "ping" && node.containerName === "Base");
+      assert.ok(childRun, "expected Child.run graph node");
+      assert.ok(basePing, "expected Base.ping graph node");
+      assert.ok(
+        graph.getOutgoingEdges(childRun.id, "calls").some((edge) => edge.target === basePing.id),
+        "expected initial full rebuild to include call edge",
+      );
+
+      const updatedBase = files["src/Base.sol"].replace("return 1;", "return 2;");
+      fs.writeFileSync(path.join(tmpDir, "src/Base.sol"), updatedBase, "utf-8");
+      parser.parse(baseUri, updatedBase);
+      symbolIndex.updateFile(baseUri);
+      const refreshed = graph.updateFileAndDependents(baseUri, false);
+
+      assert.ok(
+        refreshed.some((uri) => uri.endsWith("/src/Child.sol")),
+        "expected importing dependent to refresh",
+      );
+      assert.equal(
+        graph.getOutgoingEdges(childRun.id, "calls").length,
+        0,
+        "declaration-only dependent refresh should remove stale relationship edges",
+      );
+      assert.equal(graph.getStats().relationshipIndexComplete, false);
+      assert.ok(
+        (graph.getStats().pendingRelationshipFiles ?? 0) > 0,
+        "expected changed files to be queued for relationship reindexing",
+      );
+
+      graph.ensureFileRelationships(URI.file(path.join(tmpDir, "src/Child.sol")).toString());
+      assert.ok(
+        graph.getOutgoingEdges(childRun.id, "calls").some((edge) => edge.target === basePing.id),
+        "focused relationship indexing should restore the dependent call edge",
       );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -1683,6 +1790,8 @@ contract Impl is IFoo, Base {
       assert.equal(delegateCalls.length, 1);
       assert.equal(delegateCalls[0].target, jump.id);
       assert.equal(delegateCalls[0].metadata?.unresolvedTarget, true);
+      assert.equal(delegateCalls[0].unresolvedTarget, true);
+      assert.equal(delegateCalls[0].resolutionConfidence, "heuristic");
 
       const lowLevelExternalCalls = graph.getOutgoingEdges(lowLevel.id, "externalCall");
       assert.equal(lowLevelExternalCalls.length, 2);
@@ -1699,6 +1808,20 @@ contract Impl is IFoo, Base {
         "call",
         "staticcall",
       ]);
+      assert.ok(
+        lowLevelExternalCalls.every(
+          (edge) => edge.unresolvedTarget === true && edge.resolutionConfidence === "heuristic",
+        ),
+        "expected unresolved low-level external call fields to be promoted onto graph edges",
+      );
+      assert.ok(
+        (graph.getStats().unresolvedEdgeCount ?? 0) >= 3,
+        "expected graph stats to count unresolved delegatecall and low-level call edges",
+      );
+      assert.ok(
+        (graph.getStats().edgesByResolutionConfidence?.heuristic ?? 0) >= 3,
+        "expected graph stats to count heuristic edges",
+      );
 
       assert.ok(
         graph

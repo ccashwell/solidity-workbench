@@ -11,6 +11,7 @@ import type {
   ProjectGraphNode,
   ProjectGraphNodeKind,
   ProjectGraphPathResult,
+  ProjectGraphResolutionConfidence,
   ProjectGraphResult,
   ProjectGraphStatsResult,
   SourceRange,
@@ -181,6 +182,12 @@ const VALID_EDGE_KINDS = new Set<SolidityGraphEdgeKind>([
   "emits",
   "revertsWith",
   "usesType",
+]);
+const VALID_RESOLUTION_CONFIDENCE = new Set<ProjectGraphResolutionConfidence>([
+  "solc",
+  "parser",
+  "heuristic",
+  "unknown",
 ]);
 
 interface GraphIndexCacheFile {
@@ -506,13 +513,15 @@ export class GraphIndex {
     }
   }
 
-  updateFileAndDependents(uri: string): string[] {
+  updateFileAndDependents(uri: string, includeRelationshipEdges = true): string[] {
     const dependents = this.collectImportDependents(uri);
-    this.updateFile(uri);
+    this.updateFile(uri, includeRelationshipEdges);
     for (const dependentUri of dependents) {
-      this.updateFile(dependentUri);
+      this.updateFile(dependentUri, includeRelationshipEdges);
     }
-    return [uri, ...dependents];
+    const refreshedUris = [uri, ...dependents];
+    if (!includeRelationshipEdges) this.enqueueRelationshipFiles(refreshedUris);
+    return refreshedUris;
   }
 
   removeFile(uri: string): void {
@@ -706,7 +715,11 @@ export class GraphIndex {
   getStats(): ProjectGraphStatsResult {
     const nodesByKind = Object.create(null) as ProjectGraphStatsResult["nodesByKind"];
     const edgesByKind = Object.create(null) as ProjectGraphStatsResult["edgesByKind"];
+    const edgesByResolutionConfidence = Object.create(null) as NonNullable<
+      ProjectGraphStatsResult["edgesByResolutionConfidence"]
+    >;
     const filesByTier = Object.create(null) as ProjectGraphStatsResult["filesByTier"];
+    let unresolvedEdgeCount = 0;
 
     for (const node of this.nodes.values()) {
       nodesByKind[node.kind] = (nodesByKind[node.kind] ?? 0) + 1;
@@ -717,6 +730,9 @@ export class GraphIndex {
 
     for (const edge of this.edges) {
       edgesByKind[edge.kind] = (edgesByKind[edge.kind] ?? 0) + 1;
+      const confidence = this.edgeResolutionConfidence(edge);
+      edgesByResolutionConfidence[confidence] = (edgesByResolutionConfidence[confidence] ?? 0) + 1;
+      if (this.isUnresolvedEdge(edge)) unresolvedEdgeCount++;
     }
 
     const relationshipProgress = this.relationshipProgress();
@@ -725,6 +741,8 @@ export class GraphIndex {
       edgeCount: this.edges.length,
       nodesByKind,
       edgesByKind,
+      edgesByResolutionConfidence,
+      unresolvedEdgeCount,
       filesByTier,
       lastRebuildDurationMs: this.lastRebuildDurationMs,
       lastUpdateDurationMs: this.lastUpdateDurationMs,
@@ -2795,6 +2813,10 @@ export class GraphIndex {
       typeof candidate.target === "string" &&
       typeof candidate.kind === "string" &&
       VALID_EDGE_KINDS.has(candidate.kind as SolidityGraphEdgeKind) &&
+      (candidate.resolutionConfidence === undefined ||
+        VALID_RESOLUTION_CONFIDENCE.has(candidate.resolutionConfidence)) &&
+      (candidate.unresolvedTarget === undefined ||
+        typeof candidate.unresolvedTarget === "boolean") &&
       (!candidate.range || this.isSourceRange(candidate.range))
     );
   }
@@ -2876,10 +2898,51 @@ export class GraphIndex {
   }
 
   private addEdge(edge: SolidityGraphEdge): void {
-    const key = this.edgeKey(edge);
+    const normalized = this.normalizeEdge(edge);
+    const key = this.edgeKey(normalized);
     if (this.edgeKeys.has(key)) return;
     this.edgeKeys.add(key);
-    this.edges.push(edge);
+    this.edges.push(normalized);
+  }
+
+  private normalizeEdge(edge: SolidityGraphEdge): SolidityGraphEdge {
+    const resolutionConfidence =
+      this.validResolutionConfidence(edge.resolutionConfidence) ??
+      this.metadataResolutionConfidence(edge.metadata);
+    const unresolvedTarget =
+      edge.unresolvedTarget ?? (edge.metadata?.unresolvedTarget === true ? true : undefined);
+
+    if (!resolutionConfidence && unresolvedTarget === undefined) return edge;
+    return {
+      ...edge,
+      ...(resolutionConfidence ? { resolutionConfidence } : {}),
+      ...(unresolvedTarget !== undefined ? { unresolvedTarget } : {}),
+    };
+  }
+
+  private edgeResolutionConfidence(edge: SolidityGraphEdge): ProjectGraphResolutionConfidence {
+    return (
+      this.validResolutionConfidence(edge.resolutionConfidence) ??
+      this.metadataResolutionConfidence(edge.metadata) ??
+      "unknown"
+    );
+  }
+
+  private metadataResolutionConfidence(
+    metadata: Record<string, unknown> | undefined,
+  ): ProjectGraphResolutionConfidence | undefined {
+    return this.validResolutionConfidence(metadata?.resolutionConfidence);
+  }
+
+  private validResolutionConfidence(value: unknown): ProjectGraphResolutionConfidence | undefined {
+    return typeof value === "string" &&
+      VALID_RESOLUTION_CONFIDENCE.has(value as ProjectGraphResolutionConfidence)
+      ? (value as ProjectGraphResolutionConfidence)
+      : undefined;
+  }
+
+  private isUnresolvedEdge(edge: SolidityGraphEdge): boolean {
+    return edge.unresolvedTarget === true || edge.metadata?.unresolvedTarget === true;
   }
 
   private edgeKey(edge: SolidityGraphEdge): string {
