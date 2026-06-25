@@ -594,6 +594,56 @@ contract DiskOnly {
       fs.rmSync(tmp, { recursive: true, force: true });
     });
 
+    it("keeps overlapping tier scans isolated", async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "solidx-tier-overlap-"));
+      const writeContract = (name: string): string => {
+        const filePath = path.join(tmp, `${name}.sol`);
+        fs.writeFileSync(filePath, `contract ${name} {}`);
+        return URI.file(filePath).toString();
+      };
+
+      const projectUri = writeContract("ProjectOverlap");
+      const deps = Array.from({ length: 25 }, (_, i) => writeContract(`DepOverlap${i}`));
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(
+        parser,
+        makeTieredWorkspace({ project: [projectUri], tests: [], deps }),
+      );
+
+      const originalIndexFile = idx.indexFile.bind(idx);
+      let firstDepBatchStarted = 0;
+      let releaseFirstDepBatch!: () => void;
+      const firstDepBatchBarrier = new Promise<void>((resolve) => {
+        releaseFirstDepBatch = resolve;
+      });
+
+      idx.indexFile = async (uri: string): Promise<void> => {
+        if (deps.slice(0, 24).includes(uri)) {
+          firstDepBatchStarted++;
+          await firstDepBatchBarrier;
+        }
+        await originalIndexFile(uri);
+      };
+
+      const depIndexing = idx.indexWorkspace(undefined, { tiers: ["deps"] });
+      while (firstDepBatchStarted < 24) {
+        await new Promise((resolve) => setImmediate(resolve));
+      }
+
+      await idx.indexWorkspace(undefined, { tiers: ["project"] });
+      releaseFirstDepBatch();
+      await depIndexing;
+
+      assert.equal(idx.findSymbols("ProjectOverlap").length, 1);
+      assert.equal(
+        idx.findSymbols("DepOverlap24").length,
+        1,
+        "second dependency batch should not be lost when another tier scan starts",
+      );
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
     it("invokes reportProgress with a final (total, total) call", async () => {
       const parser = new SolidityParser();
       const idx = new SymbolIndex(

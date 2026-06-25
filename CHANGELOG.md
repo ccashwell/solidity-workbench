@@ -142,6 +142,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Inheritance Graph now opens even when the default project-only scope has no
   visible contracts, so users can explicitly opt into tests or dependencies
   from the webview instead of being blocked by an empty initial result.
+- Inheritance Graph command invocations now accept explicit `includeTests` and
+  `includeDependencies` flags, matching the webview checkboxes while keeping
+  tests and Foundry `Test` descendants hidden by default.
 - Project Graph dependency nodes now stay hidden from graph, search, query, and
   path results unless the request or webview explicitly includes dependencies.
 - Project Graph now opens a recoverable empty-scope view when the default
@@ -168,6 +171,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when Project Graph dependencies are disabled, then continues dependency
   symbol indexing in the background so large `lib/` trees do not block the
   initial language experience.
+- Concurrent workspace symbol scans now keep independent pending queues, so
+  background dependency indexing cannot lose work when a foreground project
+  or test scan starts during a reload or explicit graph rebuild.
 - Project Graph snapshots and search edge previews now drop edges whose source
   or target node is hidden by the current scope or absent because dependency
   declarations were not indexed.

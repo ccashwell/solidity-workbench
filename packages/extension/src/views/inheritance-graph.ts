@@ -6,6 +6,23 @@ import {
   type InheritanceGraphResult,
 } from "@solidity-workbench/common";
 
+export interface InheritanceGraphCommandOptions {
+  includeTests?: boolean;
+  includeDependencies?: boolean;
+}
+
+export function inheritanceGraphIncludeTestsFlag(options: unknown): boolean | undefined {
+  if (!options || typeof options !== "object") return undefined;
+  const includeTests = (options as { includeTests?: unknown }).includeTests;
+  return typeof includeTests === "boolean" ? includeTests : undefined;
+}
+
+export function inheritanceGraphIncludeDependenciesFlag(options: unknown): boolean | undefined {
+  if (!options || typeof options !== "object") return undefined;
+  const includeDependencies = (options as { includeDependencies?: unknown }).includeDependencies;
+  return typeof includeDependencies === "boolean" ? includeDependencies : undefined;
+}
+
 /**
  * Inheritance Graph — interactive webview visualizing the contract
  * inheritance hierarchy as a directed graph.
@@ -19,18 +36,23 @@ export class InheritanceGraphPanel {
 
   activate(context: vscode.ExtensionContext): void {
     context.subscriptions.push(
-      vscode.commands.registerCommand("solidity-workbench.inheritanceGraph", () =>
-        this.showGraph(context),
+      vscode.commands.registerCommand("solidity-workbench.inheritanceGraph", (options?: unknown) =>
+        this.showGraph(context, options),
       ),
     );
   }
 
-  private async showGraph(_context: vscode.ExtensionContext): Promise<void> {
+  private async showGraph(_context: vscode.ExtensionContext, options?: unknown): Promise<void> {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) {
       vscode.window.showWarningMessage("Open a workspace first.");
       return;
     }
+
+    const includeTestsFlag = inheritanceGraphIncludeTestsFlag(options);
+    if (includeTestsFlag !== undefined) this.includeTests = includeTestsFlag;
+    const includeDependenciesFlag = inheritanceGraphIncludeDependenciesFlag(options);
+    if (includeDependenciesFlag !== undefined) this.includeDependencies = includeDependenciesFlag;
 
     const graph = await this.loadGraph();
 

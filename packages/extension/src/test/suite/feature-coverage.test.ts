@@ -45,7 +45,11 @@ import {
   summarizeProjectGraphResultDiagnostics,
   summarizeProjectGraphRelationshipStatus,
 } from "../../views/project-graph";
-import { InheritanceGraphPanel } from "../../views/inheritance-graph";
+import {
+  InheritanceGraphPanel,
+  inheritanceGraphIncludeDependenciesFlag,
+  inheritanceGraphIncludeTestsFlag,
+} from "../../views/inheritance-graph";
 import { CoverageProvider } from "../../views/coverage";
 import { buildSlitherDiagnostics } from "../../analysis/slither";
 import { buildAderynDiagnostics } from "../../analysis/aderyn";
@@ -1145,6 +1149,22 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(projectGraphIncludeDependenciesFlag({ includeDependencies: "true" }), undefined);
     assert.equal(projectGraphIncludeDependenciesFlag({}), undefined);
     assert.equal(projectGraphIncludeDependenciesFlag(undefined), undefined);
+  });
+
+  it("parses inheritance graph include-tests command flags explicitly", () => {
+    assert.equal(inheritanceGraphIncludeTestsFlag({ includeTests: true }), true);
+    assert.equal(inheritanceGraphIncludeTestsFlag({ includeTests: false }), false);
+    assert.equal(inheritanceGraphIncludeTestsFlag({ includeTests: "true" }), undefined);
+    assert.equal(inheritanceGraphIncludeTestsFlag({}), undefined);
+    assert.equal(inheritanceGraphIncludeTestsFlag(undefined), undefined);
+    assert.equal(inheritanceGraphIncludeDependenciesFlag({ includeDependencies: true }), true);
+    assert.equal(inheritanceGraphIncludeDependenciesFlag({ includeDependencies: false }), false);
+    assert.equal(
+      inheritanceGraphIncludeDependenciesFlag({ includeDependencies: "true" }),
+      undefined,
+    );
+    assert.equal(inheritanceGraphIncludeDependenciesFlag({}), undefined);
+    assert.equal(inheritanceGraphIncludeDependenciesFlag(undefined), undefined);
   });
 
   it("computes project graph node-kind filters", () => {

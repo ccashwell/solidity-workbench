@@ -69,7 +69,7 @@ export class SymbolIndex {
    * `updateFile`), and as {@link ensureImportsIndexed} pulls in the
    * transitive import graph of opened files.
    */
-  private pending: Set<string> = new Set();
+  private pendingQueues: Set<Set<string>> = new Set();
 
   constructor(parser: SolidityParser, workspace: WorkspaceManager) {
     this.parser = parser;
@@ -112,11 +112,13 @@ export class SymbolIndex {
       ? ordered.filter((uri) => !this.symbolsByFile.has(uri))
       : ordered;
     const total = queued.length;
-    this.pending = new Set(queued);
+    const pending = new Set(queued);
     if (total === 0) {
       reportProgress?.(0, 0);
       return;
     }
+
+    this.pendingQueues.add(pending);
 
     // Process files INDEX_BATCH_SIZE at a time with `Promise.all`, so
     // the parser pool can fan out to multiple workers concurrently.
@@ -124,33 +126,37 @@ export class SymbolIndex {
     // serialize on the main thread (one parse at a time, regardless of
     // worker count) — exactly what we're spawning workers to avoid.
     let lastReported = 0;
-    for (let i = 0; i < ordered.length; i += INDEX_BATCH_SIZE) {
-      const slice = ordered.slice(i, i + INDEX_BATCH_SIZE);
+    try {
+      for (let i = 0; i < ordered.length; i += INDEX_BATCH_SIZE) {
+        const slice = ordered.slice(i, i + INDEX_BATCH_SIZE);
 
-      // Filter to URIs still in `pending`. A concurrent
-      // `ensureImportsIndexed` (driven by a document open) or a
-      // direct `updateFile` may have already pulled some entries out
-      // of the queue while we were awaiting the previous batch.
-      const todo = slice.filter((uri) => this.pending.has(uri));
-      for (const uri of todo) this.pending.delete(uri);
+        // Filter to URIs still in `pending`. A concurrent
+        // `ensureImportsIndexed` (driven by a document open) or a
+        // direct `updateFile` may have already pulled some entries out
+        // of this queue while we were awaiting the previous batch.
+        const todo = slice.filter((uri) => pending.has(uri));
+        for (const uri of todo) pending.delete(uri);
 
-      if (todo.length > 0) {
-        await Promise.all(todo.map((uri) => this.indexFile(uri)));
+        if (todo.length > 0) {
+          await Promise.all(todo.map((uri) => this.indexFile(uri)));
+        }
+
+        const done = total - pending.size;
+        const isLast = pending.size === 0;
+        if (done !== lastReported) {
+          lastReported = done;
+          reportProgress?.(done, total);
+        }
+        if (isLast) break;
+
+        // Yield to the event loop so pending LSP requests can run
+        // between batches. A microtask (`await Promise.resolve()`)
+        // isn't enough — only a macrotask boundary lets I/O and
+        // timers fire.
+        await new Promise<void>((resolve) => setImmediate(resolve));
       }
-
-      const done = total - this.pending.size;
-      const isLast = this.pending.size === 0;
-      if (done !== lastReported) {
-        lastReported = done;
-        reportProgress?.(done, total);
-      }
-      if (isLast) break;
-
-      // Yield to the event loop so pending LSP requests can run
-      // between batches. A microtask (`await Promise.resolve()`)
-      // isn't enough — only a macrotask boundary lets I/O and
-      // timers fire.
-      await new Promise<void>((resolve) => setImmediate(resolve));
+    } finally {
+      this.pendingQueues.delete(pending);
     }
   }
 
@@ -182,7 +188,7 @@ export class SymbolIndex {
     // either cache yet. Index it before walking its imports so we can
     // see what *it* imports.
     if (!this.symbolsByFile.has(uri)) {
-      this.pending.delete(uri);
+      this.deleteFromPendingQueues(uri);
       await this.indexFile(uri);
       onIndexed?.(uri);
     }
@@ -230,7 +236,7 @@ export class SymbolIndex {
     // The file is being indexed via the editor / file-watcher path —
     // make sure the bulk `indexWorkspace` loop and any later
     // `flushPending` skip it.
-    this.pending.delete(uri);
+    this.deleteFromPendingQueues(uri);
 
     // Refresh the inverted reference index using the cached source text.
     // If for some reason the parser didn't retain text (older call sites),
@@ -493,9 +499,13 @@ export class SymbolIndex {
   }
 
   removeFile(uri: string): void {
-    this.pending.delete(uri);
+    this.deleteFromPendingQueues(uri);
     this.refIndex.removeFile(uri);
     this.removeFileSymbols(uri);
+  }
+
+  private deleteFromPendingQueues(uri: string): void {
+    for (const pending of this.pendingQueues) pending.delete(uri);
   }
 
   /**

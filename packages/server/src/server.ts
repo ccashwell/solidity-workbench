@@ -1051,7 +1051,7 @@ connection.onRequest(
       cancelGraphRelationshipIndex();
       await workspaceManager.initialize();
       semanticResolver.invalidate();
-      await symbolIndex.indexWorkspace();
+      await indexBlockingWorkspaceSymbols();
       graphIndex.rebuildWorkspaceDeclarations();
 
       if (shouldRunExplicitGraphRelationshipIndex(params)) {
@@ -1066,10 +1066,12 @@ connection.onRequest(
           // Drain the relationship queue for explicit, user-triggered rebuilds.
         }
         graphIndex.writeCache(graphCacheDir);
+        scheduleDependencySymbolIndex();
         return { ...graphIndex.getStats(), rebuildCanceled: canceled };
       }
 
       graphIndex.writeCache(graphCacheDir);
+      scheduleDependencySymbolIndex();
       if (
         params.relationships !== "declarationsOnly" &&
         !graphIndex.isRelationshipIndexComplete() &&
