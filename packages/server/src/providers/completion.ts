@@ -1,7 +1,7 @@
 import type { CompletionItem, Position } from "vscode-languageserver/node.js";
 import { CompletionItemKind, InsertTextFormat, MarkupKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
-import type { ContractDefinition, SymbolKind } from "@solidity-workbench/common";
+import type { ContractDefinition, SolSymbol, SymbolKind } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
@@ -71,7 +71,13 @@ export class CompletionProvider {
     if (item.data?.symbolName) {
       const symbols = this.symbolIndex.findSymbols(item.data.symbolName);
       if (symbols.length > 0) {
-        const sym = symbols[0];
+        const sym =
+          symbols.find(
+            (candidate) =>
+              candidate.filePath === item.data.filePath &&
+              candidate.kind === item.data.kind &&
+              (candidate.containerName ?? "") === (item.data.containerName ?? ""),
+          ) ?? symbols[0];
         if (sym.natspec) {
           const doc: string[] = [];
           if (sym.natspec.notice) doc.push(sym.natspec.notice);
@@ -532,13 +538,41 @@ export class CompletionProvider {
   }
 
   private provideSymbolCompletions(uri: string, _textBefore: string): CompletionItem[] {
-    const fileSymbols = this.symbolIndex.getFileSymbols(uri);
-    return fileSymbols.map((sym) => ({
+    const currentFileSymbols = this.symbolIndex.getFileSymbols(uri);
+    const visibleImportedFileSymbols = this.resolver
+      ? Array.from(this.resolver.collectReachableUris(uri))
+          .filter((reachableUri) => reachableUri !== uri)
+          .flatMap((reachableUri) => this.symbolIndex.getFileSymbols(reachableUri))
+          .filter((sym) => this.isFileLevelCompletionSymbol(sym))
+      : [];
+    const seen = new Set<string>();
+    const items: CompletionItem[] = [];
+
+    for (const sym of [...currentFileSymbols, ...visibleImportedFileSymbols]) {
+      const key = `${sym.name}:${sym.kind}:${sym.containerName ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      items.push(this.symbolToCompletion(sym));
+    }
+    return items;
+  }
+
+  private isFileLevelCompletionSymbol(sym: SolSymbol): boolean {
+    return !sym.containerName;
+  }
+
+  private symbolToCompletion(sym: SolSymbol): CompletionItem {
+    return {
       label: sym.name,
       kind: this.symbolToCompletionKind(sym.kind),
       detail: sym.detail ?? sym.containerName,
-      data: { symbolName: sym.name },
-    }));
+      data: {
+        symbolName: sym.name,
+        filePath: sym.filePath,
+        kind: sym.kind,
+        containerName: sym.containerName,
+      },
+    };
   }
 
   private provideSnippetCompletions(_textBefore: string): CompletionItem[] {

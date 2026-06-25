@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
+import { CompletionItemKind } from "vscode-languageserver/node.js";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import { SolidityParser } from "../parser/solidity-parser.js";
@@ -105,6 +106,47 @@ contract Gadget {
       // User-defined contracts appear as type completions.
       assert.ok(ls.has("Widget"));
       assert.ok(ls.has("Gadget"));
+    });
+
+    it("includes imported file-level declarations without leaking imported contract members", () => {
+      const files = {
+        "file:///w/Events.sol": `pragma solidity ^0.8.24;
+/// @notice Emitted when claims are redeemed.
+event FileClaimed(address indexed account);
+function globalHelper() pure returns (uint256) { return 1; }
+contract Imported {
+    function memberOnly() external {}
+}
+`,
+        "file:///w/User.sol": `pragma solidity ^0.8.24;
+import "./Events.sol";
+contract User {
+    function run() external {
+        emit FileClaimed(address(0));
+    }
+}`,
+      };
+      const { doc, provider } = setupFiles("file:///w/User.sol", files);
+      const items = provider.provideCompletions(doc, { line: 4, character: 13 });
+      const ls = labels(items);
+
+      assert.ok(ls.has("FileClaimed"), "expected imported file-level event completion");
+      assert.ok(ls.has("globalHelper"), "expected imported file-level function completion");
+      assert.ok(ls.has("Imported"), "expected imported contract/type completion");
+      assert.equal(
+        ls.has("memberOnly"),
+        false,
+        "imported contract members should not become unqualified completions",
+      );
+
+      const eventItem = items.find((item) => item.label === "FileClaimed");
+      assert.equal(eventItem?.kind, CompletionItemKind.Event);
+      const resolved = provider.resolveCompletion({ ...eventItem! });
+      assert.ok(
+        resolved.documentation && typeof resolved.documentation !== "string",
+        "expected markdown documentation for imported event completion",
+      );
+      assert.match(resolved.documentation.value, /claims are redeemed/);
     });
 
     it("includes the Foundry test snippets", () => {
