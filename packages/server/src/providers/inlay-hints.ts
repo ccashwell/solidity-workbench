@@ -324,11 +324,7 @@ export class InlayHintsProvider {
           : undefined) ??
         receiverTypeName;
       if (memberContainerName) {
-        const chain =
-          this.resolver
-            ?.getInheritanceChain(memberContainerName, uri)
-            .map((entry) => entry.contract) ??
-          this.symbolIndex.getInheritanceChain(memberContainerName);
+        const chain = this.getVisibleInheritanceChain(memberContainerName, uri);
         for (const c of chain) {
           const fn = c.functions.find((f) => f.name === funcName);
           if (fn) {
@@ -382,6 +378,21 @@ export class InlayHintsProvider {
   private findVisibleSymbols(uri: string, name: string) {
     const symbols = this.symbolIndex.findSymbols(name);
     return this.resolver ? this.resolver.filterVisibleSymbols(uri, symbols) : symbols;
+  }
+
+  private getVisibleInheritanceChain(typeName: string, uri: string) {
+    if (!this.resolver) return this.symbolIndex.getInheritanceChain(typeName);
+
+    const imported = this.resolver.resolveImportedSymbol(typeName, uri);
+    if (imported) return this.resolver.getInheritanceChain(typeName, uri).map((e) => e.contract);
+
+    const symbols = this.resolver.filterVisibleSymbols(
+      uri,
+      this.symbolIndex.findSymbols(typeName).filter((symbol) => this.isContractLike(symbol.kind)),
+    );
+    const sym = symbols.find((candidate) => candidate.filePath === uri) ?? symbols[0];
+    const resolved = sym ? this.resolver.resolveContract(sym.name, sym.filePath) : undefined;
+    return resolved ? this.resolver.getInheritanceChainFor(resolved).map((e) => e.contract) : [];
   }
 
   private isContractLike(kind: string): boolean {

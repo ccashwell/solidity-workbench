@@ -467,6 +467,36 @@ library DataLib {
       );
     });
 
+    it("does not emit receiver parameter hints from unimported test-only types", () => {
+      const currentUri = "file:///w/src/UsesGhost.sol";
+      const current = `pragma solidity ^0.8.24;
+contract UsesGhost {
+    Ghost internal ghost;
+
+    function f() external view {
+        ghost.ping(1);
+    }
+}`;
+      const { doc, provider } = setupFiles(currentUri, {
+        "file:///w/test/Ghost.sol": `pragma solidity ^0.8.24;
+interface Ghost {
+    function ping(uint256 value) external view returns (uint256);
+}
+`,
+        [currentUri]: current,
+      });
+
+      const hints = provider.provideInlayHints(doc, {
+        start: { line: 0, character: 0 },
+        end: { line: current.split("\n").length, character: 0 },
+      });
+      const labels = hints.map((h) => h.label);
+      assert.ok(
+        !labels.includes("value:"),
+        `must not leak params from test/Ghost.sol; got ${JSON.stringify(labels)}`,
+      );
+    });
+
     it("skips the implicit receiver parameter for using-for calls on cast expressions", () => {
       const text = `pragma solidity ^0.8.0;
 interface IERC20 {}
