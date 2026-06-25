@@ -13,6 +13,7 @@ import {
   stripForgeTestSignature,
 } from "@solidity-workbench/common";
 import { forgeVerbosityFlag } from "../config.js";
+import { shellCommand } from "../shell.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -296,6 +297,8 @@ export class FoundryTestProvider {
     request: vscode.TestRunRequest,
     _token: vscode.CancellationToken,
   ): Promise<void> {
+    const config = vscode.workspace.getConfiguration("solidity-workbench");
+    const forgePath = config.get<string>("foundryPath") || "forge";
     const items = request.include ?? this.gatherAllTests();
     for (const item of items) {
       const parts = item.id.split("::");
@@ -306,7 +309,7 @@ export class FoundryTestProvider {
         iconPath: new vscode.ThemeIcon("debug"),
       });
       terminal.show();
-      terminal.sendText(`forge test --match-test ${testName} -vvvvv`);
+      terminal.sendText(shellCommand([forgePath, "test", "--match-test", testName, "-vvvvv"]));
     }
   }
 

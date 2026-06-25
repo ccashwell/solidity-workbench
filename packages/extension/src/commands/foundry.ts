@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { forgeVerbosityFlag } from "../config.js";
+import { shellCommand } from "../shell.js";
 
 /**
  * Registers Foundry-related commands in the extension.
@@ -27,7 +28,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
     vscode.commands.registerCommand("solidity-workbench.build", async () => {
       const terminal = getOrCreateTerminal();
       terminal.show();
-      terminal.sendText(`${getForge()} build`);
+      terminal.sendText(shellCommand([getForge(), "build"]));
     }),
   );
 
@@ -39,7 +40,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
       terminal.show();
       const verbosity = config().get<number>("test.verbosity") ?? 2;
       const flag = forgeVerbosityFlag(verbosity);
-      terminal.sendText(`${getForge()} test${flag ? " " + flag : ""}`);
+      terminal.sendText(shellCommand([getForge(), "test", ...(flag ? [flag] : [])]));
     }),
   );
 
@@ -58,7 +59,9 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
       terminal.show();
       const verbosity = config().get<number>("test.verbosity") ?? 2;
       const flag = forgeVerbosityFlag(verbosity);
-      terminal.sendText(`${getForge()} test --match-path ${filePath}${flag ? " " + flag : ""}`);
+      terminal.sendText(
+        shellCommand([getForge(), "test", "--match-path", filePath, ...(flag ? [flag] : [])]),
+      );
     }),
   );
 
@@ -84,7 +87,9 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
       terminal.show();
       const verbosity = config().get<number>("test.verbosity") ?? 2;
       const flag = forgeVerbosityFlag(verbosity);
-      terminal.sendText(`${getForge()} test --match-test ${testName}${flag ? " " + flag : ""}`);
+      terminal.sendText(
+        shellCommand([getForge(), "test", "--match-test", testName, ...(flag ? [flag] : [])]),
+      );
     }),
   );
 
@@ -98,7 +103,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
       } else {
         const terminal = getOrCreateTerminal();
         terminal.show();
-        terminal.sendText(`${getForge()} fmt`);
+        terminal.sendText(shellCommand([getForge(), "fmt"]));
       }
     }),
   );
@@ -109,7 +114,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
     vscode.commands.registerCommand("solidity-workbench.gasSnapshot", async () => {
       const terminal = getOrCreateTerminal();
       terminal.show();
-      terminal.sendText(`${getForge()} snapshot`);
+      terminal.sendText(shellCommand([getForge(), "snapshot"]));
     }),
   );
 
@@ -126,7 +131,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
       const filePath = editor.document.fileName;
       const terminal = getOrCreateTerminal();
       terminal.show();
-      terminal.sendText(`${getForge()} flatten ${filePath}`);
+      terminal.sendText(shellCommand([getForge(), "flatten", filePath]));
     }),
   );
 
@@ -160,7 +165,7 @@ export function registerFoundryCommands(context: vscode.ExtensionContext): void 
       const contractName = contractMatch[1];
       const terminal = getOrCreateTerminal();
       terminal.show();
-      terminal.sendText(`${getForge()} inspect ${contractName} storage-layout`);
+      terminal.sendText(shellCommand([getForge(), "inspect", contractName, "storage-layout"]));
     }),
   );
 }

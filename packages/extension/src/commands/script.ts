@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { shellCommand } from "../shell.js";
 
 /**
  * Forge Script runner — execute deployment and interaction scripts
@@ -30,7 +31,9 @@ export function registerScriptCommands(context: vscode.ExtensionContext): void {
       terminal.show();
 
       // Dry run first (no --broadcast flag)
-      terminal.sendText(`${forgePath} script ${scriptFile} --rpc-url ${rpcUrl} -vvvv`);
+      terminal.sendText(
+        shellCommand([forgePath, "script", scriptFile, "--rpc-url", rpcUrl, "-vvvv"]),
+      );
     }),
   );
 
@@ -60,7 +63,9 @@ export function registerScriptCommands(context: vscode.ExtensionContext): void {
       terminal.show();
 
       if (confirm === "Simulate First") {
-        terminal.sendText(`${forgePath} script ${scriptFile} --rpc-url ${rpcUrl} -vvvv`);
+        terminal.sendText(
+          shellCommand([forgePath, "script", scriptFile, "--rpc-url", rpcUrl, "-vvvv"]),
+        );
         // After simulation, user can re-run with broadcast
         vscode.window.showInformationMessage(
           "Simulation complete. Run 'Solidity Workbench: Broadcast Script' to send transactions.",
@@ -106,7 +111,7 @@ export function registerScriptCommands(context: vscode.ExtensionContext): void {
               canSelectMany: false,
             });
             if (!keystorePath?.[0]) return;
-            signFlag = `--keystore ${keystorePath[0].fsPath}`;
+            signFlag = shellCommand(["--keystore", keystorePath[0].fsPath]);
             break;
           }
           case "--private-key": {
@@ -116,7 +121,7 @@ export function registerScriptCommands(context: vscode.ExtensionContext): void {
               prompt: "Enter the private key for signing",
             });
             if (!pk) return;
-            signFlag = `--private-key ${pk}`;
+            signFlag = shellCommand(["--private-key", pk]);
             break;
           }
           case "--interactive":
@@ -125,7 +130,11 @@ export function registerScriptCommands(context: vscode.ExtensionContext): void {
         }
 
         terminal.sendText(
-          `${forgePath} script ${scriptFile} --rpc-url ${rpcUrl} --broadcast ${signFlag} -vvvv`,
+          [
+            shellCommand([forgePath, "script", scriptFile, "--rpc-url", rpcUrl, "--broadcast"]),
+            signFlag,
+            "-vvvv",
+          ].join(" "),
         );
       }
     }),
@@ -146,7 +155,9 @@ export function registerScriptCommands(context: vscode.ExtensionContext): void {
       const terminal = getOrCreateScriptTerminal();
       terminal.show();
 
-      terminal.sendText(`${forgePath} script ${scriptFile} --rpc-url ${rpcUrl} --resume -vvvv`);
+      terminal.sendText(
+        shellCommand([forgePath, "script", scriptFile, "--rpc-url", rpcUrl, "--resume", "-vvvv"]),
+      );
     }),
   );
 }

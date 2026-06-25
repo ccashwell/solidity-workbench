@@ -49,6 +49,7 @@ import { buildAderynDiagnostics } from "../../analysis/aderyn";
 import { buildWakeDiagnostics } from "../../analysis/wake";
 import { buildMythrilDiagnostics } from "../../analysis/mythril";
 import { shouldFormatSolidityOnSave } from "../../format-on-save";
+import { shellArg, shellCommand } from "../../shell";
 
 /**
  * End-to-end coverage of the feature surface that landed across the
@@ -189,6 +190,20 @@ describe("Feature coverage — webview commands", () => {
     assert.equal(shouldFormatSolidityOnSave(solidityDocument, enabledConfig), true);
     assert.equal(shouldFormatSolidityOnSave(solidityDocument, disabledConfig), false);
     assert.equal(shouldFormatSolidityOnSave(typescriptDocument, enabledConfig), false);
+  });
+
+  it("quotes terminal command arguments independently", () => {
+    assert.equal(shellArg("forge"), "forge");
+    assert.equal(shellArg(""), "''");
+    assert.equal(
+      shellArg("/tmp/project with spaces/Counter.t.sol"),
+      "'/tmp/project with spaces/Counter.t.sol'",
+    );
+    assert.equal(shellArg("test_owner's_path"), "'test_owner'\\''s_path'");
+    assert.equal(
+      shellCommand(["/opt/Foundry Tools/forge", "test", "--match-path", "test/My Test.t.sol"]),
+      "'/opt/Foundry Tools/forge' test --match-path 'test/My Test.t.sol'",
+    );
   });
 
   /**

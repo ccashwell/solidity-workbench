@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { shellCommand } from "../shell.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -65,7 +66,7 @@ export class SolidityDebugProvider {
       iconPath: new vscode.ThemeIcon("debug"),
     });
     terminal.show();
-    terminal.sendText(`${forgePath} test --match-test "${testName}" --debug`);
+    terminal.sendText(shellCommand([forgePath, "test", "--match-test", testName, "--debug"]));
   }
 
   /**
@@ -88,7 +89,7 @@ export class SolidityDebugProvider {
       iconPath: new vscode.ThemeIcon("debug"),
     });
     terminal.show();
-    terminal.sendText(`${forgePath} debug ${scriptFile}`);
+    terminal.sendText(shellCommand([forgePath, "debug", scriptFile]));
   }
 
   /**
@@ -117,7 +118,7 @@ export class SolidityDebugProvider {
       iconPath: new vscode.ThemeIcon("debug"),
     });
     terminal.show();
-    terminal.sendText(`${forgePath} debug --rpc-url ${rpcUrl} ${txHash}`);
+    terminal.sendText(shellCommand([forgePath, "debug", "--rpc-url", rpcUrl, txHash]));
   }
 
   /**
