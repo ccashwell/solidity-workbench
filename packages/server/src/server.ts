@@ -25,6 +25,7 @@ import { SolidityParser } from "./parser/solidity-parser.js";
 import { ParserPool } from "./parser/parser-pool.js";
 import { SymbolIndex } from "./analyzer/symbol-index.js";
 import { GraphIndex, type GraphDependencyIndexingMode } from "./analyzer/graph-index.js";
+import { shouldDrainRelationshipsForGraphQuery } from "./analyzer/project-graph-policy.js";
 import { CompletionProvider } from "./providers/completion.js";
 import { DefinitionProvider } from "./providers/definition.js";
 import { HoverProvider } from "./providers/hover.js";
@@ -935,7 +936,7 @@ connection.onRequest(
     return measureProjectGraphRequest("query", async () => {
       graphIndex.ensureWorkspaceDeclarations();
       if (params.target?.uri) graphIndex.ensureFileRelationships(params.target.uri);
-      if (params.kind === "callers" || params.kind === "impact") {
+      if (shouldDrainRelationshipsForGraphQuery(params.kind, graphRelationshipIndexingMode())) {
         await drainGraphRelationshipIndexForQuery(token);
         if (token?.isCancellationRequested) {
           const stats = graphIndex.getStats();
