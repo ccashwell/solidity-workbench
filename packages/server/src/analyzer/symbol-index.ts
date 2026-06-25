@@ -225,23 +225,7 @@ export class SymbolIndex {
       this.refIndex.indexFile(uri, cachedText);
     }
 
-    // Remove old symbols for this file
-    const oldSymbols = this.symbolsByFile.get(uri) ?? [];
-    for (const sym of oldSymbols) {
-      const byName = this.symbolsByName.get(sym.name);
-      if (byName) {
-        const filtered = byName.filter((s) => s.filePath !== uri);
-        if (filtered.length > 0) {
-          this.symbolsByName.set(sym.name, filtered);
-        } else {
-          this.symbolsByName.delete(sym.name);
-          // Last symbol with this name is gone — drop it from the
-          // trigram index so stale names aren't returned by future
-          // workspace-symbol queries.
-          this.trigrams.remove(sym.name);
-        }
-      }
-    }
+    this.removeFileSymbols(uri);
 
     // Build new symbols
     const newSymbols: SolSymbol[] = [];
@@ -469,12 +453,17 @@ export class SymbolIndex {
   }
 
   /**
-   * Drop all inverted-index entries for a file — intended for cleanup when a
-   * file is closed or removed from the workspace.  Symbol / contract maps
-   * are untouched; those remain valid until the next `updateFile` rebuild.
+   * Drop volatile reference entries for a closed file while preserving symbol
+   * and contract maps. Deletions use `removeFile`, which clears all indexes.
    */
   onFileClosed(uri: string): void {
     this.refIndex.removeFile(uri);
+  }
+
+  removeFile(uri: string): void {
+    this.pending.delete(uri);
+    this.refIndex.removeFile(uri);
+    this.removeFileSymbols(uri);
   }
 
   /**
@@ -638,6 +627,28 @@ export class SymbolIndex {
         sym.containerName === containerName &&
         (uri === undefined || sym.filePath === uri),
     );
+  }
+
+  private removeFileSymbols(uri: string): void {
+    const oldSymbols = this.symbolsByFile.get(uri) ?? [];
+    for (const sym of oldSymbols) {
+      const byName = this.symbolsByName.get(sym.name);
+      if (!byName) continue;
+      const filtered = byName.filter((s) => s.filePath !== uri);
+      if (filtered.length > 0) {
+        this.symbolsByName.set(sym.name, filtered);
+      } else {
+        this.symbolsByName.delete(sym.name);
+        // Last symbol with this name is gone — drop it from the
+        // trigram index so stale names aren't returned by future
+        // workspace-symbol queries.
+        this.trigrams.remove(sym.name);
+      }
+    }
+    this.symbolsByFile.delete(uri);
+    for (const [name, entry] of this.contractsByName) {
+      if (entry.uri === uri) this.contractsByName.delete(name);
+    }
   }
 
   private indexStruct(

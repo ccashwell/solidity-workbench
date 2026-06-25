@@ -541,6 +541,16 @@ export class GraphIndex {
     this.nodeIdsByFile.delete(uri);
   }
 
+  removeFileAndDependents(uri: string, includeRelationshipEdges = true): string[] {
+    const dependents = this.collectImportDependents(uri);
+    this.removeFile(uri);
+    for (const dependentUri of dependents) {
+      this.updateFile(dependentUri, includeRelationshipEdges);
+    }
+    if (!includeRelationshipEdges) this.enqueueRelationshipFiles(dependents);
+    return [uri, ...dependents];
+  }
+
   private clearFileForUpdate(uri: string): void {
     const removed = this.nodeIdsByFile.get(uri);
     if (!removed) return;

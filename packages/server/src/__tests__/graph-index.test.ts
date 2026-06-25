@@ -666,7 +666,7 @@ contract Gone {
       const oldNode = graph.getNodes().find((node) => node.name === "oldName");
       assert.ok(oldNode, "expected old graph node before parser cache is cleared");
 
-      (parser as unknown as { cache: Map<string, unknown> }).cache.delete(uri);
+      parser.removeFile(uri);
       graph.updateFile(uri);
 
       assert.equal(
@@ -758,6 +758,117 @@ contract Child is Base {
       assert.ok(
         graph.getOutgoingEdges(childRun.id, "calls").some((edge) => edge.target === basePing.id),
         "focused relationship indexing should restore the dependent call edge",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("removes deleted files, refreshes import dependents, and evicts stale parser state", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-delete-test-"));
+    try {
+      const files = {
+        "src/Base.sol": `pragma solidity ^0.8.24;
+contract Base {
+    function ping() internal pure returns (uint256) {
+        return 1;
+    }
+}
+`,
+        "src/Child.sol": `pragma solidity ^0.8.24;
+import "./Base.sol";
+
+contract Child is Base {
+    function run() external pure returns (uint256) {
+        return ping();
+    }
+}
+`,
+      };
+
+      const uris: string[] = [];
+      const parser = new SolidityParser();
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const baseUri = URI.file(path.join(tmpDir, "src/Base.sol")).toString();
+      const childUri = URI.file(path.join(tmpDir, "src/Child.sol")).toString();
+      const baseId = resolver.contractId(baseUri, "Base");
+      const childId = resolver.contractId(childUri, "Child");
+      const childRun = graph
+        .getNodes()
+        .find((node) => node.name === "run" && node.containerName === "Child");
+      const basePing = graph
+        .getNodes()
+        .find((node) => node.name === "ping" && node.containerName === "Base");
+      assert.ok(childRun, "expected Child.run graph node");
+      assert.ok(basePing, "expected Base.ping graph node");
+      assert.ok(graph.getNode(baseId), "expected Base before deletion");
+      assert.ok(
+        graph.getOutgoingEdges(childRun.id, "calls").some((edge) => edge.target === basePing.id),
+        "expected initial inherited call edge",
+      );
+
+      fs.rmSync(path.join(tmpDir, "src/Base.sol"));
+      parser.removeFile(baseUri);
+      symbolIndex.removeFile(baseUri);
+      const refreshed = graph.removeFileAndDependents(baseUri, false);
+
+      assert.deepEqual(
+        refreshed.sort(),
+        [baseUri, childUri].sort(),
+        "expected deleted file and importing dependent to refresh",
+      );
+      assert.equal(
+        parser.get(baseUri),
+        undefined,
+        "expected parser cache eviction for deleted file",
+      );
+      assert.equal(graph.getNode(baseId), undefined, "expected deleted Base node to be removed");
+      assert.equal(
+        graph.getNode(basePing.id),
+        undefined,
+        "expected deleted Base.ping node to be removed",
+      );
+      assert.equal(
+        graph.getOutgoingEdges(`file:${childUri}`, "imports").length,
+        0,
+        "expected unresolved import edge to be removed after dependent refresh",
+      );
+      assert.equal(
+        graph.getOutgoingEdges(childId, "inherits").length,
+        0,
+        "expected stale inheritance edge to deleted Base to be removed",
+      );
+      assert.equal(
+        graph.getOutgoingEdges(childRun.id, "calls").length,
+        0,
+        "expected stale inherited call edge to be removed until relationships reindex",
+      );
+      assert.equal(graph.getStats().relationshipIndexComplete, false);
+      assert.ok(
+        (graph.getStats().pendingRelationshipFiles ?? 0) >= 1,
+        "expected dependent to be queued for relationship reindexing",
+      );
+
+      graph.ensureWorkspaceDeclarations();
+      assert.equal(
+        graph.getNode(baseId),
+        undefined,
+        "deleted file should not be re-added from stale parser state",
       );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });

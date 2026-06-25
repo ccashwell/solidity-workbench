@@ -509,9 +509,11 @@ connection.onDidChangeWatchedFiles(async (params) => {
   }
 
   for (const uri of removedSolFiles) {
-    symbolIndex.onFileClosed(uri);
-    graphIndex.removeFile(uri);
-    callHierarchyProvider.invalidateFile(uri);
+    parser.removeFile(uri);
+    symbolIndex.removeFile(uri);
+    for (const refreshedUri of graphIndex.removeFileAndDependents(uri, false)) {
+      callHierarchyProvider.invalidateFile(refreshedUri);
+    }
     connection.sendDiagnostics({ uri, diagnostics: [] });
   }
 
@@ -524,7 +526,10 @@ connection.onDidChangeWatchedFiles(async (params) => {
   }
   if (removedSolFiles.length > 0 || touchedSolFiles.length > 0) {
     graphIndex.writeCache(graphCacheDir);
-    if (touchedSolFiles.length > 0 && shouldRunBackgroundGraphRelationshipIndex()) {
+    if (
+      (removedSolFiles.length > 0 || touchedSolFiles.length > 0) &&
+      shouldRunBackgroundGraphRelationshipIndex()
+    ) {
       scheduleGraphRelationshipIndex();
     }
   }

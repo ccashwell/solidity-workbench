@@ -54,6 +54,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Live Project Graph updates now refresh declarations and dependents
   immediately but queue relationship reindexing in the background, avoiding
   synchronous full edge rebuilds on every edit.
+- Deleted Solidity files now evict parser, symbol, and graph state, refresh
+  importing dependents, and queue those dependents for relationship reindexing.
 - Project Graph rebuilds now index declarations before function bodies, so
   receiver-typed calls resolve correctly even when a caller file is visited
   before the imported interface or contract that declares the callee.

@@ -263,6 +263,31 @@ contract B {
       assert.equal(idx.findSymbols("OldName").length, 0, "old symbol should be evicted");
       assert.equal(idx.findSymbols("NewName").length, 1);
     });
+
+    it("removes symbols, contract entries, and workspace-symbol names for deleted files", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      const uri = "file:///w/Deleted.sol";
+
+      indexText(
+        parser,
+        idx,
+        uri,
+        `contract DeletedContract {
+    function deletedFunction() external {}
+}`,
+      );
+      assert.equal(idx.findSymbols("DeletedContract").length, 1);
+      assert.ok(idx.getContract("DeletedContract"));
+      assert.ok(idx.findWorkspaceSymbols("DeletedContract").length >= 1);
+
+      idx.removeFile(uri);
+
+      assert.equal(idx.findSymbols("DeletedContract").length, 0);
+      assert.equal(idx.findSymbols("deletedFunction").length, 0);
+      assert.equal(idx.getContract("DeletedContract"), undefined);
+      assert.deepEqual(idx.findWorkspaceSymbols("DeletedContract"), []);
+    });
   });
 
   describe("reference index integration", () => {

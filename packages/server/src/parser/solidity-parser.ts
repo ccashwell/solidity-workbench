@@ -186,6 +186,10 @@ export class SolidityParser {
     return this.cache.get(uri);
   }
 
+  removeFile(uri: string): void {
+    this.cache.delete(uri);
+  }
+
   /**
    * Retrieve the raw source text that was passed to `parse(uri, text)` most
    * recently for the given URI. Returns undefined if the file hasn't been
