@@ -145,7 +145,11 @@ const ZERO_RANGE: SourceRange = {
 
 const CACHE_VERSION = 3;
 
-const CALL_TARGET_NODE_KINDS = new Set<SolidityGraphNodeKind>(["function", "modifier"]);
+const CALL_TARGET_NODE_KINDS = new Set<SolidityGraphNodeKind>([
+  "function",
+  "modifier",
+  "stateVariable",
+]);
 const EVENT_TARGET_NODE_KINDS = new Set<SolidityGraphNodeKind>(["event"]);
 const ERROR_TARGET_NODE_KINDS = new Set<SolidityGraphNodeKind>(["error"]);
 const STATE_TARGET_NODE_KINDS = new Set<SolidityGraphNodeKind>(["stateVariable"]);
@@ -2837,6 +2841,16 @@ export class GraphIndex {
       }
     }
 
+    const publicGetter = this.resolvePublicStateVariableGetterNode(
+      contract,
+      memberName,
+      argumentCount,
+    );
+    if (publicGetter) {
+      this.memberNodeIdCache.set(cacheKey, publicGetter.id);
+      return publicGetter;
+    }
+
     const member = this.resolver.findMemberInInheritanceChain(
       contract.contract.name,
       memberName,
@@ -2855,6 +2869,43 @@ export class GraphIndex {
     );
     this.memberNodeIdCache.set(cacheKey, nodeId);
     return this.nodes.get(nodeId);
+  }
+
+  private resolvePublicStateVariableGetterNode(
+    contract: ResolvedContract,
+    memberName: string,
+    argumentCount?: number,
+  ): SolidityGraphNode | undefined {
+    for (const entry of this.resolver.getInheritanceChain(contract.contract.name, contract.uri)) {
+      const variable = entry.contract.stateVariables.find(
+        (candidate) => candidate.name === memberName && candidate.visibility === "public",
+      );
+      if (!variable) continue;
+
+      const getterArgumentCount = this.publicStateVariableGetterArgumentCount(variable);
+      if (argumentCount !== undefined) {
+        if (getterArgumentCount !== argumentCount) continue;
+      } else if (getterArgumentCount !== 0) {
+        continue;
+      }
+
+      const nodeId = this.memberNodeId(
+        entry.uri,
+        entry.contract.name,
+        "stateVariable",
+        variable.name,
+        variable.nameRange,
+      );
+      return this.nodes.get(nodeId);
+    }
+    return undefined;
+  }
+
+  private publicStateVariableGetterArgumentCount(variable: StateVariableDeclaration): number {
+    const typeName = normalizeTypeName(variable.typeName);
+    const mappingCount = typeName.match(/\bmapping\s*\(/g)?.length ?? 0;
+    const arrayCount = typeName.match(/\[[^\]]*\]/g)?.length ?? 0;
+    return mappingCount + arrayCount;
   }
 
   private resolveContractMemberGraphNode(

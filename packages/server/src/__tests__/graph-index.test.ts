@@ -1574,6 +1574,95 @@ contract Caller {
     }
   });
 
+  it("resolves receiver calls to public state-variable getters", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-getter-call-test-"));
+    try {
+      const source = `pragma solidity ^0.8.24;
+contract Vault {
+    uint256 public totalAssets;
+    mapping(address => uint256) public balanceOf;
+    uint256 internal internalAssets;
+}
+
+contract Caller {
+    Vault public vault;
+
+    function read(address account) external view returns (uint256 total, uint256 balance) {
+        total = vault.totalAssets();
+        balance = vault.balanceOf(account);
+    }
+
+    function ignored() external view returns (uint256) {
+        return vault.internalAssets();
+    }
+}
+`;
+      const filePath = path.join(tmpDir, "src/GetterCall.sol");
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, source, "utf-8");
+      const uri = URI.file(filePath).toString();
+
+      const parser = new SolidityParser();
+      parser.parse(uri, source);
+      const workspace = makeWorkspace(tmpDir, [uri]);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const read = graph
+        .getNodes()
+        .find((node) => node.name === "read" && node.containerName === "Caller");
+      const ignored = graph
+        .getNodes()
+        .find((node) => node.name === "ignored" && node.containerName === "Caller");
+      const totalAssets = graph
+        .getNodes()
+        .find((node) => node.name === "totalAssets" && node.containerName === "Vault");
+      const balanceOf = graph
+        .getNodes()
+        .find((node) => node.name === "balanceOf" && node.containerName === "Vault");
+      const internalAssets = graph
+        .getNodes()
+        .find((node) => node.name === "internalAssets" && node.containerName === "Vault");
+      assert.ok(read, "expected Caller.read node");
+      assert.ok(ignored, "expected Caller.ignored node");
+      assert.ok(totalAssets, "expected Vault.totalAssets node");
+      assert.ok(balanceOf, "expected Vault.balanceOf node");
+      assert.ok(internalAssets, "expected Vault.internalAssets node");
+
+      const calls = graph.getOutgoingEdges(read.id, "calls");
+      assert.ok(
+        calls.some((edge) => edge.target === totalAssets.id),
+        "expected vault.totalAssets() to resolve to the public state-variable getter",
+      );
+      assert.ok(
+        calls.some((edge) => edge.target === balanceOf.id),
+        "expected vault.balanceOf(account) to resolve to the public mapping getter",
+      );
+
+      const externalCalls = graph.getOutgoingEdges(read.id, "externalCall");
+      assert.ok(
+        externalCalls.some((edge) => edge.target === totalAssets.id),
+        "expected public getter call to create an externalCall edge",
+      );
+      assert.ok(
+        externalCalls.some((edge) => edge.target === balanceOf.id),
+        "expected public mapping getter call to create an externalCall edge",
+      );
+
+      assert.ok(
+        graph
+          .getOutgoingEdges(ignored.id, "calls")
+          .every((edge) => edge.target !== internalAssets.id),
+        "did not expect internal state variable to resolve as a public getter call",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("resolves import aliases and namespace-qualified types in receiver chains", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-import-alias-test-"));
     try {

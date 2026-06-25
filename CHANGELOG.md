@@ -93,6 +93,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph search and callers/callees/impact result sets now keep
   per-result completeness and edge-quality diagnostics visible in the graph
   panel.
+- Project Graph receiver-call resolution now treats public state variables as
+  getter call targets, including mapping and array getter arguments.
 
 ### Fixed
 
