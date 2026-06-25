@@ -92,6 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   works in both parser fallback and graph-backed modes.
 - Document symbols now include file-level constants, so breadcrumbs and the
   outline tree match the parser/indexer for top-level declarations.
+- Go to Type Definition now resolves file-level constants to their declared
+  type, matching state variables, parameters, and local variables.
 - Selected-node Project Graph callees queries now force-index the selected
   declaration's file before traversing outgoing call edges, avoiding empty
   partial-index results when declarations are warm but relationships are queued.

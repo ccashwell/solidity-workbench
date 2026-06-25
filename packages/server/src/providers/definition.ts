@@ -190,6 +190,7 @@ export class DefinitionProvider {
     for (const sym of symbols) {
       if (
         sym.kind === "stateVariable" ||
+        sym.kind === "fileConstant" ||
         sym.kind === "parameter" ||
         sym.kind === "localVariable"
       ) {

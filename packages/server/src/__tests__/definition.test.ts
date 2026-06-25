@@ -734,6 +734,37 @@ contract C {
       assert.ok("uri" in loc);
       assert.equal(loc.range.start.line, 2);
     });
+
+    it("jumps from a file-level constant reference to the constant type declaration", () => {
+      const { docs, provider } = setup({
+        "file:///w/type-constant.sol": `pragma solidity ^0.8.24;
+
+struct Limit {
+    uint256 value;
+}
+
+Limit constant DEFAULT_LIMIT = Limit({value: 1});
+
+contract C {
+    function read() external pure returns (uint256) {
+        return DEFAULT_LIMIT.value;
+    }
+}`,
+      });
+
+      const document = docs["file:///w/type-constant.sol"];
+      const lines = document.getText().split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("DEFAULT_LIMIT.value"));
+      const def = provider.provideTypeDefinition(document, {
+        line,
+        character: lines[line].indexOf("DEFAULT_LIMIT"),
+      });
+
+      assert.ok(def, "expected type definition for file-level constant reference");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc);
+      assert.equal(loc.range.start.line, 2);
+    });
   });
 
   describe("robustness", () => {
