@@ -1896,17 +1896,30 @@ contract OverloadedTarget {
 
 contract Caller {
     OverloadedTarget public target;
+    uint256[] internal amounts;
+    mapping(address => uint256) internal balances;
+    bool internal flag;
 
-    function local(address account) external {
+    function local(address account, uint256 value) external {
         one();
         one(1);
         one(account);
+        one(uint256(value));
+        one(value + 1);
+        one(flag ? value : 1);
+        one(amounts[0]);
+        one(balances[account]);
     }
 
-    function receiver(address account) external {
+    function receiver(address account, uint256 value) external {
         target.ping();
         target.ping(1);
         target.ping(account);
+        target.ping(uint256(value));
+        target.ping(value + 1);
+        target.ping(flag ? value : 1);
+        target.ping(amounts[0]);
+        target.ping(balances[account]);
     }
 
     function one() internal {}
@@ -1975,6 +1988,12 @@ contract Caller {
         graph.getOutgoingEdges(local.id, "calls").some((edge) => edge.target === oneUint.id),
         "expected one(1) to target the uint256 overload",
       );
+      assert.equal(
+        graph.getOutgoingEdges(local.id, "calls").filter((edge) => edge.target === oneUint.id)
+          .length,
+        6,
+        "expected every local uint-compatible expression to target the uint256 overload",
+      );
       assert.ok(
         graph.getOutgoingEdges(local.id, "calls").some((edge) => edge.target === oneAddress.id),
         "expected one(account) to target the address overload",
@@ -1992,6 +2011,12 @@ contract Caller {
       assert.ok(
         graph.getOutgoingEdges(receiver.id, "calls").some((edge) => edge.target === pingUint.id),
         "expected target.ping(1) to target the uint256 overload",
+      );
+      assert.equal(
+        graph.getOutgoingEdges(receiver.id, "calls").filter((edge) => edge.target === pingUint.id)
+          .length,
+        6,
+        "expected every receiver uint-compatible expression to target the uint256 overload",
       );
       assert.ok(
         graph.getOutgoingEdges(receiver.id, "calls").some((edge) => edge.target === pingAddress.id),

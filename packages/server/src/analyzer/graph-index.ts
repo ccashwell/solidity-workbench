@@ -115,6 +115,8 @@ interface RawAstNode {
   base?: RawAstNode;
   index?: RawAstNode;
   condition?: RawAstNode;
+  trueExpression?: RawAstNode;
+  falseExpression?: RawAstNode;
   trueBody?: RawAstNode;
   falseBody?: RawAstNode;
   subExpression?: RawAstNode;
@@ -3439,6 +3441,8 @@ export class GraphIndex {
       "base",
       "index",
       "condition",
+      "trueExpression",
+      "falseExpression",
       "trueBody",
       "falseBody",
       "subExpression",
@@ -3629,6 +3633,7 @@ export class GraphIndex {
       case "HexLiteral":
         return "bytesLiteral";
       case "Identifier":
+        if (arg.name === "this") return contract?.name;
         return arg.name
           ? this.resolveReceiverInfo(
               uri,
@@ -3648,6 +3653,24 @@ export class GraphIndex {
             )?.typeName
           : undefined;
       }
+      case "BinaryOperation":
+        return this.inferRawBinaryOperationType(uri, contract, arg, position);
+      case "UnaryOperation":
+        if (arg.operator === "!") return "bool";
+        return arg.subExpression
+          ? this.inferRawArgumentType(uri, contract, arg.subExpression, position)
+          : undefined;
+      case "Conditional":
+        return this.commonArgumentType(
+          arg.trueExpression
+            ? this.inferRawArgumentType(uri, contract, arg.trueExpression, position)
+            : undefined,
+          arg.falseExpression
+            ? this.inferRawArgumentType(uri, contract, arg.falseExpression, position)
+            : undefined,
+        );
+      case "IndexAccess":
+        return this.inferRawIndexAccessType(uri, contract, arg, position);
       case "FunctionCall": {
         const castType = this.rawTypeNameToString(arg.expression);
         return castType &&
@@ -3658,6 +3681,81 @@ export class GraphIndex {
       default:
         return undefined;
     }
+  }
+
+  private inferRawBinaryOperationType(
+    uri: string,
+    contract: ContractDefinition | undefined,
+    operation: RawAstNode,
+    position: SourceRange["start"],
+  ): string | undefined {
+    const operator = operation.operator;
+    if (!operator) return undefined;
+    if (/^(?:==|!=|<|>|<=|>=|&&|\|\|)$/.test(operator)) return "bool";
+
+    const left = operation.left
+      ? this.inferRawArgumentType(uri, contract, operation.left, position)
+      : undefined;
+    const right = operation.right
+      ? this.inferRawArgumentType(uri, contract, operation.right, position)
+      : undefined;
+    return this.commonArgumentType(left, right);
+  }
+
+  private inferRawIndexAccessType(
+    uri: string,
+    contract: ContractDefinition | undefined,
+    access: RawAstNode,
+    position: SourceRange["start"],
+  ): string | undefined {
+    if (!access.base) return undefined;
+    const baseType = this.inferRawArgumentType(uri, contract, access.base, position);
+    if (!baseType) return undefined;
+    return this.mappingValueType(baseType) ?? this.arrayElementType(baseType);
+  }
+
+  private commonArgumentType(
+    left: string | undefined,
+    right: string | undefined,
+  ): string | undefined {
+    if (!left || !right) return undefined;
+    const canonicalLeft = this.canonicalArgumentType(left);
+    const canonicalRight = this.canonicalArgumentType(right);
+    if (canonicalLeft === canonicalRight) return canonicalLeft;
+    if (left === "integerLiteral" && this.isIntegerType(right)) return right;
+    if (right === "integerLiteral" && this.isIntegerType(left)) return left;
+    if (left === "bytesLiteral" && this.isBytesType(right)) return right;
+    if (right === "bytesLiteral" && this.isBytesType(left)) return left;
+    return undefined;
+  }
+
+  private mappingValueType(typeName: string): string | undefined {
+    const normalized = normalizeTypeName(typeName);
+    if (!normalized.startsWith("mapping(") || !normalized.endsWith(")")) return undefined;
+    let depth = 0;
+    for (let i = "mapping(".length; i < normalized.length - 1; i++) {
+      const char = normalized[i];
+      if (char === "(") depth++;
+      else if (char === ")") depth--;
+      else if (char === "=" && normalized[i + 1] === ">" && depth === 0) {
+        return normalized.slice(i + 2, -1).trim();
+      }
+    }
+    return undefined;
+  }
+
+  private arrayElementType(typeName: string): string | undefined {
+    const normalized = normalizeTypeName(typeName);
+    if (!/\[[^\]]*\]\s*$/.test(normalized)) return undefined;
+    return normalized.replace(/\[[^\]]*\]\s*$/, "") || undefined;
+  }
+
+  private isIntegerType(typeName: string): boolean {
+    return /^u?int(?:\d+)?$/.test(this.canonicalArgumentType(typeName));
+  }
+
+  private isBytesType(typeName: string): boolean {
+    return /^bytes(?:\d+)?$/.test(this.canonicalArgumentType(typeName));
   }
 
   private rawNodeStartPosition(
