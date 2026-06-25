@@ -27,7 +27,7 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
  */
 export class SolcBridge {
   private cachedAst: Map<string, SolcSourceUnit> = new Map();
-  private declarationsById: Map<number, { filePath: string; node: unknown }> = new Map();
+  private declarationsById: Map<number, { filePath: string; node: SolcAstNode }> = new Map();
   private sourceTexts: Map<string, string | null> = new Map();
   private lineIndexes: Map<string, LineIndex | null> = new Map();
   private sourceFingerprints: Map<string, string | null> = new Map();
@@ -352,6 +352,7 @@ export class SolcBridge {
     if (typeof decl.scope !== "number" || !this.isFunctionScope(ast.ast, decl.scope)) {
       return null;
     }
+    if (typeof decl.src !== "string") return null;
 
     const { offset: declStart, length: declLength } = this.solcRangeToDocumentRange(
       filePath,
@@ -373,7 +374,7 @@ export class SolcBridge {
     };
   }
 
-  private isFunctionScope(root: any, scopeId: number): boolean {
+  private isFunctionScope(root: unknown, scopeId: number): boolean {
     const scopeNode = this.findNodeById(root, scopeId);
     if (!scopeNode) return false;
     return (
@@ -384,41 +385,43 @@ export class SolcBridge {
   }
 
   private collectReferencesTo(
-    node: any,
+    node: unknown,
     declId: number,
     out: { filePath?: string; offset: number; length: number }[],
     filePath?: string,
   ): void {
-    if (!node || typeof node !== "object") return;
+    const record = asSolcAstNode(node);
+    if (!record) return;
 
     if (
-      (node.nodeType === "Identifier" ||
-        node.nodeType === "IdentifierPath" ||
-        node.nodeType === "MemberAccess") &&
-      node.referencedDeclaration === declId &&
-      typeof node.src === "string"
+      (record.nodeType === "Identifier" ||
+        record.nodeType === "IdentifierPath" ||
+        record.nodeType === "MemberAccess") &&
+      record.referencedDeclaration === declId &&
+      typeof record.src === "string"
     ) {
       const range = filePath
-        ? this.solcRangeToDocumentRange(filePath, node.src)
-        : this.parseSourceRangeObject(node.src);
+        ? this.solcRangeToDocumentRange(filePath, record.src)
+        : this.parseSourceRangeObject(record.src);
       out.push(filePath ? { filePath, offset: range.offset, length: range.length } : range);
     }
 
-    for (const key of Object.keys(node)) {
+    for (const key of Object.keys(record)) {
       if (key === "src" || key === "typeDescriptions") continue;
-      const child = node[key];
+      const child = record[key];
       if (Array.isArray(child)) {
         for (const item of child) this.collectReferencesTo(item, declId, out, filePath);
-      } else if (typeof child === "object" && child !== null) {
+      } else if (isObjectRecord(child)) {
         this.collectReferencesTo(child, declId, out, filePath);
       }
     }
   }
 
-  private isDeclarationNode(node: any): boolean {
+  private isDeclarationNode(node: unknown): boolean {
+    const record = objectRecord(node);
     return (
-      typeof node?.nodeType === "string" &&
-      (node.nodeType.endsWith("Definition") || node.nodeType.endsWith("Declaration"))
+      typeof record?.nodeType === "string" &&
+      (record.nodeType.endsWith("Definition") || record.nodeType.endsWith("Declaration"))
     );
   }
 
@@ -491,13 +494,14 @@ export class SolcBridge {
   /**
    * Get the ABI for a contract.
    */
-  async getAbi(contractName: string): Promise<any[] | null> {
+  async getAbi(contractName: string): Promise<unknown[] | null> {
     const result = await this.workspace.runForge(["inspect", contractName, "abi"]);
 
     if (result.exitCode !== 0) return null;
 
     try {
-      return JSON.parse(result.stdout);
+      const parsed = JSON.parse(result.stdout);
+      return Array.isArray(parsed) ? parsed : null;
     } catch {
       return null;
     }
@@ -577,18 +581,20 @@ export class SolcBridge {
    * different files share a name, the last one written wins; this
    * matches what `forge inspect <name>` itself does.
    */
-  private extractSelectors(output: any): void {
-    const contracts = output?.contracts;
-    if (!contracts || typeof contracts !== "object") return;
+  private extractSelectors(output: unknown): void {
+    const contracts = objectRecord(output)?.contracts;
+    if (!isObjectRecord(contracts)) return;
 
-    for (const fileEntry of Object.values(contracts) as any[]) {
-      if (!fileEntry || typeof fileEntry !== "object") continue;
-      for (const [contractName, contractEntry] of Object.entries(fileEntry) as [string, any][]) {
-        const ids = contractEntry?.evm?.methodIdentifiers;
-        if (ids && typeof ids === "object") {
+    for (const fileEntry of Object.values(contracts)) {
+      if (!isObjectRecord(fileEntry)) continue;
+      for (const [contractName, contractEntry] of Object.entries(fileEntry)) {
+        if (!isObjectRecord(contractEntry)) continue;
+        const evm = objectRecord(contractEntry.evm);
+        const ids = evm?.methodIdentifiers;
+        if (isObjectRecord(ids)) {
           this.cachedSelectors.set(contractName, ids as Record<string, string>);
         }
-        const errors = this.extractErrorSelectorsFromAbi(contractEntry?.abi);
+        const errors = this.extractErrorSelectorsFromAbi(contractEntry.abi);
         if (errors) this.cachedErrorSelectors.set(contractName, errors);
       }
     }
@@ -621,15 +627,16 @@ export class SolcBridge {
     return Object.keys(out).length > 0 ? out : null;
   }
 
-  private findNodeAtOffset(node: any, offset: number): any | null {
-    if (!node || typeof node !== "object") return null;
+  private findNodeAtOffset(node: unknown, offset: number): SolcAstNode | null {
+    const record = asSolcAstNode(node);
+    if (!record) return null;
 
     // The top-level SourceUnit doesn't carry a src range, so recurse
     // into `nodes` when present and fall back to generic key walking
     // when we don't have a src to check.
-    if (!node.src) {
-      if (Array.isArray(node.nodes)) {
-        for (const child of node.nodes) {
+    if (!record.src) {
+      if (Array.isArray(record.nodes)) {
+        for (const child of record.nodes) {
           const found = this.findNodeAtOffset(child, offset);
           if (found) return found;
         }
@@ -637,18 +644,18 @@ export class SolcBridge {
       return null;
     }
 
-    const [start, length] = this.parseSourceRange(node.src);
+    const [start, length] = this.parseSourceRange(record.src);
     if (offset < start || offset >= start + length) return null;
 
     // Check all children and keep the narrowest containing match. Solc AST
     // object key order is not a semantic ordering guarantee; returning the
     // first child can incorrectly pick a broad ContractDefinition before the
     // Identifier or MemberAccess under the cursor.
-    let best = node;
+    let best = record;
     let bestLength = length;
-    for (const key of Object.keys(node)) {
+    for (const key of Object.keys(record)) {
       if (key === "src" || key === "typeDescriptions") continue;
-      const child = node[key];
+      const child = record[key];
       if (Array.isArray(child)) {
         for (const item of child) {
           const found = this.findNodeAtOffset(item, offset);
@@ -661,7 +668,7 @@ export class SolcBridge {
             }
           }
         }
-      } else if (typeof child === "object" && child !== null) {
+      } else if (isObjectRecord(child)) {
         const found = this.findNodeAtOffset(child, offset);
         if (found) {
           const foundSrc = this.nodeSrc(found);
@@ -676,19 +683,20 @@ export class SolcBridge {
     return best;
   }
 
-  private findNodeById(node: any, id: number): any | null {
-    if (!node || typeof node !== "object") return null;
+  private findNodeById(node: unknown, id: number): SolcAstNode | null {
+    const record = asSolcAstNode(node);
+    if (!record) return null;
 
-    if (node.id === id) return node;
+    if (record.id === id) return record;
 
-    for (const key of Object.keys(node)) {
-      const child = node[key];
+    for (const key of Object.keys(record)) {
+      const child = record[key];
       if (Array.isArray(child)) {
         for (const item of child) {
           const found = this.findNodeById(item, id);
           if (found) return found;
         }
-      } else if (typeof child === "object" && child !== null) {
+      } else if (isObjectRecord(child)) {
         const found = this.findNodeById(child, id);
         if (found) return found;
       }
@@ -698,11 +706,11 @@ export class SolcBridge {
   }
 
   private indexDeclarationsById(node: unknown, filePath: string): void {
-    if (!node || typeof node !== "object") return;
-    const record = node as Record<string, unknown>;
+    const record = asSolcAstNode(node);
+    if (!record) return;
 
     if (typeof record.id === "number" && this.isDeclarationNode(record)) {
-      this.declarationsById.set(record.id, { filePath, node });
+      this.declarationsById.set(record.id, { filePath, node: record });
     }
 
     for (const key of Object.keys(record)) {
@@ -710,7 +718,7 @@ export class SolcBridge {
       const child = record[key];
       if (Array.isArray(child)) {
         for (const item of child) this.indexDeclarationsById(item, filePath);
-      } else if (typeof child === "object" && child !== null) {
+      } else if (isObjectRecord(child)) {
         this.indexDeclarationsById(child, filePath);
       }
     }
@@ -819,22 +827,46 @@ function canonicalAbiType(input: unknown): string {
   return `(${inner})${suffix}`;
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object";
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | undefined {
+  return isObjectRecord(value) ? value : undefined;
+}
+
+function asSolcAstNode(value: unknown): SolcAstNode | null {
+  return isObjectRecord(value) ? (value as SolcAstNode) : null;
+}
+
 // ── Types ────────────────────────────────────────────────────────────
+
+export interface SolcAstNode {
+  [key: string]: unknown;
+  id?: number;
+  nodeType?: string;
+  src?: string;
+  name?: string;
+  referencedDeclaration?: number;
+  scope?: number;
+  typeDescriptions?: SolcTypeDescription;
+  nodes?: SolcAstNode[];
+}
 
 export interface SolcSourceUnit {
   id: number;
   filePath: string;
-  ast: any; // solc AST node
+  ast: SolcAstNode;
 }
 
 export interface SolcOutput {
   errors?: SolcError[];
-  sources?: Record<string, { id: number; ast: any }>;
+  sources?: Record<string, { id: number; ast?: SolcAstNode }>;
   contracts?: Record<string, Record<string, SolcContractOutput>>;
 }
 
 export interface SolcContractOutput {
-  abi?: any[];
+  abi?: unknown[];
   evm?: {
     bytecode?: { object: string };
     methodIdentifiers?: Record<string, string>;
@@ -846,7 +878,7 @@ export interface SolcContractOutput {
   };
   storageLayout?: {
     storage: StorageLayoutEntry[];
-    types: Record<string, any>;
+    types: Record<string, unknown>;
   };
 }
 

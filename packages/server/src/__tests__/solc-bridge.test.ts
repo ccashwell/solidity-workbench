@@ -101,7 +101,11 @@ describe("SolcBridge", () => {
       assert.ok(args.includes("--ast"));
       assert.ok(args.includes("--build-info"));
       assert.ok(args.includes("--build-info-path"));
-      assert.equal(asts.get(sourcePath)?.ast.nodes[0].name, "Use");
+      const sourceUnit = asts.get(sourcePath);
+      assert.ok(sourceUnit);
+      const firstNode = sourceUnit.ast.nodes?.[0];
+      assert.ok(firstNode);
+      assert.equal(firstNode.name, "Use");
       assert.deepEqual(bridge.getCachedMethodIdentifiers("Use"), { "run()": "c0406226" });
       assert.equal(bridge.getCacheStatus().available, true);
       assert.equal(bridge.getCacheStatus().stale, false);
