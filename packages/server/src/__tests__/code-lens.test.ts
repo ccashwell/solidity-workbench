@@ -9,6 +9,8 @@ import { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { CodeLensProvider } from "../providers/code-lens.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
+type CodeLensSolcBridge = Parameters<CodeLensProvider["setSolcBridge"]>[0];
+
 function makeFakeWorkspace(
   uris: string[] = [],
   resolveImport: (importPath: string, from: string) => string | null = () => null,
@@ -168,6 +170,48 @@ contract Use {
         "1 reference",
         "unrelated same-name test helper must not inflate the source helper count",
       );
+    });
+
+    it("uses solc references so overloads do not inflate each other's lens counts", () => {
+      const uri = "file:///w/Overloads.sol";
+      const text = `contract A {
+    function ping() external {}
+    function call() external { ping(); }
+    function ping(uint256 value) external { value; }
+}`;
+      const { doc, provider } = setup(uri, text);
+      const fsPath = URI.parse(uri).fsPath;
+      const declarationOffset = text.indexOf("function ping()") + "function ".length;
+      const callOffset = text.indexOf("ping();");
+      provider.setSolcBridge({
+        getCachedMethodIdentifiers: () => undefined,
+        getCachedErrorSelectors: () => undefined,
+        findReferencesAt: (_filePath: string, offset: number) => {
+          assert.equal(_filePath, fsPath);
+          if (offset === declarationOffset) {
+            return {
+              declaration: { filePath: fsPath, offset: declarationOffset, length: "ping".length },
+              references: [{ filePath: fsPath, offset: callOffset, length: "ping".length }],
+            };
+          }
+          return { declaration: null, references: [] };
+        },
+      } as unknown as CodeLensSolcBridge);
+
+      const lenses = provider.provideCodeLenses(doc);
+      const pingLens = lenses.find(
+        (lens) =>
+          lens.command?.command === "solidity-workbench.findReferencesAt" &&
+          lens.range.start.line === 1,
+      );
+      const overloadLens = lenses.find(
+        (lens) =>
+          lens.command?.command === "solidity-workbench.findReferencesAt" &&
+          lens.range.start.line === 3,
+      );
+
+      assert.equal(pingLens?.command?.title, "1 reference");
+      assert.equal(overloadLens, undefined, "unused overload must not inherit ping() references");
     });
   });
 

@@ -73,11 +73,7 @@ export class CodeLensProvider {
 
     for (const contract of result.sourceUnit.contracts) {
       // Contract-level lens: reference count (omit if 0 usages).
-      const contractLens = this.createReferenceLens(
-        contract.name,
-        contract.nameRange,
-        document.uri,
-      );
+      const contractLens = this.createReferenceLens(contract.name, contract.nameRange, document);
       if (contractLens) lenses.push(contractLens);
 
       // Contract-level lens: interface compliance
@@ -132,7 +128,7 @@ export class CodeLensProvider {
 
         // Reference count lens for non-test functions (omit if 0 usages).
         if (!isTestFile && func.name) {
-          const funcLens = this.createReferenceLens(func.name, func.nameRange, document.uri);
+          const funcLens = this.createReferenceLens(func.name, func.nameRange, document);
           if (funcLens) lenses.push(funcLens);
         }
 
@@ -196,7 +192,7 @@ export class CodeLensProvider {
       if (!fn.name) continue;
 
       if (!isTestFile && fn.name) {
-        const funcLens = this.createReferenceLens(fn.name, fn.nameRange, document.uri);
+        const funcLens = this.createReferenceLens(fn.name, fn.nameRange, document);
         if (funcLens) lenses.push(funcLens);
       }
 
@@ -371,9 +367,9 @@ export class CodeLensProvider {
   private createReferenceLens(
     symbolName: string,
     range: Range,
-    documentUri: string,
+    document: TextDocument,
   ): CodeLens | null {
-    const usageCount = this.referenceUsageCount(symbolName, documentUri);
+    const usageCount = this.referenceUsageCount(symbolName, document, range);
 
     if (usageCount === 0) return null;
 
@@ -382,12 +378,23 @@ export class CodeLensProvider {
       command: {
         title: usageCount === 1 ? "1 reference" : `${usageCount} references`,
         command: "solidity-workbench.findReferencesAt",
-        arguments: [documentUri, range.start],
+        arguments: [document.uri, range.start],
       },
     };
   }
 
-  private referenceUsageCount(symbolName: string, declarationUri: string): number {
+  private referenceUsageCount(symbolName: string, document: TextDocument, range: Range): number {
+    if (this.solcBridge) {
+      try {
+        const fsPath = this.workspace.uriToPath(document.uri);
+        const refs = this.solcBridge.findReferencesAt(fsPath, document.offsetAt(range.start));
+        if (refs) return refs.references.length;
+      } catch {
+        // Fall back to the parser index when URI/path conversion or solc lookup fails.
+      }
+    }
+
+    const declarationUri = document.uri;
     if (!this.resolver) {
       const totalOccurrences = this.symbolIndex.referenceCount(symbolName);
       const declarationCount = this.symbolIndex.findSymbols(symbolName).length;
