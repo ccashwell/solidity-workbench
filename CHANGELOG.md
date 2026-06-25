@@ -46,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   labels heuristic or unresolved edges directly in the graph details panel.
 - The Project Graph view can now filter visible nodes by declaration kind,
   making large workspace graphs easier to narrow without text-search hacks.
+- Project Graph webview controls now have runtime regression coverage for
+  filtering, indexed search messages, and render-cap expansion, including a fix
+  for edge-title rendering in the generated SVG.
 - Project Graph edges now include normalized evidence with source/target labels,
   syntax ranges, resolver, and a short reason for why the edge exists.
 - Project Graph edge evidence in the details panel can now jump directly to the

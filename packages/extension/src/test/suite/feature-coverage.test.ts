@@ -2,6 +2,7 @@ import * as assert from "node:assert";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import * as vm from "node:vm";
 import * as vscode from "vscode";
 import type { ProjectGraphResult, ProjectGraphStatsResult } from "@solidity-workbench/common";
 import {
@@ -565,6 +566,72 @@ describe("Feature coverage — project graph export", () => {
     assert.match(html, /nodeKind,/);
   });
 
+  it("executes project graph webview controls in a DOM runtime", () => {
+    type ProjectGraphExporterInternals = {
+      buildHtml(
+        graph: ProjectGraphResult,
+        focusId?: string,
+        graphStats?: ProjectGraphStatsResult,
+      ): string;
+    };
+    const exporter = new ProjectGraphExporter(
+      {} as ConstructorParameters<typeof ProjectGraphExporter>[0],
+    ) as unknown as ProjectGraphExporterInternals;
+    const runtimeGraph = makeRuntimeProjectGraph(3);
+    const runtime = runProjectGraphWebviewScript(
+      exporter.buildHtml(runtimeGraph, runtimeGraph.focusId),
+    );
+
+    assert.equal(runtime.element("stats").textContent, "3/3 rendered nodes · 2/2 edges");
+    assert.equal(
+      runtime.element("nodeKind").children.length,
+      PROJECT_GRAPH_NODE_KIND_FILTER_ITEMS.length,
+    );
+
+    runtime.change("nodeKind", "stateVariable");
+    assert.equal(runtime.lastState()?.nodeKind, "stateVariable");
+    assert.equal(runtime.element("stats").textContent, "2/2 rendered nodes · 1/2 edges");
+
+    runtime.change("nodeKind", "all");
+    runtime.input("search", "helper");
+    assert.equal(runtime.lastState()?.query, "helper");
+    assert.equal(runtime.element("stats").textContent, "2/2 rendered nodes · 1/2 edges");
+
+    runtime.click("serverSearch");
+    assert.deepEqual(runtime.lastPostedMessage(), { type: "searchGraph", query: "helper" });
+    assert.equal(runtime.element("stats").textContent, "Searching project graph…");
+  });
+
+  it("executes project graph render-cap controls in a DOM runtime", () => {
+    type ProjectGraphExporterInternals = {
+      buildHtml(
+        graph: ProjectGraphResult,
+        focusId?: string,
+        graphStats?: ProjectGraphStatsResult,
+      ): string;
+    };
+    const exporter = new ProjectGraphExporter(
+      {} as ConstructorParameters<typeof ProjectGraphExporter>[0],
+    ) as unknown as ProjectGraphExporterInternals;
+    const runtimeGraph = makeRuntimeProjectGraph(PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT + 10);
+    const runtime = runProjectGraphWebviewScript(
+      exporter.buildHtml(runtimeGraph, runtimeGraph.focusId),
+    );
+
+    assert.match(runtime.element("stats").textContent, /240\/250 rendered nodes/);
+    assert.match(runtime.element("stats").textContent, /10 hidden by render cap/);
+    assert.equal(runtime.element("showMoreNodes").hidden, false);
+    assert.equal(runtime.element("showMoreNodes").textContent, "More +10");
+
+    runtime.click("showMoreNodes");
+    assert.match(runtime.element("stats").textContent, /250\/250 rendered nodes/);
+    assert.equal(runtime.element("showMoreNodes").hidden, true);
+    assert.equal(
+      runtime.lastState()?.renderedNodeLimit,
+      PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT + PROJECT_GRAPH_RENDER_NODE_LIMIT_STEP,
+    );
+  });
+
   it("constrains graph call queries to callable targets", () => {
     assert.deepEqual(PROJECT_GRAPH_CALLABLE_NODE_KINDS, [
       "function",
@@ -1103,6 +1170,306 @@ function makeLargeProjectGraph(count: number): ProjectGraphResult {
     nodes,
     edges,
   };
+}
+
+function makeRuntimeProjectGraph(count: number): ProjectGraphResult {
+  const focusId = "file:///workspace/src/Vault.sol#Vault:function:deposit:4:13";
+  const nodes: ProjectGraphResult["nodes"] = [
+    {
+      id: focusId,
+      kind: "function",
+      name: "deposit",
+      qualifiedName: "Vault.deposit",
+      uri: "file:///workspace/src/Vault.sol",
+      filePath: "/workspace/src/Vault.sol",
+      tier: "project",
+      range: { start: { line: 4, character: 4 }, end: { line: 6, character: 5 } },
+      selectionRange: { start: { line: 4, character: 13 }, end: { line: 4, character: 20 } },
+      containerName: "Vault",
+    },
+  ];
+  const edges: ProjectGraphResult["edges"] = [];
+
+  for (let i = 1; i < count; i++) {
+    const isState = i === 2;
+    const id = isState
+      ? "file:///workspace/src/Vault.sol#Vault:stateVariable:balances:2:20"
+      : `file:///workspace/src/Vault.sol#Vault:function:helper${i}:8:13`;
+    nodes.push({
+      id,
+      kind: isState ? "stateVariable" : "function",
+      name: isState ? "balances" : `helper${i}`,
+      qualifiedName: isState ? "Vault.balances" : `Vault.helper${i}`,
+      uri: "file:///workspace/src/Vault.sol",
+      filePath: "/workspace/src/Vault.sol",
+      tier: "project",
+      range: { start: { line: 8 + i, character: 4 }, end: { line: 8 + i, character: 30 } },
+      selectionRange: {
+        start: { line: 8 + i, character: 13 },
+        end: { line: 8 + i, character: 20 },
+      },
+      containerName: "Vault",
+    });
+    edges.push({
+      source: focusId,
+      target: id,
+      kind: isState ? "usesType" : "calls",
+      resolutionConfidence: "parser",
+    });
+  }
+
+  return { focusId, nodes, edges };
+}
+
+interface ProjectGraphWebviewRuntime {
+  element(id: string): FakeElement;
+  input(id: string, value: string): void;
+  change(id: string, value: string): void;
+  click(id: string): void;
+  lastState(): RuntimeState | undefined;
+  lastPostedMessage(): RuntimeMessage | undefined;
+}
+
+interface RuntimeState {
+  activeId?: string;
+  query?: string;
+  scope?: string;
+  nodeKind?: string;
+  quality?: string;
+  zoom?: number;
+  pathMode?: boolean;
+  renderedNodeLimit?: number;
+  visibleEdges?: string[];
+}
+
+type RuntimeMessage = Record<string, unknown>;
+
+function runProjectGraphWebviewScript(html: string): ProjectGraphWebviewRuntime {
+  const script = extractProjectGraphScript(html);
+  const document = new FakeDocument(html);
+  const window = new FakeWindow();
+  let state: RuntimeState | undefined;
+  const postedMessages: RuntimeMessage[] = [];
+
+  const context = vm.createContext({
+    acquireVsCodeApi: () => ({
+      getState: () => state,
+      setState: (next: RuntimeState) => {
+        state = structuredClone(next);
+      },
+      postMessage: (message: RuntimeMessage) => {
+        postedMessages.push(message);
+      },
+    }),
+    document,
+    window,
+    console,
+  });
+
+  vm.runInContext(script, context, { timeout: 5_000 });
+
+  return {
+    element: (id) => document.getElementById(id),
+    input(id, value) {
+      const element = document.getElementById(id);
+      element.value = value;
+      element.dispatch("input");
+    },
+    change(id, value) {
+      const element = document.getElementById(id);
+      element.value = value;
+      element.dispatch("change");
+    },
+    click(id) {
+      document.getElementById(id).dispatch("click");
+    },
+    lastState: () => state,
+    lastPostedMessage: () => postedMessages.at(-1),
+  };
+}
+
+function extractProjectGraphScript(html: string): string {
+  const match = /<script nonce="[^"]+">([\s\S]*?)<\/script>/.exec(html);
+  assert.ok(match, "expected project graph HTML to include an inline script");
+  return match[1];
+}
+
+type FakeListener = (event: FakeEvent) => void;
+
+class FakeEvent {
+  public readonly target: FakeElement;
+  public readonly key?: string;
+
+  public constructor(target: FakeElement, key?: string) {
+    this.target = target;
+    this.key = key;
+  }
+
+  public preventDefault(): void {
+    // Test harness no-op.
+  }
+
+  public stopPropagation(): void {
+    // Test harness no-op.
+  }
+}
+
+class FakeClassList {
+  private readonly values = new Set<string>();
+
+  public add(...tokens: string[]): void {
+    for (const token of tokens) {
+      if (token) this.values.add(token);
+    }
+  }
+
+  public remove(...tokens: string[]): void {
+    for (const token of tokens) this.values.delete(token);
+  }
+
+  public toggle(token: string, force?: boolean): boolean {
+    const enabled = force ?? !this.values.has(token);
+    if (enabled) this.values.add(token);
+    else this.values.delete(token);
+    return enabled;
+  }
+
+  public contains(token: string): boolean {
+    return this.values.has(token);
+  }
+}
+
+class FakeElement {
+  public readonly tagName: string;
+  public readonly children: Array<FakeElement | string> = [];
+  public readonly classList = new FakeClassList();
+  public readonly style: Record<string, string> = {};
+  public className = "";
+  public textContent = "";
+  public title = "";
+  public value = "";
+  public type = "";
+  public checked = false;
+  public hidden = false;
+  public disabled = false;
+  public tabIndex = 0;
+  public scrollLeft = 0;
+  public scrollTop = 0;
+  private readonly attributes = new Map<string, string>();
+  private readonly listeners = new Map<string, FakeListener[]>();
+  private html = "";
+
+  public constructor(tagName: string) {
+    this.tagName = tagName;
+  }
+
+  public get childElementCount(): number {
+    return this.children.filter((child) => child instanceof FakeElement).length;
+  }
+
+  public get innerHTML(): string {
+    return this.html;
+  }
+
+  public set innerHTML(value: string) {
+    this.html = value;
+    if (value === "") {
+      this.children.splice(0, this.children.length);
+    }
+  }
+
+  public append(...children: Array<FakeElement | string>): void {
+    this.children.push(...children);
+  }
+
+  public appendChild(child: FakeElement): FakeElement {
+    this.children.push(child);
+    return child;
+  }
+
+  public setAttribute(name: string, value: string): void {
+    this.attributes.set(name, value);
+  }
+
+  public getAttribute(name: string): string | undefined {
+    return this.attributes.get(name);
+  }
+
+  public addEventListener(type: string, listener: FakeListener): void {
+    const listeners = this.listeners.get(type) ?? [];
+    listeners.push(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  public dispatch(type: string, key?: string): void {
+    for (const listener of this.listeners.get(type) ?? []) {
+      listener(new FakeEvent(this, key));
+    }
+  }
+
+  public closest(selector: string): FakeElement | null {
+    if (!selector.startsWith(".")) return null;
+    const className = selector.slice(1);
+    return this.className.split(/\s+/).includes(className) || this.classList.contains(className)
+      ? this
+      : null;
+  }
+
+  public scrollTo(position: { left?: number; top?: number }): void {
+    this.scrollLeft = position.left ?? this.scrollLeft;
+    this.scrollTop = position.top ?? this.scrollTop;
+  }
+
+  public setPointerCapture(): void {
+    // Test harness no-op.
+  }
+
+  public releasePointerCapture(): void {
+    // Test harness no-op.
+  }
+}
+
+class FakeDocument {
+  private readonly elements = new Map<string, FakeElement>();
+
+  public constructor(html: string) {
+    for (const match of html.matchAll(/\sid="([^"]+)"/g)) {
+      this.elements.set(match[1], new FakeElement("div"));
+    }
+  }
+
+  public getElementById(id: string): FakeElement {
+    let element = this.elements.get(id);
+    if (!element) {
+      element = new FakeElement("div");
+      this.elements.set(id, element);
+    }
+    return element;
+  }
+
+  public createElement(tagName: string): FakeElement {
+    return new FakeElement(tagName);
+  }
+
+  public createElementNS(_namespace: string, tagName: string): FakeElement {
+    return new FakeElement(tagName);
+  }
+}
+
+class FakeWindow {
+  private readonly listeners = new Map<string, ((event: { data: unknown }) => void)[]>();
+
+  public addEventListener(type: string, listener: (event: { data: unknown }) => void): void {
+    const listeners = this.listeners.get(type) ?? [];
+    listeners.push(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  public postMessage(data: unknown): void {
+    for (const listener of this.listeners.get("message") ?? []) {
+      listener({ data });
+    }
+  }
 }
 
 /**

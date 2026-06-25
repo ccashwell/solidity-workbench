@@ -2491,7 +2491,9 @@ export class ProjectGraphExporter {
       const cx = Math.max(40, Math.abs(tx - sx) * 0.45);
       path.setAttribute("d", "M" + sx + "," + sy + " C" + (sx + cx) + "," + sy + " " + (tx - cx) + "," + ty + " " + tx + "," + ty);
       path.setAttribute("marker-end", "url(#arrow)");
-      path.append(document.createElementNS("http://www.w3.org/2000/svg", "title")).textContent = edge.kind + " · " + edgeQualityLabel(edge);
+      const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+      title.textContent = edge.kind + " · " + edgeQualityLabel(edge);
+      path.append(title);
       svg.append(path);
     }
 
