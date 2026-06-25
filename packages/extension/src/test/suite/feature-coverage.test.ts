@@ -7,8 +7,15 @@ import type { ProjectGraphResult, ProjectGraphStatsResult } from "@solidity-work
 import {
   ProjectGraphExporter,
   PROJECT_GRAPH_CALLER_TARGET_NODE_KINDS,
+  PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT,
+  PROJECT_GRAPH_MAX_RENDERED_NODE_LIMIT,
+  PROJECT_GRAPH_RENDER_NODE_LIMIT_STEP,
+  expandProjectGraphRenderedNodeLimit,
+  normalizeProjectGraphRenderedNodeLimit,
+  projectGraphRenderedNodeState,
   projectGraphQueryMissLabel,
   projectGraphQueryTargetKinds,
+  projectGraphShowMoreControlState,
   PROJECT_GRAPH_CALLABLE_NODE_KINDS,
   serializeProjectGraphForExport,
   summarizeProjectGraphEdgeQuality,
@@ -522,6 +529,74 @@ describe("Feature coverage — project graph export", () => {
       "Project graph callees queries require a function, constructor, receive/fallback, or modifier target.",
     );
     assert.equal(projectGraphQueryMissLabel("impact"), "No project graph query target found.");
+  });
+
+  it("computes project graph render cap state", () => {
+    assert.equal(
+      normalizeProjectGraphRenderedNodeLimit(undefined),
+      PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT,
+    );
+    assert.equal(
+      normalizeProjectGraphRenderedNodeLimit(1),
+      PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT,
+    );
+    assert.equal(
+      normalizeProjectGraphRenderedNodeLimit(PROJECT_GRAPH_MAX_RENDERED_NODE_LIMIT + 1),
+      PROJECT_GRAPH_MAX_RENDERED_NODE_LIMIT,
+    );
+    assert.equal(
+      expandProjectGraphRenderedNodeLimit(PROJECT_GRAPH_MAX_RENDERED_NODE_LIMIT),
+      PROJECT_GRAPH_MAX_RENDERED_NODE_LIMIT,
+    );
+    assert.equal(
+      expandProjectGraphRenderedNodeLimit(PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT),
+      PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT + PROJECT_GRAPH_RENDER_NODE_LIMIT_STEP,
+    );
+
+    const ids = Array.from({ length: PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT + 7 }, (_, i) =>
+      String(i),
+    );
+    const capped = projectGraphRenderedNodeState(ids, PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT);
+    assert.equal(capped.ids.length, PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT);
+    assert.equal(capped.candidateCount, ids.length);
+    assert.equal(capped.hiddenCount, 7);
+
+    assert.deepEqual(
+      projectGraphShowMoreControlState(0, PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT),
+      {
+        hidden: true,
+        disabled: false,
+        text: "More +0",
+        title: "Render 0 more hidden graph nodes",
+      },
+    );
+    assert.deepEqual(
+      projectGraphShowMoreControlState(7, PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT),
+      {
+        hidden: false,
+        disabled: false,
+        text: "More +7",
+        title: "Render 7 more hidden graph nodes",
+      },
+    );
+    assert.deepEqual(
+      projectGraphShowMoreControlState(
+        PROJECT_GRAPH_RENDER_NODE_LIMIT_STEP + 7,
+        PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT,
+      ),
+      {
+        hidden: false,
+        disabled: false,
+        text: `More +${PROJECT_GRAPH_RENDER_NODE_LIMIT_STEP}`,
+        title: `Render ${PROJECT_GRAPH_RENDER_NODE_LIMIT_STEP} more hidden graph nodes`,
+      },
+    );
+    assert.deepEqual(projectGraphShowMoreControlState(7, PROJECT_GRAPH_MAX_RENDERED_NODE_LIMIT), {
+      hidden: false,
+      disabled: true,
+      text: "Max",
+      title: "Maximum rendered node limit reached; narrow the graph with filters",
+    });
   });
 
   it("summarizes project graph edge quality", () => {

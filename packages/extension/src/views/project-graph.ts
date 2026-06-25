@@ -49,6 +49,9 @@ const EDGE_KIND_ITEMS: { label: ProjectGraphEdgeKind; description: string }[] = 
 type ProjectGraphExportFormat = "json" | "dot" | "graphml" | "codegraph-json";
 
 const INTERACTIVE_GRAPH_NODE_LIMIT = 750;
+export const PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT = 240;
+export const PROJECT_GRAPH_RENDER_NODE_LIMIT_STEP = 240;
+export const PROJECT_GRAPH_MAX_RENDERED_NODE_LIMIT = 2400;
 const RESOLUTION_CONFIDENCE_VALUES: ProjectGraphResolutionConfidence[] = [
   "solc",
   "parser",
@@ -94,6 +97,69 @@ export function projectGraphQueryMissLabel(
     : kind === "callers"
       ? "No project graph callers target found."
       : "No callable project graph query target found.";
+}
+
+export function normalizeProjectGraphRenderedNodeLimit(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT;
+  }
+  return Math.max(
+    PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT,
+    Math.min(PROJECT_GRAPH_MAX_RENDERED_NODE_LIMIT, value),
+  );
+}
+
+export function expandProjectGraphRenderedNodeLimit(current: number): number {
+  return Math.min(
+    PROJECT_GRAPH_MAX_RENDERED_NODE_LIMIT,
+    normalizeProjectGraphRenderedNodeLimit(current) + PROJECT_GRAPH_RENDER_NODE_LIMIT_STEP,
+  );
+}
+
+export interface ProjectGraphRenderedNodeState {
+  ids: string[];
+  candidateCount: number;
+  hiddenCount: number;
+}
+
+export function projectGraphRenderedNodeState(
+  nodeIds: string[],
+  renderedNodeLimit: number,
+): ProjectGraphRenderedNodeState {
+  const limit = normalizeProjectGraphRenderedNodeLimit(renderedNodeLimit);
+  const ids = nodeIds.slice(0, limit);
+  return {
+    ids,
+    candidateCount: nodeIds.length,
+    hiddenCount: Math.max(0, nodeIds.length - ids.length),
+  };
+}
+
+export interface ProjectGraphShowMoreControlState {
+  hidden: boolean;
+  disabled: boolean;
+  text: string;
+  title: string;
+}
+
+export function projectGraphShowMoreControlState(
+  hiddenCount: number,
+  renderedNodeLimit: number,
+): ProjectGraphShowMoreControlState {
+  const hidden = hiddenCount <= 0;
+  const disabled =
+    !hidden &&
+    normalizeProjectGraphRenderedNodeLimit(renderedNodeLimit) >=
+      PROJECT_GRAPH_MAX_RENDERED_NODE_LIMIT;
+  const increment = Math.min(PROJECT_GRAPH_RENDER_NODE_LIMIT_STEP, Math.max(0, hiddenCount));
+  return {
+    hidden,
+    disabled,
+    text: disabled ? "Max" : "More +" + increment,
+    title: disabled
+      ? "Maximum rendered node limit reached; narrow the graph with filters"
+      : "Render " + increment + " more hidden graph nodes",
+  };
 }
 
 interface ExportGraphNode {
@@ -1739,9 +1805,9 @@ export class ProjectGraphExporter {
   let quality = typeof persisted.quality === "string" && qualityValues.has(persisted.quality) ? persisted.quality : "all";
   let zoom = typeof persisted.zoom === "number" ? Math.max(0.45, Math.min(1.8, persisted.zoom)) : 1;
   let pathMode = Boolean(persisted.pathMode);
-  const defaultRenderedNodeLimit = 240;
-  const renderNodeLimitStep = 240;
-  const maxRenderedNodeLimit = 2400;
+  const defaultRenderedNodeLimit = ${PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT};
+  const renderNodeLimitStep = ${PROJECT_GRAPH_RENDER_NODE_LIMIT_STEP};
+  const maxRenderedNodeLimit = ${PROJECT_GRAPH_MAX_RENDERED_NODE_LIMIT};
   let renderedNodeLimit = typeof persisted.renderedNodeLimit === "number"
     ? Math.max(defaultRenderedNodeLimit, Math.min(maxRenderedNodeLimit, persisted.renderedNodeLimit))
     : defaultRenderedNodeLimit;
