@@ -341,7 +341,12 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   documentHighlightProvider = new DocumentHighlightProvider(symbolIndex, parser);
   foldingRangesProvider = new FoldingRangesProvider(parser);
   selectionRangesProvider = new SelectionRangesProvider(parser);
-  documentLinksProvider = new DocumentLinksProvider(parser, workspaceManager);
+  documentLinksProvider = new DocumentLinksProvider(
+    parser,
+    workspaceManager,
+    symbolIndex,
+    semanticResolver,
+  );
   implementationProvider = new ImplementationProvider(symbolIndex, semanticResolver);
   inheritanceGraphProvider = new InheritanceGraphProvider(
     parser,

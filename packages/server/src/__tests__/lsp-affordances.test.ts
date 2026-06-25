@@ -65,7 +65,7 @@ function setupFiles(files: Record<string, string>) {
   }
 
   const resolver = new SemanticResolver(parser, workspace, idx);
-  return { docs, parser, idx, resolver };
+  return { docs, parser, idx, resolver, workspace };
 }
 
 describe("additional LSP affordance providers", () => {
@@ -113,6 +113,72 @@ contract C {}`;
     assert.equal(links[0].target, "file:///w/Token.sol");
     assert.equal(links[0].range.start.line, 1);
     assert.equal(links[0].range.start.character, text.split("\n")[1].indexOf("./Token.sol"));
+  });
+
+  it("turns braced NatSpec symbol references into document links", () => {
+    const files = {
+      "src/Types.sol": `pragma solidity ^0.8.24;
+contract PoolVault {}
+`,
+      "src/InventoryLib.sol": `pragma solidity ^0.8.24;
+import "./Types.sol";
+
+/// @notice Accounting helper for {PoolVault}; claims are redeemed via {redeemClaims}.
+/// Unknown refs like {doesNotExist} stay plain text.
+library InventoryLib {
+    function redeemClaims() internal {}
+}
+`,
+    };
+    const { docs, parser, idx, resolver, workspace } = setupFiles(files);
+    const doc = docs["src/InventoryLib.sol"];
+
+    const links = new DocumentLinksProvider(parser, workspace, idx, resolver).provideDocumentLinks(
+      doc,
+    );
+    const poolVault = links.find((link) => link.tooltip === "Open PoolVault");
+    const redeemClaims = links.find((link) => link.tooltip === "Open InventoryLib.redeemClaims");
+
+    assert.ok(poolVault, "expected PoolVault NatSpec document link");
+    assert.equal(poolVault.target, "file:///w/src/Types.sol#L2,10");
+    assert.equal(poolVault.range.start.line, 3);
+    assert.equal(
+      poolVault.range.start.character,
+      files["src/InventoryLib.sol"].split("\n")[3].indexOf("{PoolVault}"),
+    );
+
+    assert.ok(redeemClaims, "expected redeemClaims NatSpec document link");
+    assert.equal(redeemClaims.target, "file:///w/src/InventoryLib.sol#L7,14");
+    assert.equal(redeemClaims.range.start.line, 3);
+    assert.equal(
+      redeemClaims.range.start.character,
+      files["src/InventoryLib.sol"].split("\n")[3].indexOf("{redeemClaims}"),
+    );
+    assert.equal(
+      links.some((link) => link.tooltip?.includes("doesNotExist")),
+      false,
+      "unknown braced NatSpec text should not become a link",
+    );
+  });
+
+  it("turns braced references in block NatSpec into document links", () => {
+    const text = `pragma solidity ^0.8.24;
+
+/**
+ * @notice See {redeemClaims}.
+ */
+library InventoryLib {
+    function redeemClaims() internal {}
+}
+`;
+    const { doc, parser, idx, workspace } = setup(text, "file:///w/InventoryLib.sol");
+
+    const links = new DocumentLinksProvider(parser, workspace, idx).provideDocumentLinks(doc);
+
+    assert.equal(links.length, 1);
+    assert.equal(links[0].target, "file:///w/InventoryLib.sol#L7,14");
+    assert.equal(links[0].range.start.line, 3);
+    assert.equal(links[0].range.start.character, text.split("\n")[3].indexOf("{redeemClaims}"));
   });
 
   it("builds selection ranges from word to declaration to document", () => {
