@@ -1528,7 +1528,10 @@ export class ProjectGraphExporter {
 
   private async applyServerStateToProjectGraph(state: ServerStateParams): Promise<void> {
     if (!this.panel) return;
-    if (state.phase === "indexing") {
+    if (
+      state.phase === "indexing" &&
+      (state.scope === undefined || state.scope === "graph-relationships")
+    ) {
       this.projectGraphIndexingVisible = true;
       const indexed = Math.max(0, state.filesIndexed);
       const total = Math.max(0, state.filesTotal);
@@ -1536,7 +1539,11 @@ export class ProjectGraphExporter {
       await this.postProjectGraphStatus(`Indexing project graph relationships${suffix}...`);
       return;
     }
-    if (state.phase === "idle" && this.projectGraphIndexingVisible) {
+    if (
+      state.phase === "idle" &&
+      this.projectGraphIndexingVisible &&
+      (state.scope === undefined || state.scope === "graph-relationships")
+    ) {
       this.projectGraphIndexingVisible = false;
       await this.postProjectGraphStatus("Project graph indexing complete.");
     }

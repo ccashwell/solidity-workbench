@@ -20,7 +20,7 @@ import { URI } from "vscode-uri";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import * as os from "node:os";
-import { WorkspaceManager } from "./workspace/workspace-manager.js";
+import { WorkspaceManager, type FileTier } from "./workspace/workspace-manager.js";
 import { SolidityParser } from "./parser/solidity-parser.js";
 import { ParserPool } from "./parser/parser-pool.js";
 import { SymbolIndex } from "./analyzer/symbol-index.js";
@@ -155,6 +155,64 @@ function pushServerState(params: ServerStateParams): void {
   connection.sendNotification(ServerStateNotification, params);
 }
 
+function blockingSymbolIndexTiers(): FileTier[] {
+  return graphDependencyIndexingMode() === "disabled"
+    ? ["project", "tests"]
+    : ["project", "tests", "deps"];
+}
+
+function tierFileCount(tiers: FileTier[]): number {
+  const byTier = workspaceManager.getFileUrisByTier();
+  return tiers.reduce((total, tier) => total + byTier[tier].length, 0);
+}
+
+async function indexBlockingWorkspaceSymbols(): Promise<void> {
+  const tiers = blockingSymbolIndexTiers();
+  pushServerState({
+    phase: "indexing",
+    scope: "workspace",
+    filesIndexed: 0,
+    filesTotal: tierFileCount(tiers),
+  });
+  await symbolIndex.indexWorkspace(
+    (filesIndexed, filesTotal) => {
+      pushServerState({ phase: "indexing", scope: "workspace", filesIndexed, filesTotal });
+    },
+    { tiers },
+  );
+}
+
+function scheduleDependencySymbolIndex(): void {
+  if (blockingSymbolIndexTiers().includes("deps")) return;
+  const depsTotal = workspaceManager.getFileUrisByTier().deps.length;
+  if (depsTotal === 0) return;
+
+  void (async () => {
+    try {
+      await symbolIndex.indexWorkspace(
+        (filesIndexed, filesTotal) => {
+          pushServerState({
+            phase: "indexing",
+            scope: "dependencies",
+            filesIndexed,
+            filesTotal,
+          });
+        },
+        { tiers: ["deps"], skipIndexed: true },
+      );
+    } catch (err) {
+      connection.console.warn(`Background dependency indexing failed: ${err}`);
+    } finally {
+      pushServerState({
+        phase: "idle",
+        scope: "dependencies",
+        rootCount: workspaceManager.rootCount,
+        fileCount: workspaceManager.getAllFileUris().length,
+      });
+    }
+  })();
+}
+
 function cancelGraphRelationshipIndex(): void {
   graphRelationshipIndexGeneration++;
   if (graphRelationshipIndexTimer) {
@@ -175,6 +233,7 @@ function scheduleGraphRelationshipIndex(): void {
     batchesSinceCacheWrite++;
     pushServerState({
       phase: "indexing",
+      scope: "graph-relationships",
       filesIndexed: batch.filesIndexed,
       filesTotal: batch.filesTotal,
     });
@@ -184,6 +243,7 @@ function scheduleGraphRelationshipIndex(): void {
       graphIndex.writeCache(graphCacheDir);
       pushServerState({
         phase: "idle",
+        scope: "graph-relationships",
         rootCount: workspaceManager.rootCount,
         fileCount: workspaceManager.getAllFileUris().length,
       });
@@ -210,6 +270,7 @@ async function drainGraphRelationshipIndexForQuery(token?: CancellationToken): P
   batchesSinceCacheWrite++;
   pushServerState({
     phase: "indexing",
+    scope: "graph-relationships",
     filesIndexed: batch.filesIndexed,
     filesTotal: batch.filesTotal,
   });
@@ -226,6 +287,7 @@ async function drainGraphRelationshipIndexForQuery(token?: CancellationToken): P
     batchesSinceCacheWrite++;
     pushServerState({
       phase: "indexing",
+      scope: "graph-relationships",
       filesIndexed: batch.filesIndexed,
       filesTotal: batch.filesTotal,
     });
@@ -240,6 +302,7 @@ async function drainGraphRelationshipIndexForQuery(token?: CancellationToken): P
   graphIndex.writeCache(graphCacheDir);
   pushServerState({
     phase: "idle",
+    scope: "graph-relationships",
     rootCount: workspaceManager.rootCount,
     fileCount: workspaceManager.getAllFileUris().length,
   });
@@ -459,23 +522,17 @@ connection.onInitialized(async () => {
   if (graphRestored) {
     connection.console.log("Project graph restored from cache");
   }
-  pushServerState({
-    phase: "indexing",
-    filesIndexed: 0,
-    filesTotal: workspaceManager.getAllFileUris().length,
-  });
-
-  await symbolIndex.indexWorkspace((filesIndexed, filesTotal) => {
-    pushServerState({ phase: "indexing", filesIndexed, filesTotal });
-  });
+  await indexBlockingWorkspaceSymbols();
   graphIndex.ensureWorkspaceDeclarations();
   graphIndex.writeCache(graphCacheDir);
   if (!graphIndex.isRelationshipIndexComplete() && shouldRunBackgroundGraphRelationshipIndex()) {
     scheduleGraphRelationshipIndex();
   }
+  scheduleDependencySymbolIndex();
 
   pushServerState({
     phase: "idle",
+    scope: "workspace",
     rootCount: workspaceManager.rootCount,
     fileCount: workspaceManager.getAllFileUris().length,
   });
@@ -534,11 +591,12 @@ async function handleWorkspaceFoldersChanged(event: WorkspaceFoldersChangeEvent)
   }
 
   // Rebuild the symbol + reference index over the new root set.
-  await symbolIndex.indexWorkspace();
+  await indexBlockingWorkspaceSymbols();
   cancelGraphRelationshipIndex();
   graphIndex.rebuildWorkspaceDeclarations();
   graphIndex.writeCache(graphCacheDir);
   if (shouldRunBackgroundGraphRelationshipIndex()) scheduleGraphRelationshipIndex();
+  scheduleDependencySymbolIndex();
 }
 
 // ── File System Watching ────────────────────────────────────────────
@@ -571,11 +629,12 @@ connection.onDidChangeWatchedFiles(async (params) => {
     connection.console.log("foundry.toml or remappings.txt changed — reloading workspace");
     await workspaceManager.initialize();
     semanticResolver.invalidate();
-    await symbolIndex.indexWorkspace();
+    await indexBlockingWorkspaceSymbols();
     cancelGraphRelationshipIndex();
     graphIndex.rebuildWorkspaceDeclarations();
     graphIndex.writeCache(graphCacheDir);
     if (shouldRunBackgroundGraphRelationshipIndex()) scheduleGraphRelationshipIndex();
+    scheduleDependencySymbolIndex();
     return;
   }
 

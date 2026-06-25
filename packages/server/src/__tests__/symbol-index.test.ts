@@ -532,6 +532,68 @@ contract DiskOnly {
       fs.rmSync(tmp, { recursive: true, force: true });
     });
 
+    it("can index only selected workspace tiers", async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "solidx-tier-filter-"));
+      const writeContract = (name: string): string => {
+        const filePath = path.join(tmp, `${name}.sol`);
+        fs.writeFileSync(filePath, `contract ${name} {}`);
+        return URI.file(filePath).toString();
+      };
+
+      const projectUri = writeContract("ProjectOnly");
+      const testsUri = writeContract("TestOnly");
+      const depsUri = writeContract("DependencyOnly");
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(
+        parser,
+        makeTieredWorkspace({ project: [projectUri], tests: [testsUri], deps: [depsUri] }),
+      );
+
+      await idx.indexWorkspace(undefined, { tiers: ["project", "tests"] });
+      assert.equal(idx.findSymbols("ProjectOnly").length, 1);
+      assert.equal(idx.findSymbols("TestOnly").length, 1);
+      assert.equal(
+        idx.findSymbols("DependencyOnly").length,
+        0,
+        "dependency symbols should wait for dependency-tier indexing",
+      );
+
+      await idx.indexWorkspace(undefined, { tiers: ["deps"] });
+      assert.equal(idx.findSymbols("DependencyOnly").length, 1);
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
+    it("can skip files already indexed by on-demand import resolution", async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "solidx-tier-skip-"));
+      const depPath = path.join(tmp, "Dep.sol");
+      fs.writeFileSync(depPath, `contract IndexedDep {}`);
+      const depUri = URI.file(depPath).toString();
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(
+        parser,
+        makeTieredWorkspace({ project: [], tests: [], deps: [depUri] }),
+      );
+
+      await idx.indexWorkspace(undefined, { tiers: ["deps"] });
+      assert.equal(idx.findSymbols("IndexedDep").length, 1);
+
+      fs.writeFileSync(depPath, `contract ReparsedDep {}`);
+      await idx.indexWorkspace(undefined, { tiers: ["deps"], skipIndexed: true });
+      assert.equal(
+        idx.findSymbols("ReparsedDep").length,
+        0,
+        "skipIndexed should not reparse files that are already in the symbol index",
+      );
+      assert.equal(idx.findSymbols("IndexedDep").length, 1);
+
+      await idx.indexWorkspace(undefined, { tiers: ["deps"] });
+      assert.equal(idx.findSymbols("ReparsedDep").length, 1);
+      assert.equal(idx.findSymbols("IndexedDep").length, 0);
+
+      fs.rmSync(tmp, { recursive: true, force: true });
+    });
+
     it("invokes reportProgress with a final (total, total) call", async () => {
       const parser = new SolidityParser();
       const idx = new SymbolIndex(

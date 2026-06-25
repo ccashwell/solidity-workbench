@@ -164,6 +164,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Unqualified braced NatSpec references on contract, interface, or library
   documentation now prefer members of the documented type before same-name
   visible symbols elsewhere.
+- Server startup now indexes project and test symbols before reporting idle
+  when Project Graph dependencies are disabled, then continues dependency
+  symbol indexing in the background so large `lib/` trees do not block the
+  initial language experience.
 - Project Graph snapshots and search edge previews now drop edges whose source
   or target node is hidden by the current scope or absent because dependency
   declarations were not indexed.

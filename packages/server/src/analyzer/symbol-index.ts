@@ -11,7 +11,7 @@ import type {
   EnumDefinition,
 } from "@solidity-workbench/common";
 import type { SolidityParser } from "../parser/solidity-parser.js";
-import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import type { FileTier, WorkspaceManager } from "../workspace/workspace-manager.js";
 import { ReferenceIndex } from "./reference-index.js";
 import { TrigramIndex, scoreName } from "./trigram-index.js";
 
@@ -25,6 +25,11 @@ const INDEX_BATCH_SIZE = 24;
  *  `filesIndexed` is monotonically non-decreasing and capped at
  *  `filesTotal`. */
 export type IndexProgressReporter = (filesIndexed: number, filesTotal: number) => void;
+
+export interface IndexWorkspaceOptions {
+  tiers?: FileTier[];
+  skipIndexed?: boolean;
+}
 
 /**
  * Maintains a cross-file symbol index for the workspace.
@@ -86,17 +91,28 @@ export class SymbolIndex {
    * If the workspace stub doesn't expose `getFileUrisByTier` (older
    * test fakes) we fall back to the flat URI list with no priority.
    */
-  async indexWorkspace(reportProgress?: IndexProgressReporter): Promise<void> {
+  async indexWorkspace(
+    reportProgress?: IndexProgressReporter,
+    options: IndexWorkspaceOptions = {},
+  ): Promise<void> {
     const tieredFn = (this.workspace as Partial<WorkspaceManager>).getFileUrisByTier;
     const ordered = tieredFn
       ? (() => {
           const t = tieredFn.call(this.workspace);
-          return [...t.project, ...t.tests, ...t.deps];
+          const requested = new Set(options.tiers ?? ["project", "tests", "deps"]);
+          const out: string[] = [];
+          if (requested.has("project")) out.push(...t.project);
+          if (requested.has("tests")) out.push(...t.tests);
+          if (requested.has("deps")) out.push(...t.deps);
+          return out;
         })()
       : this.workspace.getAllFileUris();
 
-    const total = ordered.length;
-    this.pending = new Set(ordered);
+    const queued = options.skipIndexed
+      ? ordered.filter((uri) => !this.symbolsByFile.has(uri))
+      : ordered;
+    const total = queued.length;
+    this.pending = new Set(queued);
     if (total === 0) {
       reportProgress?.(0, 0);
       return;

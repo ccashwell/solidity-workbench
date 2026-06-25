@@ -53,12 +53,14 @@ export const ServerStateNotification = "solidity-workbench/serverState";
 
 export type ServerStateIndexing = {
   phase: "indexing";
+  scope?: "workspace" | "dependencies" | "graph-relationships";
   filesIndexed: number;
   filesTotal: number;
 };
 
 export type ServerStateIdle = {
   phase: "idle";
+  scope?: "workspace" | "dependencies" | "graph-relationships";
   rootCount: number;
   fileCount: number;
 };
