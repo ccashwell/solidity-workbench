@@ -553,6 +553,67 @@ contract MockERC4626 {
         assert.ok(convert, "expected convertToAssets outgoing call");
         assert.equal(convert.to.detail, "IERC4626");
         assert.notEqual(convert.to.detail, "MockERC4626");
+
+        const resolver = new SemanticResolver(
+          erc4626.parser,
+          erc4626.workspace,
+          erc4626.symbolIndex,
+        );
+        const graphIndex = new GraphIndex(
+          erc4626.parser,
+          erc4626.workspace,
+          resolver,
+          erc4626.symbolIndex,
+        );
+        graphIndex.rebuildWorkspace();
+        const graphBackedProvider = new CallHierarchyProvider(
+          erc4626.symbolIndex,
+          erc4626.workspace,
+          erc4626.parser,
+          resolver,
+          graphIndex,
+        );
+
+        const graphAssetCalls = await graphBackedProvider.getOutgoingCalls({
+          name: "_assetBalanceV4",
+          kind: SymbolKind.Function,
+          uri: poolVaultUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "PoolVault",
+        });
+        const graphConvert = graphAssetCalls.find((call) => call.to.name === "convertToAssets");
+        assert.ok(graphConvert, "expected graph-backed convertToAssets outgoing call");
+        assert.equal(graphConvert.to.detail, "IERC4626");
+        assert.notEqual(graphConvert.to.detail, "MockERC4626");
+
+        const interfaceUri = URI.file(path.join(erc4626.tmpDir, "src/IERC4626.sol")).toString();
+        const graphConvertCallers = await graphBackedProvider.getIncomingCalls({
+          name: "convertToAssets",
+          kind: SymbolKind.Function,
+          uri: interfaceUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "IERC4626",
+        });
+        assert.ok(
+          graphConvertCallers.some((call) => call.from.name === "_assetBalanceV4"),
+          "expected graph-backed callers of IERC4626.convertToAssets to include _assetBalanceV4",
+        );
+
+        const mockUri = URI.file(path.join(erc4626.tmpDir, "test/MockERC4626.sol")).toString();
+        const mockConvertCallers = await graphBackedProvider.getIncomingCalls({
+          name: "convertToAssets",
+          kind: SymbolKind.Function,
+          uri: mockUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "MockERC4626",
+        });
+        assert.ok(
+          mockConvertCallers.every((call) => call.from.name !== "_assetBalanceV4"),
+          "did not expect graph-backed callers of MockERC4626.convertToAssets to include _assetBalanceV4",
+        );
       } finally {
         teardownFixture(erc4626);
       }
