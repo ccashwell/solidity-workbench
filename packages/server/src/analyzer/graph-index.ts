@@ -4739,7 +4739,10 @@ function normalizeGraphDeclarationSignatureParam(value: string): string {
       ? tokens.slice(0, -1)
       : tokens;
   return withoutName
-    .filter((token) => token !== "memory" && token !== "storage" && token !== "calldata")
+    .filter(
+      (token) =>
+        token !== "memory" && token !== "storage" && token !== "calldata" && token !== "indexed",
+    )
     .join("")
     .replace(/\s+/g, "")
     .toLowerCase();

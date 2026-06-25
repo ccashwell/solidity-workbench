@@ -166,6 +166,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph callers queries now resolve exact event and custom-error
   signatures, such as `Vault.Deposit(address,uint256)`, instead of limiting
   signature lookup to functions.
+- Project Graph event signature queries now treat `indexed` as event metadata,
+  so canonical searches like `FileClaimed(address,uint256)` match declarations
+  written as `event FileClaimed(address indexed account, uint256 amount)`.
 - Document formatting now bounds `forge fmt` execution time so a stalled
   formatter process cannot hang the editor formatting request.
 - Live Project Graph updates now refresh declarations and dependents

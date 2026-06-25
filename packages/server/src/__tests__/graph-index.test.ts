@@ -738,6 +738,22 @@ event FileClaimed(address indexed account, uint256 amount);
         graph.getOutgoingEdges(`file:${uri}`, "contains").some((edge) => edge.target === event.id),
         "expected file node to contain the file-level event",
       );
+
+      const canonicalSignature = graph.query({
+        kind: "callers",
+        query: "FileClaimed(address,uint256)",
+        targetKinds: ["event"],
+      });
+      assert.equal(canonicalSignature.found, true);
+      assert.equal(canonicalSignature.targetId, event.id);
+
+      const displaySignature = graph.query({
+        kind: "callers",
+        query: "FileClaimed(address indexed account, uint256 amount)",
+        targetKinds: ["event"],
+      });
+      assert.equal(displaySignature.found, true);
+      assert.equal(displaySignature.targetId, event.id);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
