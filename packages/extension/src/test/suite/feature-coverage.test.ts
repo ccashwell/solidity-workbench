@@ -11,6 +11,7 @@ import {
   PROJECT_GRAPH_CALLABLE_NODE_KINDS,
   serializeProjectGraphForExport,
   summarizeProjectGraphEdgeQuality,
+  summarizeProjectGraphResultDiagnostics,
   summarizeProjectGraphRelationshipStatus,
 } from "../../views/project-graph";
 
@@ -382,8 +383,11 @@ describe("Feature coverage — project graph export", () => {
     assert.match(html, /id="serverSearch"/);
     assert.match(html, /id="serverQueryKind"/);
     assert.match(html, /id="serverQuery"/);
+    assert.match(html, /id="resultBanner"/);
     assert.match(html, /type: "searchGraph"/);
     assert.match(html, /type: "queryGraph"/);
+    assert.match(html, /resultDiagnosticsText/);
+    assert.match(html, /message\.resultDiagnostics/);
     assert.match(html, /message\.clearQuery === true/);
   });
 
@@ -428,6 +432,42 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(status.unresolved, 1);
     assert.match(status.label, /1\/4 solc/);
     assert.match(status.detail, /unresolved=1/);
+  });
+
+  it("summarizes project graph result diagnostics", () => {
+    assert.equal(summarizeProjectGraphResultDiagnostics(), undefined);
+
+    const diagnostics = summarizeProjectGraphResultDiagnostics({
+      truncated: true,
+      indexStatus: {
+        relationshipIndexComplete: false,
+        relationshipFilesIndexed: 2,
+        relationshipFilesTotal: 5,
+        pendingRelationshipFiles: 3,
+        partial: true,
+      },
+      edgeQuality: {
+        edgesByResolutionConfidence: { parser: 1, heuristic: 1 },
+        lowConfidenceEdgeCount: 1,
+        unresolvedEdgeCount: 1,
+      },
+    });
+
+    assert.equal(diagnostics?.state, "partial");
+    assert.equal(diagnostics?.label, "Partial graph result");
+    assert.match(diagnostics?.detail ?? "", /truncated/);
+    assert.match(diagnostics?.detail ?? "", /2\/5 relationship files indexed/);
+    assert.match(diagnostics?.detail ?? "", /1 low-confidence edge/);
+
+    const warning = summarizeProjectGraphResultDiagnostics({
+      edgeQuality: {
+        edgesByResolutionConfidence: { heuristic: 1 },
+        lowConfidenceEdgeCount: 1,
+        unresolvedEdgeCount: 0,
+      },
+    });
+    assert.equal(warning?.state, "warning");
+    assert.equal(warning?.label, "Graph result needs review");
   });
 
   it("summarizes project graph relationship indexing status", () => {

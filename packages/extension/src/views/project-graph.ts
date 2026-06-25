@@ -115,6 +115,12 @@ export interface ProjectGraphEdgeQualityStatus {
   unresolved: number;
 }
 
+export interface ProjectGraphResultDiagnostics {
+  state: "ok" | "partial" | "warning";
+  label: string;
+  detail: string;
+}
+
 const EXPORT_FORMAT_ITEMS: {
   label: string;
   description: string;
@@ -205,6 +211,58 @@ export function summarizeProjectGraphEdgeQuality(
     `solc=${solc}, parser=${parser}, heuristic=${heuristic}, unknown=${unknown}` +
     (unresolved > 0 ? `, unresolved=${unresolved}` : ", unresolved=0");
   return { label, detail, counts, unresolved };
+}
+
+export function summarizeProjectGraphResultDiagnostics(result?: {
+  indexStatus?: ProjectGraphIndexStatus;
+  edgeQuality?: ProjectGraphEdgeQuality;
+  truncated?: boolean;
+}): ProjectGraphResultDiagnostics | undefined {
+  if (!result) return undefined;
+  const details: string[] = [];
+  let state: ProjectGraphResultDiagnostics["state"] = "ok";
+
+  if (result.truncated) {
+    state = "partial";
+    details.push("Result was truncated by the interactive node cap.");
+  }
+
+  const status = result.indexStatus;
+  if (status?.partial) {
+    state = "partial";
+    const indexed = status.relationshipFilesIndexed ?? 0;
+    const total = status.relationshipFilesTotal ?? 0;
+    const pending = status.pendingRelationshipFiles ?? Math.max(0, total - indexed);
+    const progress =
+      total > 0
+        ? `${indexed}/${total} relationship files indexed${pending > 0 ? `, ${pending} pending` : ""}`
+        : "relationship indexing is incomplete";
+    details.push(`Result may be incomplete: ${progress}.`);
+  }
+
+  const lowConfidence = result.edgeQuality?.lowConfidenceEdgeCount ?? 0;
+  const unresolved = result.edgeQuality?.unresolvedEdgeCount ?? 0;
+  if (lowConfidence > 0) {
+    if (state === "ok") state = "warning";
+    const lowConfidenceEdges = `${lowConfidence} low-confidence ${lowConfidence === 1 ? "edge" : "edges"}`;
+    details.push(
+      unresolved > 0
+        ? `${lowConfidenceEdges}, including ${unresolved} unresolved ${unresolved === 1 ? "target" : "targets"}.`
+        : `${lowConfidenceEdges} ${lowConfidence === 1 ? "needs" : "need"} verification.`,
+    );
+  } else if (unresolved > 0) {
+    if (state === "ok") state = "warning";
+    details.push(
+      `${unresolved} unresolved edge ${unresolved === 1 ? "target needs" : "targets need"} verification.`,
+    );
+  }
+
+  if (details.length === 0) return undefined;
+  return {
+    state,
+    label: state === "partial" ? "Partial graph result" : "Graph result needs review",
+    detail: details.join(" "),
+  };
 }
 
 function projectGraphToJson(graph: ProjectGraphResult, stats?: ProjectGraphStatsResult): unknown {
@@ -585,6 +643,7 @@ export class ProjectGraphExporter {
               focusId: searchGraph.focusId,
               scope: "all",
               status: this.graphResultStatus(result, `Search: ${query}`),
+              resultDiagnostics: summarizeProjectGraphResultDiagnostics(result),
               clearQuery: true,
             });
           }
@@ -624,6 +683,7 @@ export class ProjectGraphExporter {
               focusId: result.targetId ?? result.focusId,
               scope: "all",
               status: this.graphResultStatus(result, this.graphQueryLabel(kind)),
+              resultDiagnostics: summarizeProjectGraphResultDiagnostics(result),
               clearQuery: true,
             });
           }
@@ -678,6 +738,7 @@ export class ProjectGraphExporter {
               stats,
               focusId: pathGraph.focusId,
               scope: "all",
+              resultDiagnostics: summarizeProjectGraphResultDiagnostics(pathGraph),
             });
           }
         }
@@ -1250,6 +1311,23 @@ export class ProjectGraphExporter {
   .status-banner.visible {
     display: block;
   }
+  .result-banner {
+    display: none;
+    padding: 7px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--vscode-editorWidget-background);
+    color: var(--fg);
+  }
+  .result-banner.visible {
+    display: block;
+  }
+  .result-banner.partial {
+    background: var(--vscode-inputValidation-warningBackground, var(--vscode-editorWidget-background));
+    color: var(--vscode-inputValidation-warningForeground, var(--fg));
+  }
+  .result-banner.warning {
+    color: var(--vscode-editorWarning-foreground, var(--fg));
+  }
   .spacer { flex: 1; }
   input[type="search"] {
     width: min(340px, 24vw);
@@ -1586,6 +1664,7 @@ export class ProjectGraphExporter {
     <button class="compact" id="clearCache" title="Clear graph cache and rebuild">⌫</button>
   </div>
   <div class="status-banner" id="statusBanner"></div>
+  <div class="result-banner" id="resultBanner"></div>
   <div class="content">
     <aside class="sidebar">
       <div class="edge-list" id="edgeList"></div>
@@ -1607,6 +1686,7 @@ export class ProjectGraphExporter {
   const qualityValues = new Set(["all", "solc", "parser", "heuristic", "unresolved", "unknown"]);
   let graph = payload.graph;
   let graphStats = payload.stats || null;
+  let resultDiagnostics = payload.resultDiagnostics || null;
   let activeId = persisted.activeId && graph.nodes.some((node) => node.id === persisted.activeId)
     ? persisted.activeId
     : payload.focusId || "";
@@ -1625,6 +1705,7 @@ export class ProjectGraphExporter {
   const stats = document.getElementById("stats");
   const readiness = document.getElementById("readiness");
   const statusBanner = document.getElementById("statusBanner");
+  const resultBanner = document.getElementById("resultBanner");
   const nodeList = document.getElementById("nodeList");
   const edgeList = document.getElementById("edgeList");
   const details = document.getElementById("details");
@@ -1661,9 +1742,10 @@ export class ProjectGraphExporter {
     return [node.name, node.qualifiedName, node.kind, node.containerName, node.filePath, node.tier].filter(Boolean).join(" ").toLowerCase();
   }
 
-  function setGraph(nextGraph, nextFocusId, nextScope, nextStats) {
+  function setGraph(nextGraph, nextFocusId, nextScope, nextStats, nextResultDiagnostics) {
     graph = nextGraph;
     graphStats = nextStats || graphStats;
+    resultDiagnostics = nextResultDiagnostics || null;
     nodesById = new Map(graph.nodes.map((node) => [node.id, node]));
     if (nextFocusId && nodesById.has(nextFocusId)) {
       activeId = nextFocusId;
@@ -1701,6 +1783,11 @@ export class ProjectGraphExporter {
       ? indexed + "/" + total + " files indexed" + (pending > 0 ? ", " + pending + " pending" : "")
       : "relationship indexing in progress";
     return progress + ". Focused neighborhoods force-index the active file, but full-workspace relationship edges may be partial. Use Rebuild to finish indexing now.";
+  }
+
+  function resultDiagnosticsText() {
+    if (!resultDiagnostics || !resultDiagnostics.detail) return "";
+    return resultDiagnostics.label + ": " + resultDiagnostics.detail;
   }
 
   function edgeQualityText() {
@@ -2103,6 +2190,17 @@ export class ProjectGraphExporter {
       : "Relationship edges are indexed.";
     statusBanner.textContent = relationshipStatusDetail();
     statusBanner.classList.toggle("visible", partialRelationships);
+    const diagnosticsText = resultDiagnosticsText();
+    resultBanner.textContent = diagnosticsText;
+    resultBanner.classList.toggle("visible", diagnosticsText.length > 0);
+    resultBanner.classList.toggle(
+      "partial",
+      Boolean(resultDiagnostics && resultDiagnostics.state === "partial"),
+    );
+    resultBanner.classList.toggle(
+      "warning",
+      Boolean(resultDiagnostics && resultDiagnostics.state === "warning"),
+    );
     zoomLabel.textContent = Math.round(zoom * 100) + "%";
     pathModeButton.classList.toggle("active", pathMode);
     saveUiState();
@@ -2212,7 +2310,7 @@ export class ProjectGraphExporter {
         query = "";
         search.value = "";
       }
-      setGraph(message.graph, message.focusId, message.scope, message.stats);
+      setGraph(message.graph, message.focusId, message.scope, message.stats, message.resultDiagnostics);
       if (typeof message.status === "string") setStatus(message.status);
       return;
     }

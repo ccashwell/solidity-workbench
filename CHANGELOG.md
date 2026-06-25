@@ -90,6 +90,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Project Graph webview now mirrors server relationship-indexing progress
   in its own status banner while it is open, including long callers/impact
   query drains.
+- Project Graph search and callers/callees/impact result sets now keep
+  per-result completeness and edge-quality diagnostics visible in the graph
+  panel.
 
 ### Fixed
 
