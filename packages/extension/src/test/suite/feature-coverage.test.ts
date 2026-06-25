@@ -4,11 +4,18 @@ import * as os from "node:os";
 import * as path from "node:path";
 import * as vm from "node:vm";
 import * as vscode from "vscode";
-import type {
-  FileCoverage,
-  InheritanceGraphResult,
-  ProjectGraphResult,
-  ProjectGraphStatsResult,
+import {
+  LineIndex,
+  buildPcToInstructionIndex,
+  parseForgeArtifact,
+  parseSourceMap,
+  resolveSourcePosition,
+  type SourceMapEntry,
+  type ForgeArtifact,
+  type FileCoverage,
+  type InheritanceGraphResult,
+  type ProjectGraphResult,
+  type ProjectGraphStatsResult,
 } from "@solidity-workbench/common";
 import {
   ProjectGraphExporter,
@@ -1442,6 +1449,53 @@ describe("Feature coverage — DAP debugger contribution", () => {
       fs.rmSync(fixture.dir, { recursive: true, force: true });
     }
   });
+
+  it("resolves stack frames to real Foundry artifact source locations", async function () {
+    this.timeout(45_000);
+    const fixture = makeSourceMappedDebugFixture();
+    const tracker = installSessionTracker();
+
+    try {
+      const ok = await vscode.debug.startDebugging(undefined, {
+        type: "solidity-workbench",
+        request: "launch",
+        name: "e2e: source-mapped trace",
+        traceFile: fixture.tracePath,
+        artifact: fixture.artifactPath,
+        projectRoot: fixture.projectRoot,
+      });
+      assert.ok(ok, "startDebugging returned false — VSCode rejected the configuration");
+
+      await tracker.waitForEvent("stopped", 10_000);
+
+      const session = vscode.debug.activeDebugSession;
+      assert.ok(session, "expected an active debug session");
+      const reply = await session!.customRequest("stackTrace", { threadId: 1 });
+      assert.ok(reply, "stackTrace returned no body");
+      assert.ok(Array.isArray(reply.stackFrames));
+
+      const sourceFrame = reply.stackFrames.find(
+        (frame: { source?: { path?: string }; line?: number; column?: number }) =>
+          frame.source?.path === fixture.sourcePath,
+      );
+      assert.ok(
+        sourceFrame,
+        `expected a stack frame resolved to ${fixture.sourcePath}, got ${JSON.stringify(
+          reply.stackFrames,
+        )}`,
+      );
+      assert.equal(sourceFrame!.line, fixture.expectedLine);
+      assert.equal(sourceFrame!.column, fixture.expectedColumn);
+    } finally {
+      try {
+        await vscode.debug.stopDebugging(vscode.debug.activeDebugSession);
+      } catch {
+        /* tolerate "no active session" if the launch failed */
+      }
+      tracker.dispose();
+      fs.rmSync(fixture.dir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── Helpers ──────────────────────────────────────────────────────────
@@ -1861,6 +1915,100 @@ function makeDebugFixture(): {
     }),
   );
   return { dir, tracePath, artifactPath, projectRoot: dir };
+}
+
+function makeSourceMappedDebugFixture(): {
+  dir: string;
+  tracePath: string;
+  artifactPath: string;
+  projectRoot: string;
+  sourcePath: string;
+  expectedLine: number;
+  expectedColumn: number;
+} {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  assert.ok(folder, "workspace folder must be open for these tests");
+
+  const projectRoot = folder.uri.fsPath;
+  const artifactPath = path.join(projectRoot, "out", "Counter.sol", "Counter.json");
+  const sourcePath = path.join(projectRoot, "src", "Counter.sol");
+  assert.ok(fs.existsSync(artifactPath), `expected checked-in forge artifact at ${artifactPath}`);
+  assert.ok(fs.existsSync(sourcePath), `expected sample source at ${sourcePath}`);
+
+  const artifact = parseForgeArtifact(fs.readFileSync(artifactPath, "utf8"));
+  assert.ok(artifact, `failed to parse forge artifact ${artifactPath}`);
+
+  const sourceText = fs.readFileSync(sourcePath, "utf8");
+  const mapped = findSourceMappedInstruction(artifact, sourceText, "src/Counter.sol");
+  assert.ok(mapped, `expected ${artifactPath} to contain a source-mapped Counter.sol instruction`);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "solidity-workbench-dap-source-"));
+  const tracePath = path.join(dir, "trace.json");
+  fs.writeFileSync(
+    tracePath,
+    JSON.stringify({
+      gas: 21000,
+      failed: false,
+      returnValue: "0x",
+      structLogs: [
+        {
+          pc: mapped!.pc,
+          op: "PUSH1",
+          depth: 1,
+          gas: 999990,
+          gasCost: 3,
+          stack: [],
+          memory: [],
+        },
+      ],
+    }),
+  );
+
+  return {
+    dir,
+    tracePath,
+    artifactPath,
+    projectRoot,
+    sourcePath,
+    expectedLine: mapped!.line,
+    expectedColumn: mapped!.column,
+  };
+}
+
+function findSourceMappedInstruction(
+  artifact: ForgeArtifact,
+  sourceText: string,
+  sourcePathSuffix: string,
+): { pc: number; line: number; column: number } | null {
+  const sourceIndex = artifact.sources.findIndex((source) =>
+    source.replace(/\\/g, "/").endsWith(sourcePathSuffix),
+  );
+  if (sourceIndex < 0) return null;
+
+  const sourceMap = parseSourceMap(artifact.deployedSourceMap);
+  const pcMap = buildPcToInstructionIndex(artifact.deployedBytecode);
+  const lineIndex = LineIndex.fromText(sourceText);
+  return (
+    findMappedPc(pcMap, sourceMap, sourceIndex, lineIndex, (line) => line >= 36) ??
+    findMappedPc(pcMap, sourceMap, sourceIndex, lineIndex)
+  );
+}
+
+function findMappedPc(
+  pcMap: number[],
+  sourceMap: SourceMapEntry[],
+  sourceIndex: number,
+  lineIndex: LineIndex,
+  lineFilter: (line: number) => boolean = () => true,
+): { pc: number; line: number; column: number } | null {
+  for (let pc = 0; pc < pcMap.length; pc++) {
+    const entry = resolveSourcePosition(pc, pcMap, sourceMap);
+    if (!entry || entry.fileIndex !== sourceIndex) continue;
+    const pos = lineIndex.positionAt(entry.start);
+    if (!lineFilter(pos.line + 1)) continue;
+    return { pc, line: pos.line + 1, column: pos.character + 1 };
+  }
+  return null;
 }
 
 interface SessionTracker {
