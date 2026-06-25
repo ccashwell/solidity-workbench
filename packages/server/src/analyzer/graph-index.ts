@@ -131,6 +131,7 @@ interface SolcDeclarationMetadata {
 interface ResolvedGraphTarget {
   node: SolidityGraphNode;
   metadata: SolcDeclarationMetadata | { resolutionConfidence: "parser" | "heuristic" };
+  solcTargetUnmapped?: boolean;
 }
 
 const ZERO_RANGE: SourceRange = {
@@ -1191,6 +1192,7 @@ export class GraphIndex {
             ...metadata,
             solcTargetUnmapped: true,
           },
+      ...(solcTarget ? {} : { solcTargetUnmapped: true }),
     };
   }
 
@@ -2004,6 +2006,22 @@ export class GraphIndex {
         CALL_TARGET_NODE_KINDS,
       );
 
+      if (resolved.solcTargetUnmapped) {
+        this.addEdge({
+          source: sourceId,
+          target: sourceId,
+          kind: "calls",
+          range,
+          metadata: {
+            calleeName,
+            qualifier,
+            unresolvedTarget: true,
+            ...resolved.metadata,
+          },
+        });
+        continue;
+      }
+
       this.addEdge({
         source: sourceId,
         target: resolved.node.id,
@@ -2066,6 +2084,23 @@ export class GraphIndex {
       "parser",
       CALL_TARGET_NODE_KINDS,
     );
+
+    if (resolved.solcTargetUnmapped) {
+      this.addEdge({
+        source: sourceId,
+        target: sourceId,
+        kind: "calls",
+        range: callee.range,
+        metadata: {
+          calleeName: callee.name,
+          qualifier: callee.receiverLeaf,
+          receiver: callee.receiver,
+          unresolvedTarget: true,
+          ...resolved.metadata,
+        },
+      });
+      return;
+    }
 
     this.addEdge({
       source: sourceId,

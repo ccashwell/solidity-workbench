@@ -1893,6 +1893,107 @@ contract Caller {
     }
   });
 
+  it("marks warm solc call targets unresolved when the compiler target is not indexed", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-solc-unmapped-target-"));
+    try {
+      const files = {
+        "src/TargetA.sol": `pragma solidity ^0.8.24;
+contract TargetA {
+    function ping() external {}
+}
+`,
+        "src/Caller.sol": `pragma solidity ^0.8.24;
+import "./TargetA.sol";
+
+contract Caller {
+    TargetA internal target;
+
+    function entry() external {
+        target.ping();
+    }
+}
+`,
+        "lib/TargetB.sol": `pragma solidity ^0.8.24;
+contract TargetB {
+    function ping() external {}
+}
+`,
+      };
+
+      const parser = new SolidityParser();
+      const uris: string[] = [];
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      const callerPath = path.join(tmpDir, "src/Caller.sol");
+      const targetBPath = path.join(tmpDir, "lib/TargetB.sol");
+      const pingCallOffset = fs.readFileSync(callerPath, "utf-8").indexOf("ping");
+      graph.setSolcBridge({
+        getDeclarationInfoAt: (filePath: string, offset: number) =>
+          filePath === callerPath && offset === pingCallOffset
+            ? {
+                declarationId: 4343,
+                declarationFilePath: targetBPath,
+                declarationOffset: files["lib/TargetB.sol"].indexOf("function ping"),
+                declarationLength: "function ping() external {}".length,
+                nodeType: "FunctionDefinition",
+                name: "ping",
+              }
+            : null,
+      } as unknown as SolcBridge);
+      graph.rebuildWorkspace();
+
+      const entry = graph
+        .getNodes()
+        .find((node) => node.name === "entry" && node.containerName === "Caller");
+      const targetAPing = graph
+        .getNodes()
+        .find((node) => node.name === "ping" && node.containerName === "TargetA");
+      const targetBPing = graph
+        .getNodes()
+        .find((node) => node.name === "ping" && node.containerName === "TargetB");
+      assert.ok(entry, "expected Caller.entry node");
+      assert.ok(targetAPing, "expected indexed TargetA.ping node");
+      assert.equal(targetBPing, undefined, "dependency TargetB should not be indexed by default");
+
+      const calls = graph.getOutgoingEdges(entry.id, "calls");
+      assert.ok(
+        calls.some(
+          (edge) =>
+            edge.target === entry.id &&
+            edge.unresolvedTarget === true &&
+            edge.metadata?.resolutionConfidence === "solc" &&
+            edge.metadata?.solcDeclarationId === 4343 &&
+            edge.metadata?.solcTargetUnmapped === true,
+        ),
+        "expected compiler-resolved but unindexed calls to stay unresolved",
+      );
+      assert.ok(
+        calls.every((edge) => edge.target !== targetAPing.id),
+        "did not expect parser fallback target when solc maps to an unindexed declaration",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(entry.id, "externalCall")
+          .every((edge) => edge.target !== targetAPing.id),
+        "did not expect externalCall edge to keep the parser fallback target",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses warm solc declaration info to retarget non-call relationship edges", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-solc-rich-retarget-"));
     try {

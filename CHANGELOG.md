@@ -64,6 +64,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the graph UI to distinguish missing targets from non-callable selected nodes.
 - Text-driven Project Graph callers/callees queries now report non-callable
   matches separately from true missing targets.
+- Project Graph call edges backed by warm solc declaration info now stay
+  unresolved when the compiler target is outside the indexed graph, avoiding
+  misleading parser fallback targets.
 
 ### Fixed
 
