@@ -160,7 +160,7 @@ export class CallHierarchyProvider {
     item: CallHierarchyItem,
     token?: CancellationToken,
   ): Promise<CallHierarchyIncomingCall[]> {
-    const graphCalls = this.getGraphIncomingCalls(item);
+    const graphCalls = await this.getGraphIncomingCalls(item, token);
     if (graphCalls) return graphCalls;
 
     await this.ensureIndexedForItem(item, "incoming", token);
@@ -269,10 +269,17 @@ export class CallHierarchyProvider {
     }));
   }
 
-  private getGraphIncomingCalls(item: CallHierarchyItem): CallHierarchyIncomingCall[] | null {
-    if (!this.graphIndex?.isRelationshipIndexComplete()) return null;
+  private async getGraphIncomingCalls(
+    item: CallHierarchyItem,
+    token?: CancellationToken,
+  ): Promise<CallHierarchyIncomingCall[] | null> {
+    if (token?.isCancellationRequested) return [];
+    if (!this.graphIndex) return null;
     const target = this.findGraphCallableNode(item);
     if (!target) return null;
+
+    await this.drainGraphRelationships(token);
+    if (token?.isCancellationRequested) return [];
 
     const callerMap = new Map<string, { item: CallHierarchyItem; ranges: Range[] }>();
     for (const edge of this.graphIndex!.getIncomingEdges(target.id, "calls")) {
@@ -296,6 +303,16 @@ export class CallHierarchyProvider {
       from: entry.item,
       fromRanges: entry.ranges,
     }));
+  }
+
+  private async drainGraphRelationships(token?: CancellationToken): Promise<void> {
+    if (!this.graphIndex || this.graphIndex.isRelationshipIndexComplete()) return;
+
+    let batch = this.graphIndex.indexRelationshipBatch(50, 50);
+    while (!batch.complete && !token?.isCancellationRequested) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      batch = this.graphIndex.indexRelationshipBatch(50, 50);
+    }
   }
 
   private getGraphOutgoingCalls(item: CallHierarchyItem): CallHierarchyOutgoingCall[] | null {

@@ -353,6 +353,11 @@ describe("CallHierarchyProvider", () => {
         });
         const incomingNames = incoming.map((call) => call.from.name).sort();
         assert.deepEqual(incomingNames, ["useA", "useB", "useC"]);
+        assert.equal(
+          graphIndex.getStats().relationshipIndexComplete,
+          true,
+          "incoming calls should drain the shared graph index instead of falling back to the legacy scanner",
+        );
       } finally {
         teardownFixture(graphBacked);
       }
