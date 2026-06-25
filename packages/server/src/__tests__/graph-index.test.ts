@@ -3121,6 +3121,17 @@ contract B {
         true,
         "expected search metadata to flag partial relationship indexing",
       );
+      const selectedNodeCallees = graph.query({
+        kind: "callees",
+        target: { nodeId: run.id },
+        maxNodes: 20,
+      });
+      assert.equal(selectedNodeCallees.found, true);
+      assert.ok(
+        selectedNodeCallees.edges.some((edge) => edge.source === run.id && edge.target === ping.id),
+        "expected selected-node callees query to force-index the source file relationships",
+      );
+      assert.equal(graph.getStats().relationshipFilesIndexed, 1);
 
       const partialCacheDir = path.join(tmpDir, ".cache", "partial");
       graph.writeCache(partialCacheDir);
@@ -3128,11 +3139,11 @@ contract B {
       assert.equal(partialRestore.restoreFromCache(partialCacheDir), true);
       assert.equal(partialRestore.getStats().relationshipIndexComplete, false);
       partialRestore.ensureWorkspaceDeclarations();
-      assert.equal(partialRestore.getStats().pendingRelationshipFiles, 2);
+      assert.equal(partialRestore.getStats().pendingRelationshipFiles, 1);
 
       const firstBatch = graph.indexRelationshipBatch(1, 1);
-      assert.equal(firstBatch.filesIndexed, 1);
-      assert.equal(firstBatch.complete, false);
+      assert.equal(firstBatch.filesIndexed, 2);
+      assert.equal(firstBatch.complete, true);
 
       graph.ensureFileRelationships(URI.file(path.join(tmpDir, "src/A.sol")).toString());
       assert.ok(

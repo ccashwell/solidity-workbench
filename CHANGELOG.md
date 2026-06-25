@@ -75,6 +75,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   summaries include resolved receiver types when available.
 - Call hierarchy now uses the shared receiver provenance resolver for qualified
   calls, including state-variable receivers.
+- Selected-node Project Graph callees queries now force-index the selected
+  declaration's file before traversing outgoing call edges, avoiding empty
+  partial-index results when declarations are warm but relationships are queued.
 
 ### Fixed
 

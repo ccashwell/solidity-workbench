@@ -724,6 +724,7 @@ export class GraphIndex {
         edgeQuality: this.summarizeEdgeQuality([]),
       };
     }
+    if (params.kind === "callees") this.ensureFileRelationships(target.uri);
 
     const edgeKinds = params.edgeKinds?.length
       ? params.edgeKinds
