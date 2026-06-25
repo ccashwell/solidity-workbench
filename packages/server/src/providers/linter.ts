@@ -230,8 +230,8 @@ export class SolidityLinter {
       if (sub?.type !== "FunctionDefinition") continue;
       const func = sub as RawFunction;
       if (!func.body) continue;
-      visit(func.body as any, {
-        BinaryOperation: (n: any) => {
+      this.visitRaw(func.body, {
+        BinaryOperation: (n) => {
           if (n.operator !== "==" && n.operator !== "!=") return undefined;
           const isBoolLit = (e: { type?: string } | undefined): boolean =>
             e?.type === "BooleanLiteral";
@@ -266,8 +266,8 @@ export class SolidityLinter {
       if (sub?.type !== "FunctionDefinition") continue;
       const func = sub as RawFunction;
       if (!func.body) continue;
-      visit(func.body as any, {
-        BinaryOperation: (n: any) => {
+      this.visitRaw(func.body, {
+        BinaryOperation: (n) => {
           if (n.operator !== "*") return undefined;
           if (!this.isDivisionExpression(n.left) && !this.isDivisionExpression(n.right)) {
             return undefined;
@@ -368,13 +368,13 @@ export class SolidityLinter {
   /** Count assignments / `++` / `--` mutations of any name in `names` within `body`. */
   private countStateAssignments(body: RawNode, names: Set<string>): number {
     let count = 0;
-    visit(body as any, {
-      BinaryOperation: (n: any) => {
+    this.visitRaw(body, {
+      BinaryOperation: (n) => {
         if (!this.isAssignmentOperator(n.operator)) return undefined;
         if (this.targetsStateVariable(n.left, names)) count++;
         return undefined;
       },
-      UnaryOperation: (n: any) => {
+      UnaryOperation: (n) => {
         if (n.operator !== "++" && n.operator !== "--") return undefined;
         if (this.targetsStateVariable(n.subExpression, names)) count++;
         return undefined;
@@ -392,9 +392,9 @@ export class SolidityLinter {
   private containsRuntimeReference(expr: RawNode | null | undefined): boolean {
     if (!expr) return false;
     let found = false;
-    visit(expr as any, {
-      MemberAccess: (n: any) => {
-        const baseName = n.expression?.type === "Identifier" ? n.expression?.name : undefined;
+    this.visitRaw(expr, {
+      MemberAccess: (n) => {
+        const baseName = this.isRawIdentifier(n.expression) ? n.expression.name : undefined;
         if (baseName === "block" || baseName === "msg" || baseName === "tx") {
           found = true;
           return false;
@@ -448,8 +448,8 @@ export class SolidityLinter {
       }
 
       if (!func.body) continue;
-      visit(func.body as any, {
-        VariableDeclarationStatement: (stmt: any) => {
+      this.visitRaw(func.body, {
+        VariableDeclarationStatement: (stmt) => {
           for (const v of stmt.variables ?? []) {
             if (!v?.name || !stateVarNames.has(v.name)) continue;
             diagnostics.push({
@@ -517,8 +517,8 @@ export class SolidityLinter {
           if (name) inScope.add(name);
         }
       }
-      visit(func.body as any, {
-        VariableDeclarationStatement: (stmt: any) => {
+      this.visitRaw(func.body, {
+        VariableDeclarationStatement: (stmt) => {
           for (const v of stmt.variables ?? []) {
             // Tuple destructuring slots can be null (e.g.
             // `(bool ok, ) = ...`); guard before reading typeName.
@@ -529,16 +529,16 @@ export class SolidityLinter {
         },
       });
 
-      visit(func.body as any, {
-        FunctionCall: (n: any) => {
+      this.visitRaw(func.body, {
+        FunctionCall: (n) => {
           const callee = n.expression;
-          if (callee?.type !== "MemberAccess") return undefined;
+          if (!this.isRawMemberAccess(callee)) return undefined;
           const member = callee.memberName;
           if (member !== "transfer" && member !== "transferFrom" && member !== "approve") {
             return undefined;
           }
           const receiver = callee.expression;
-          if (receiver?.type !== "Identifier" || !inScope.has(receiver.name)) {
+          if (!this.isRawIdentifier(receiver) || !inScope.has(receiver.name)) {
             return undefined;
           }
           diagnostics.push({
@@ -598,11 +598,11 @@ export class SolidityLinter {
       if (!func.body) continue;
 
       const captured = new Map<string, RawNode>();
-      visit(func.body as any, {
-        VariableDeclarationStatement: (stmt: any) => {
+      this.visitRaw(func.body, {
+        VariableDeclarationStatement: (stmt) => {
           const init = stmt.initialValue;
-          if (init?.type !== "FunctionCall") return undefined;
-          if (init.expression?.type !== "Identifier" || init.expression.name !== "ecrecover") {
+          if (!this.isRawFunctionCall(init)) return undefined;
+          if (!this.isRawIdentifier(init.expression) || init.expression.name !== "ecrecover") {
             return undefined;
           }
           const varName = stmt.variables?.[0]?.name;
@@ -614,15 +614,15 @@ export class SolidityLinter {
       if (captured.size === 0) continue;
 
       const zeroChecked = new Set<string>();
-      visit(func.body as any, {
-        BinaryOperation: (n: any) => {
+      this.visitRaw(func.body, {
+        BinaryOperation: (n) => {
           if (n.operator !== "==" && n.operator !== "!=") return undefined;
           const other = this.isAddressZero(n.left)
             ? n.right
             : this.isAddressZero(n.right)
               ? n.left
               : null;
-          if (other?.type === "Identifier" && other.name) {
+          if (this.isRawIdentifier(other)) {
             zeroChecked.add(other.name);
           }
           return undefined;
@@ -681,8 +681,8 @@ export class SolidityLinter {
       if (sub?.type !== "FunctionDefinition") continue;
       const func = sub as RawFunction;
       if (!func.body) continue;
-      visit(func.body as any, {
-        BinaryOperation: (n: any) => {
+      this.visitRaw(func.body, {
+        BinaryOperation: (n) => {
           if (n.operator !== "%") return undefined;
           if (
             !this.containsBlockEntropySource(n.left) &&
@@ -715,20 +715,21 @@ export class SolidityLinter {
   /** True if any node in `expr`'s subtree is a block-entropy source. */
   private containsBlockEntropySource(expr: unknown): boolean {
     let found = false;
-    visit(expr as any, {
-      MemberAccess: (n: any) => {
+    this.visitRaw(expr, {
+      MemberAccess: (n) => {
         if (
+          !!n.memberName &&
           SolidityLinter.BLOCK_ENTROPY_MEMBERS.has(n.memberName) &&
-          n.expression?.type === "Identifier" &&
-          n.expression?.name === "block"
+          this.isRawIdentifier(n.expression) &&
+          n.expression.name === "block"
         ) {
           found = true;
           return false;
         }
         return undefined;
       },
-      FunctionCall: (n: any) => {
-        if (n.expression?.type === "Identifier" && n.expression?.name === "blockhash") {
+      FunctionCall: (n) => {
+        if (this.isRawIdentifier(n.expression) && n.expression.name === "blockhash") {
           found = true;
           return false;
         }
@@ -753,8 +754,8 @@ export class SolidityLinter {
       if (sub?.type !== "FunctionDefinition") continue;
       const func = sub as RawFunction;
       if (!func.body) continue;
-      visit(func.body as any, {
-        BinaryOperation: (n: any) => {
+      this.visitRaw(func.body, {
+        BinaryOperation: (n) => {
           if (n.operator !== "==" && n.operator !== "!=") return undefined;
           const volatileSide =
             this.volatileExpressionLabel(n.left) ?? this.volatileExpressionLabel(n.right);
@@ -866,6 +867,22 @@ export class SolidityLinter {
   }
 
   // ── AST helpers ────────────────────────────────────────────────────
+
+  private visitRaw(node: unknown, visitor: RawAstVisitor): void {
+    visit(node, visitor as never);
+  }
+
+  private isRawIdentifier(node: RawNode | null | undefined): node is RawIdentifier {
+    return node?.type === "Identifier" && typeof (node as RawIdentifier).name === "string";
+  }
+
+  private isRawMemberAccess(node: RawNode | null | undefined): node is RawMemberAccess {
+    return node?.type === "MemberAccess";
+  }
+
+  private isRawFunctionCall(node: RawNode | null | undefined): node is RawFunctionCall {
+    return node?.type === "FunctionCall";
+  }
 
   /**
    * Index raw contracts by name so linter rules can look them up without
@@ -1018,8 +1035,8 @@ export class SolidityLinter {
   private containsExternalCall(node: RawNode | undefined | null): boolean {
     if (!node) return false;
     let found = false;
-    visit(node as any, {
-      FunctionCall: (n: any) => {
+    this.visitRaw(node, {
+      FunctionCall: (n) => {
         if (this.isExternalCallNode(n)) {
           found = true;
           return false; // stop descending into this subtree
@@ -1032,8 +1049,8 @@ export class SolidityLinter {
 
   private containsStateAssignment(node: RawNode, stateVarNames: Set<string>): boolean {
     let found = false;
-    visit(node as any, {
-      BinaryOperation: (n: any) => {
+    this.visitRaw(node, {
+      BinaryOperation: (n) => {
         if (!this.isAssignmentOperator(n.operator)) return undefined;
         if (this.targetsStateVariable(n.left, stateVarNames)) {
           found = true;
@@ -1043,7 +1060,7 @@ export class SolidityLinter {
       },
       // `++x` / `x++` / `--x` / `x--` also mutate state when the operand
       // is a state variable.
-      UnaryOperation: (n: any) => {
+      UnaryOperation: (n) => {
         if (n.operator !== "++" && n.operator !== "--") return undefined;
         if (this.targetsStateVariable(n.subExpression, stateVarNames)) {
           found = true;
@@ -1229,12 +1246,12 @@ export class SolidityLinter {
     let modifiesState = false;
     let emitsEvent = false;
 
-    visit(body as any, {
+    this.visitRaw(body, {
       EmitStatement: () => {
         emitsEvent = true;
         return undefined;
       },
-      BinaryOperation: (n: any) => {
+      BinaryOperation: (n) => {
         if (!modifiesState && this.isAssignmentOperator(n.operator)) {
           if (this.targetsStateVariable(n.left, stateVarNames)) {
             modifiesState = true;
@@ -1242,7 +1259,7 @@ export class SolidityLinter {
         }
         return undefined;
       },
-      UnaryOperation: (n: any) => {
+      UnaryOperation: (n) => {
         if (!modifiesState && (n.operator === "++" || n.operator === "--")) {
           if (this.targetsStateVariable(n.subExpression, stateVarNames)) {
             modifiesState = true;
@@ -1283,12 +1300,10 @@ export class SolidityLinter {
       const raw = this.findRawFunction(rawContract, func.name);
       if (!raw?.body) continue;
 
-      visit(raw.body as any, {
-        ForStatement: (n: any) => this.emitStorageInLoopHints(n, stateVarNames, diagnostics, lines),
-        WhileStatement: (n: any) =>
-          this.emitStorageInLoopHints(n, stateVarNames, diagnostics, lines),
-        DoWhileStatement: (n: any) =>
-          this.emitStorageInLoopHints(n, stateVarNames, diagnostics, lines),
+      this.visitRaw(raw.body, {
+        ForStatement: (n) => this.emitStorageInLoopHints(n, stateVarNames, diagnostics, lines),
+        WhileStatement: (n) => this.emitStorageInLoopHints(n, stateVarNames, diagnostics, lines),
+        DoWhileStatement: (n) => this.emitStorageInLoopHints(n, stateVarNames, diagnostics, lines),
       });
     }
 
@@ -1302,8 +1317,9 @@ export class SolidityLinter {
     lines: string[],
   ): undefined {
     const seen = new Set<string>();
-    visit(loop as any, {
-      Identifier: (n: any) => {
+    this.visitRaw(loop, {
+      Identifier: (n) => {
+        if (!n.name) return undefined;
         if (!stateVarNames.has(n.name)) return undefined;
         const range = this.nodeRange(n);
         const key = `${range.start.line}:${n.name}`;
@@ -1331,8 +1347,8 @@ export class SolidityLinter {
       if (sub?.type !== "FunctionDefinition") continue;
       const func = sub as RawFunction;
       if (!func.body) continue;
-      visit(func.body as any, {
-        FunctionCall: (n: any) => {
+      this.visitRaw(func.body, {
+        FunctionCall: (n) => {
           if (this.externalCallMember(n) !== "delegatecall") return undefined;
           const range = this.nodeRange(n);
           diagnostics.push({
@@ -1368,25 +1384,29 @@ export class SolidityLinter {
       let hasSelfdestruct = false;
       let hasAccessCheck = func.modifiers.length > 0;
 
-      visit(raw.body as any, {
-        FunctionCall: (n: any) => {
+      this.visitRaw(raw.body, {
+        FunctionCall: (n) => {
           const callee = n.expression;
           if (
-            callee?.type === "Identifier" &&
+            this.isRawIdentifier(callee) &&
             (callee.name === "selfdestruct" || callee.name === "suicide")
           ) {
             hasSelfdestruct = true;
           }
           // Any require() call counts as an access check for our purposes.
-          if (callee?.type === "Identifier" && callee.name === "require") {
+          if (this.isRawIdentifier(callee) && callee.name === "require") {
             hasAccessCheck = true;
           }
           return undefined;
         },
-        MemberAccess: (n: any) => {
+        MemberAccess: (n) => {
           // `msg.sender == owner`-style comparisons elsewhere in the body
           // count as an inline check.
-          if (n.memberName === "sender" && n.expression?.name === "msg") {
+          if (
+            n.memberName === "sender" &&
+            this.isRawIdentifier(n.expression) &&
+            n.expression.name === "msg"
+          ) {
             hasAccessCheck = true;
           }
           return undefined;
@@ -1523,8 +1543,8 @@ export class SolidityLinter {
    * (top-level plus any descendant block's statements).
    */
   private walkStatements(body: RawNode, fn: (stmt: RawNode) => void): void {
-    visit(body as any, {
-      ExpressionStatement: (n: any) => {
+    this.visitRaw(body, {
+      ExpressionStatement: (n) => {
         fn(n);
         return undefined;
       },
@@ -1581,6 +1601,51 @@ interface RawNode {
   loc?: RawLoc;
 }
 
+interface RawIdentifier extends RawNode {
+  type: "Identifier";
+  name: string;
+}
+
+interface RawBinaryOperation extends RawNode {
+  type: "BinaryOperation";
+  left?: RawNode;
+  right?: RawNode;
+  operator?: string;
+}
+
+interface RawUnaryOperation extends RawNode {
+  type: "UnaryOperation";
+  operator?: string;
+  subExpression?: RawNode;
+}
+
+interface RawMemberAccess extends RawNode {
+  type: "MemberAccess";
+  expression?: RawNode;
+  memberName?: string;
+}
+
+interface RawVariableDeclaration extends RawNode {
+  type: "VariableDeclaration";
+  name?: string | null;
+  identifier?: RawNode | null;
+  typeName?: RawNode | null;
+  expression?: RawNode | null;
+  isDeclaredConst?: boolean;
+  isImmutable?: boolean;
+}
+
+interface RawVariableDeclarationStatement extends RawNode {
+  type: "VariableDeclarationStatement";
+  variables?: (RawVariableDeclaration | null)[];
+  initialValue?: RawNode | null;
+}
+
+interface RawExpressionStatement extends RawNode {
+  type: "ExpressionStatement";
+  expression?: RawNode | null;
+}
+
 interface RawContract extends RawNode {
   type: "ContractDefinition";
   name: string;
@@ -1604,11 +1669,21 @@ interface RawFunctionCall extends RawNode {
   arguments?: RawNode[];
 }
 
-// `visit` takes a typed `ASTVisitor` per the parser's type defs, but
-// the handlers we pass return `undefined` / `false` and take broadly-
-// typed nodes. `(n: any)` keeps the surface clean; see ESLint
-// warnings — these are acceptable because the bottom of this file is
-// explicitly the AST boundary.
+type RawAstVisitResult = void | false | undefined;
+
+interface RawAstVisitor {
+  BinaryOperation?: (node: RawBinaryOperation) => RawAstVisitResult;
+  DoWhileStatement?: (node: RawNode) => RawAstVisitResult;
+  EmitStatement?: (node: RawNode) => RawAstVisitResult;
+  ExpressionStatement?: (node: RawExpressionStatement) => RawAstVisitResult;
+  ForStatement?: (node: RawNode) => RawAstVisitResult;
+  FunctionCall?: (node: RawFunctionCall) => RawAstVisitResult;
+  Identifier?: (node: RawIdentifier) => RawAstVisitResult;
+  MemberAccess?: (node: RawMemberAccess) => RawAstVisitResult;
+  UnaryOperation?: (node: RawUnaryOperation) => RawAstVisitResult;
+  VariableDeclarationStatement?: (node: RawVariableDeclarationStatement) => RawAstVisitResult;
+  WhileStatement?: (node: RawNode) => RawAstVisitResult;
+}
 
 // Retained for potential future use / interface parity with the mapped AST.
 void (undefined as unknown as SourceRange);
