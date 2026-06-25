@@ -290,6 +290,36 @@ contract Child is Base {
         "edge filters should be respected when no path exists",
       );
 
+      const entrySearch = graph.search({
+        query: "Child.entry",
+        includeEdges: true,
+        edgeDirection: "outgoing",
+        edgeKinds: ["calls"],
+      });
+      assert.equal(entrySearch.matches[0]?.node.id, entry.id);
+      assert.deepEqual(
+        entrySearch.matches[0]?.edges?.map((edge) => edge.target).sort(),
+        [helper.id, inherited.id].sort(),
+        "expected search to include filtered adjacent call edges",
+      );
+
+      const functionSearch = graph.search({
+        query: "hel",
+        kinds: ["function"],
+        maxResults: 1,
+      });
+      assert.equal(functionSearch.matches.length, 1);
+      assert.equal(functionSearch.matches[0]?.node.id, helper.id);
+      assert.equal(
+        functionSearch.matches.every((match) => match.node.kind === "function"),
+        true,
+        "expected graph search kind filter to restrict matches",
+      );
+
+      const cappedSearch = graph.search({ query: "c", maxResults: 1 });
+      assert.equal(cappedSearch.matches.length, 1);
+      assert.equal(cappedSearch.truncated, true);
+
       const stats = graph.getStats();
       assert.equal(stats.nodesByKind.contract, 2);
       assert.equal(stats.edgesByKind.inherits, 1);

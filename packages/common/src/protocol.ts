@@ -331,6 +331,42 @@ export interface ProjectGraphPathResult extends ProjectGraphResult {
   found: boolean;
 }
 
+/** Request ranked symbol search over the indexed project graph. */
+export const SearchProjectGraph = "solidity-workbench/searchProjectGraph";
+
+export interface SearchProjectGraphParams {
+  query: string;
+  /** Optional node-kind filter. Omit to search every node kind. */
+  kinds?: ProjectGraphNodeKind[];
+  /** Include adjacent edges for each matched node. Defaults to false. */
+  includeEdges?: boolean;
+  /** Direction for adjacent edges when includeEdges is true. Defaults to both. */
+  edgeDirection?: "incoming" | "outgoing" | "both";
+  /** Optional adjacent edge-kind filter. Omit to include every known edge kind. */
+  edgeKinds?: ProjectGraphEdgeKind[];
+  /** Maximum ranked node matches. Defaults to 50. */
+  maxResults?: number;
+  /** Maximum adjacent edges per matched node. Defaults to 32. */
+  maxEdgesPerNode?: number;
+}
+
+export interface ProjectGraphSearchMatch {
+  node: ProjectGraphNode;
+  /** Relative rank; larger scores are better matches. */
+  score: number;
+  /** The indexed field that produced the winning match. */
+  matchedText: string;
+  /** Adjacent edges when requested. */
+  edges?: ProjectGraphEdge[];
+  edgesTruncated?: boolean;
+}
+
+export interface ProjectGraphSearchResult {
+  query: string;
+  matches: ProjectGraphSearchMatch[];
+  truncated?: boolean;
+}
+
 /** Request lightweight project graph size and timing stats. */
 export const GetProjectGraphStats = "solidity-workbench/getProjectGraphStats";
 

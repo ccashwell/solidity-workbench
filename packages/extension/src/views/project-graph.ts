@@ -7,12 +7,15 @@ import {
   GetProjectGraphPath,
   GetProjectGraphStats,
   RebuildProjectGraph,
+  SearchProjectGraph,
   type ProjectGraphEdge,
   type ProjectGraphEdgeKind,
   type ProjectGraphNode,
   type ProjectGraphPathResult,
   type ProjectGraphResolutionConfidence,
   type ProjectGraphResult,
+  type ProjectGraphSearchMatch,
+  type ProjectGraphSearchResult,
   type ProjectGraphStatsResult,
 } from "@solidity-workbench/common";
 
@@ -388,6 +391,9 @@ export class ProjectGraphExporter {
       vscode.commands.registerCommand("solidity-workbench.exportProjectGraph", () =>
         this.exportProjectGraph(),
       ),
+      vscode.commands.registerCommand("solidity-workbench.searchProjectGraph", () =>
+        this.searchProjectGraph(),
+      ),
       vscode.commands.registerCommand("solidity-workbench.projectGraphStats", () =>
         this.showProjectGraphStats(),
       ),
@@ -607,6 +613,41 @@ export class ProjectGraphExporter {
     await vscode.window.showTextDocument(doc, { preview: false });
   }
 
+  private async searchProjectGraph(): Promise<void> {
+    const query = await vscode.window.showInputBox({
+      title: "Search Solidity Project Graph",
+      placeHolder: "Contract, function, event, error, file, or qualified name",
+      prompt: "Search indexed Solidity declarations.",
+    });
+    if (!query?.trim()) return;
+
+    const result = await this.client.sendRequest<ProjectGraphSearchResult>(SearchProjectGraph, {
+      query,
+      includeEdges: true,
+      edgeDirection: "both",
+      maxResults: 80,
+      maxEdgesPerNode: 12,
+    });
+    if (result.matches.length === 0) {
+      vscode.window.showInformationMessage(`No project graph matches for '${query}'.`);
+      return;
+    }
+
+    const selected = await vscode.window.showQuickPick(
+      result.matches.map((match) => this.toGraphSearchQuickPick(match)),
+      {
+        title: result.truncated
+          ? "Search Solidity Project Graph (first 80 matches)"
+          : "Search Solidity Project Graph",
+        placeHolder: "Select a declaration to open",
+        matchOnDescription: true,
+        matchOnDetail: true,
+      },
+    );
+    if (!selected) return;
+    await this.openProjectGraphNode(selected.match.node);
+  }
+
   private async showProjectGraphStats(): Promise<void> {
     const startedAt = Date.now();
     const stats = await this.getProjectGraphStats();
@@ -616,6 +657,31 @@ export class ProjectGraphExporter {
       content: JSON.stringify({ ...stats, requestDurationMs }, null, 2),
     });
     await vscode.window.showTextDocument(doc, { preview: false });
+  }
+
+  private toGraphSearchQuickPick(
+    match: ProjectGraphSearchMatch,
+  ): vscode.QuickPickItem & { match: ProjectGraphSearchMatch } {
+    const edgeCount = match.edges?.length ?? 0;
+    const edgeLabel = match.edgesTruncated ? `${edgeCount}+ edges` : `${edgeCount} edges`;
+    return {
+      label: match.node.qualifiedName,
+      description: `${match.node.kind} · ${match.node.tier}`,
+      detail: `${match.node.filePath}${edgeCount > 0 ? ` · ${edgeLabel}` : ""}`,
+      match,
+    };
+  }
+
+  private async openProjectGraphNode(node: ProjectGraphNode): Promise<void> {
+    const doc = await vscode.workspace.openTextDocument(vscode.Uri.parse(node.uri));
+    const range = node.selectionRange;
+    const selection = new vscode.Selection(
+      range.start.line,
+      range.start.character,
+      range.end.line,
+      range.end.character,
+    );
+    await vscode.window.showTextDocument(doc, { preview: true, selection });
   }
 
   private async getProjectGraphStats(): Promise<ProjectGraphStatsResult> {

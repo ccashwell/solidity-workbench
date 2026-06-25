@@ -19,6 +19,8 @@ import type {
   GetProjectGraphNeighborhoodParams,
   GetProjectGraphPathParams,
   ProjectGraphEndpoint,
+  ProjectGraphSearchMatch,
+  ProjectGraphSearchResult,
   StateVariableDeclaration,
   EventDefinition,
   ErrorDefinition,
@@ -26,6 +28,7 @@ import type {
   EnumDefinition,
   UserDefinedValueTypeDefinition,
   FileConstantDefinition,
+  SearchProjectGraphParams,
 } from "@solidity-workbench/common";
 import type { SymbolIndex } from "./symbol-index.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
@@ -623,6 +626,55 @@ export class GraphIndex {
       edges: edges.slice(),
       truncated,
     };
+  }
+
+  search(params: SearchProjectGraphParams): ProjectGraphSearchResult {
+    const rawQuery = params.query.trim();
+    if (!rawQuery) return { query: params.query, matches: [] };
+
+    const query = normalizeSearchText(rawQuery);
+    const allowedKinds = params.kinds?.length ? new Set<ProjectGraphNodeKind>(params.kinds) : null;
+    const maxResults = Math.max(1, Math.min(params.maxResults ?? 50, 500));
+    const maxEdgesPerNode = Math.max(0, Math.min(params.maxEdgesPerNode ?? 32, 250));
+    const edgeKinds = params.edgeKinds?.length
+      ? new Set<ProjectGraphEdgeKind>(params.edgeKinds)
+      : null;
+
+    const ranked: ProjectGraphSearchMatch[] = [];
+    for (const node of this.nodes.values()) {
+      if (allowedKinds && !allowedKinds.has(node.kind)) continue;
+      const match = scoreGraphNodeSearch(node, query);
+      if (!match) continue;
+      ranked.push({
+        node,
+        score: match.score,
+        matchedText: match.matchedText,
+      });
+    }
+
+    ranked.sort((a, b) => {
+      const scoreDelta = b.score - a.score;
+      if (scoreDelta !== 0) return scoreDelta;
+      const tierDelta = graphTierRank(a.node.tier) - graphTierRank(b.node.tier);
+      if (tierDelta !== 0) return tierDelta;
+      return a.node.qualifiedName.localeCompare(b.node.qualifiedName);
+    });
+
+    const truncated = ranked.length > maxResults;
+    const matches = ranked.slice(0, maxResults);
+    if (params.includeEdges) {
+      for (const match of matches) {
+        const adjacent = this.connectedEdges(
+          match.node.id,
+          params.edgeDirection ?? "both",
+          edgeKinds,
+        );
+        match.edges = adjacent.slice(0, maxEdgesPerNode);
+        match.edgesTruncated = adjacent.length > maxEdgesPerNode;
+      }
+    }
+
+    return { query: params.query, matches, truncated };
   }
 
   toNeighborhood(params: GetProjectGraphNeighborhoodParams): ProjectGraphResult {
@@ -3242,6 +3294,86 @@ export class GraphIndex {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+interface GraphSearchScore {
+  score: number;
+  matchedText: string;
+}
+
+function scoreGraphNodeSearch(node: ProjectGraphNode, query: string): GraphSearchScore | null {
+  const candidates: { text: string | undefined; normalized: string; weight: number }[] = [
+    { text: node.qualifiedName, normalized: normalizeSearchText(node.qualifiedName), weight: 0 },
+    { text: node.name, normalized: normalizeSearchText(node.name), weight: -25 },
+    { text: node.containerName, normalized: normalizeSearchText(node.containerName), weight: -80 },
+    { text: node.kind, normalized: normalizeSearchText(node.kind), weight: -120 },
+    { text: node.filePath, normalized: normalizeSearchText(node.filePath), weight: -180 },
+    { text: node.detail, normalized: normalizeSearchText(node.detail), weight: -240 },
+  ];
+
+  let best: GraphSearchScore | null = null;
+  for (const candidate of candidates) {
+    if (!candidate.text || !candidate.normalized) continue;
+    const score = scoreSearchCandidate(candidate.normalized, query, candidate.weight);
+    if (score === null) continue;
+    if (!best || score > best.score) {
+      best = { score, matchedText: candidate.text };
+    }
+  }
+  return best;
+}
+
+function scoreSearchCandidate(candidate: string, query: string, weight: number): number | null {
+  if (candidate === query) return 1000 + weight;
+  if (candidate.endsWith(`.${query}`)) return 940 + weight;
+  if (candidate.startsWith(query)) return 860 + weight;
+
+  const segmentHit = candidate.split(/[^a-z0-9_]+/u).some((segment) => segment.startsWith(query));
+  if (segmentHit) return 780 + weight;
+
+  const index = candidate.indexOf(query);
+  if (index >= 0) {
+    const earlyMatchBonus = Math.max(0, 80 - index);
+    return 650 + earlyMatchBonus + weight;
+  }
+
+  const subsequenceScore = scoreOrderedSubsequence(candidate, query);
+  return subsequenceScore === null ? null : 250 + subsequenceScore + weight;
+}
+
+function scoreOrderedSubsequence(candidate: string, query: string): number | null {
+  let queryIndex = 0;
+  let first = -1;
+  let last = -1;
+  for (let i = 0; i < candidate.length && queryIndex < query.length; i++) {
+    if (candidate[i] !== query[queryIndex]) continue;
+    if (first === -1) first = i;
+    last = i;
+    queryIndex++;
+  }
+  if (queryIndex !== query.length) return null;
+
+  const span = Math.max(1, last - first + 1);
+  const density = query.length / span;
+  return Math.round(density * 160) + Math.max(0, 40 - first);
+}
+
+function normalizeSearchText(value: string | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function graphTierRank(tier: ProjectGraphNode["tier"]): number {
+  switch (tier) {
+    case "project":
+      return 0;
+    case "tests":
+      return 1;
+    case "deps":
+      return 2;
+    case "unknown":
+    default:
+      return 3;
+  }
 }
 
 function maskCommentsAndStrings(text: string): string {

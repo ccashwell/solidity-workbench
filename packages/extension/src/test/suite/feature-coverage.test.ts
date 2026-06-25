@@ -161,6 +161,7 @@ describe("Feature coverage — webview commands", () => {
       "solidity-workbench.projectGraph",
       "solidity-workbench.projectGraphCursor",
       "solidity-workbench.exportProjectGraph",
+      "solidity-workbench.searchProjectGraph",
       "solidity-workbench.projectGraphStats",
       "solidity-workbench.rebuildProjectGraph",
       "solidity-workbench.clearProjectGraphCache",

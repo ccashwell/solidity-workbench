@@ -55,6 +55,7 @@ import {
   GetProjectGraphPath,
   GetProjectGraphStats,
   RebuildProjectGraph,
+  SearchProjectGraph,
   SolSemanticTokenTypes,
   SolSemanticTokenModifiers,
   ServerStateNotification,
@@ -68,8 +69,10 @@ import {
   type ListTestsResult,
   type ProjectGraphPathResult,
   type ProjectGraphResult,
+  type ProjectGraphSearchResult,
   type ProjectGraphStatsResult,
   type RebuildProjectGraphParams,
+  type SearchProjectGraphParams,
   type ServerStateParams,
 } from "@solidity-workbench/common";
 
@@ -828,6 +831,14 @@ connection.onRequest(
     if (params.from.uri) graphIndex.ensureFileRelationships(params.from.uri);
     if (params.to.uri) graphIndex.ensureFileRelationships(params.to.uri);
     return graphIndex.toShortestPath(params);
+  },
+);
+
+connection.onRequest(
+  SearchProjectGraph,
+  async (params: SearchProjectGraphParams): Promise<ProjectGraphSearchResult> => {
+    graphIndex.ensureWorkspaceDeclarations();
+    return graphIndex.search(params);
   },
 );
 

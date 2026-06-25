@@ -402,6 +402,10 @@
         "title": "Solidity Workbench: Export Project Graph"
       },
       {
+        "command": "solidity-workbench.searchProjectGraph",
+        "title": "Solidity Workbench: Search Project Graph"
+      },
+      {
         "command": "solidity-workbench.projectGraphStats",
         "title": "Solidity Workbench: Show Project Graph Stats"
       },
