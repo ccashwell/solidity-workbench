@@ -771,11 +771,11 @@ export class ProjectGraphExporter {
         ...graphScope,
       });
     }
-    if (graph.nodes.length === 0) {
+    const graphStats = await this.getProjectGraphStats();
+    if (graph.nodes.length === 0 && graphStats.nodeCount === 0) {
       vscode.window.showInformationMessage("No Solidity graph data found in the workspace.");
       return;
     }
-    const graphStats = await this.getProjectGraphStats();
 
     if (this.panel) {
       this.panel.reveal(vscode.ViewColumn.Beside);
@@ -1992,6 +1992,10 @@ export class ProjectGraphExporter {
   .focus rect { stroke: #ffffff; stroke-width: 3; }
   .dim { opacity: 0.2; }
   .empty {
+    position: absolute;
+    top: 48px;
+    left: 28px;
+    right: 28px;
     padding: 28px;
     color: var(--muted);
   }
@@ -2058,6 +2062,7 @@ export class ProjectGraphExporter {
     </aside>
     <main class="canvas" id="canvas">
       <svg id="graph" role="img"></svg>
+      <div class="empty" id="emptyGraph" hidden></div>
     </main>
   </div>
 </div>
@@ -2101,6 +2106,7 @@ export class ProjectGraphExporter {
   const readiness = document.getElementById("readiness");
   const statusBanner = document.getElementById("statusBanner");
   const resultBanner = document.getElementById("resultBanner");
+  const emptyGraph = document.getElementById("emptyGraph");
   const nodeList = document.getElementById("nodeList");
   const edgeList = document.getElementById("edgeList");
   const details = document.getElementById("details");
@@ -2747,6 +2753,13 @@ export class ProjectGraphExporter {
       "warning",
       Boolean(resultDiagnostics && resultDiagnostics.state === "warning"),
     );
+    const emptyGraphText = graph.nodes.length === 0
+      ? "No nodes in the current graph scope. Enable Tests or Deps to include hidden graph nodes."
+      : nodeState.candidateCount === 0
+        ? "No visible nodes for the current filters."
+        : "";
+    emptyGraph.textContent = emptyGraphText;
+    emptyGraph.hidden = emptyGraphText.length === 0;
     zoomLabel.textContent = Math.round(zoom * 100) + "%";
     pathModeButton.classList.toggle("active", pathMode);
     saveUiState();

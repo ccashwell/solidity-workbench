@@ -137,6 +137,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the webview instead of being blocked by an empty initial result.
 - Project Graph dependency nodes now stay hidden from graph, search, query, and
   path results unless the request or webview explicitly includes dependencies.
+- Project Graph now opens a recoverable empty-scope view when the default
+  filters hide every indexed node, so users can opt into tests or dependencies
+  directly from the graph webview.
 - VSIX verification now lives in a shared `scripts/verify-vsix.mjs` checker,
   and local packaging, CI, and publish workflows all verify the same exact
   versioned artifact before upload or release.

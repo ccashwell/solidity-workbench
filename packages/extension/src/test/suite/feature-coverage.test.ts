@@ -1029,6 +1029,46 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(runtime.element("stats").textContent, "Searching project graph…");
   });
 
+  it("keeps project graph scope recoverable when default filters hide every node", () => {
+    type ProjectGraphExporterInternals = {
+      buildHtml(
+        graph: ProjectGraphResult,
+        focusId?: string,
+        graphStats?: ProjectGraphStatsResult,
+      ): string;
+    };
+    const exporter = new ProjectGraphExporter(
+      {} as ConstructorParameters<typeof ProjectGraphExporter>[0],
+    ) as unknown as ProjectGraphExporterInternals;
+    const stats: ProjectGraphStatsResult = {
+      nodeCount: 4,
+      edgeCount: 3,
+      nodesByKind: Object.assign(Object.create(null), { contract: 2, function: 2 }),
+      edgesByKind: Object.assign(Object.create(null), { contains: 2, inherits: 1 }),
+      filesByTier: Object.assign(Object.create(null), { tests: 1, deps: 1 }),
+      lastRebuildDurationMs: 15,
+      lastUpdateDurationMs: null,
+      relationshipIndexComplete: true,
+    };
+    const runtime = runProjectGraphWebviewScript(
+      exporter.buildHtml({ nodes: [], edges: [] }, undefined, stats),
+    );
+
+    assert.match(runtime.element("emptyGraph").textContent, /No nodes in the current graph scope/);
+    runtime.change("includeTests", true);
+    assert.deepEqual(runtime.lastPostedMessage(), {
+      type: "loadWorkspace",
+      includeTests: true,
+      includeDependencies: false,
+    });
+    runtime.change("includeDependencies", true);
+    assert.deepEqual(runtime.lastPostedMessage(), {
+      type: "loadWorkspace",
+      includeTests: true,
+      includeDependencies: true,
+    });
+  });
+
   it("executes project graph render-cap controls in a DOM runtime", () => {
     type ProjectGraphExporterInternals = {
       buildHtml(
