@@ -4,7 +4,7 @@ import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { ResolvedContract, SemanticResolver } from "../analyzer/semantic-resolver.js";
-import type { ContractDefinition } from "@solidity-workbench/common";
+import type { ContractDefinition, SolSymbol } from "@solidity-workbench/common";
 import { getWordAtPosition } from "../utils/text.js";
 
 /**
@@ -33,11 +33,55 @@ export class TypeHierarchyProvider {
     const word = getWordAtPosition(text, position)?.text ?? null;
     if (!word) return [];
 
-    const resolved = this.resolver?.resolveContract(word, document.uri);
-    if (resolved) return [this.contractToItem(resolved.contract, resolved.uri, resolved.id)];
+    const symbols = this.symbolIndex.findSymbols(word).filter((sym) => this.isTypeSymbol(sym));
+    const underCursor = symbols.find(
+      (sym) => sym.filePath === document.uri && this.rangeContains(sym.nameRange, position),
+    );
+    if (underCursor) {
+      const resolved = this.resolver?.resolveContract(underCursor.name, underCursor.filePath);
+      if (resolved) return [this.contractToItem(resolved.contract, resolved.uri, resolved.id)];
+      const entry = this.symbolIndex.getContract(underCursor.name);
+      return entry ? [this.contractToItem(entry.contract, entry.uri)] : [];
+    }
+
+    const imported = this.resolver?.resolveImportedSymbol(word, document.uri);
+    if (imported) {
+      const resolved = this.resolver?.resolveContract(word, document.uri);
+      if (resolved) return [this.contractToItem(resolved.contract, resolved.uri, resolved.id)];
+    }
+
+    const visibleSymbols = this.resolver
+      ? this.resolver.filterVisibleSymbols(document.uri, symbols)
+      : symbols;
+    if (visibleSymbols.length > 0) {
+      const sym =
+        visibleSymbols.find((candidate) => candidate.filePath === document.uri) ??
+        visibleSymbols[0];
+      const resolved = this.resolver?.resolveContract(sym.name, sym.filePath);
+      if (resolved) return [this.contractToItem(resolved.contract, resolved.uri, resolved.id)];
+      const entry = this.symbolIndex.getContract(sym.name);
+      return entry ? [this.contractToItem(entry.contract, entry.uri)] : [];
+    }
+
+    if (this.resolver) return [];
 
     const entry = this.symbolIndex.getContract(word);
     return entry ? [this.contractToItem(entry.contract, entry.uri)] : [];
+  }
+
+  private isTypeSymbol(sym: SolSymbol): boolean {
+    return sym.kind === "contract" || sym.kind === "interface" || sym.kind === "library";
+  }
+
+  private rangeContains(range: ContractDefinition["nameRange"], position: Position): boolean {
+    if (position.line < range.start.line || position.line > range.end.line) return false;
+    if (position.line === range.start.line && position.character < range.start.character) {
+      return false;
+    }
+    if (position.line === range.end.line && position.character > range.end.character) {
+      return false;
+    }
+    return true;
   }
 
   /**

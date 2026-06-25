@@ -356,4 +356,23 @@ contract Base {}`,
       [`${URI.file("/w/src/Child.sol").toString()}#Child`],
     );
   });
+
+  it("does not prepare type hierarchy for unimported test-only symbols in source files", () => {
+    const files = {
+      "src/Current.sol": `pragma solidity ^0.8.24;
+contract Current {
+    function f() external pure { Ghost; }
+}`,
+      "test/Ghost.sol": `pragma solidity ^0.8.24;
+contract Ghost {}`,
+    };
+    const { docs, parser, idx, resolver } = setupFiles(files);
+    const provider = new TypeHierarchyProvider(idx, parser, resolver);
+    const doc = docs["src/Current.sol"];
+    const line = files["src/Current.sol"].split("\n")[2];
+    const col = line.indexOf("Ghost");
+
+    const prepared = provider.prepareTypeHierarchy(doc, { line: 2, character: col });
+    assert.deepEqual(prepared, []);
+  });
 });
