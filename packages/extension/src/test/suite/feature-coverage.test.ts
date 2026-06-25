@@ -206,6 +206,7 @@ describe("Feature coverage — project graph export", () => {
         range: { start: { line: 4, character: 4 }, end: { line: 6, character: 5 } },
         selectionRange: { start: { line: 4, character: 13 }, end: { line: 4, character: 20 } },
         containerName: "Vault",
+        metadata: { visibility: "external" },
       },
     ],
     edges: [
@@ -278,6 +279,13 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(parsedJson.relationshipStatus.pending, 3);
     assert.equal(parsedJson.edgeQuality.unresolved, 1);
     assert.equal(parsedJson.edges[0].evidence.summary, "usesType: IERC20 as parameter");
+    assert.equal(
+      parsedJson.nodes.find(
+        (node: { id?: string }) =>
+          node.id === "file:///workspace/src/Vault.sol#Vault:function:deposit:4:13",
+      )?.metadata?.visibility,
+      "external",
+    );
     assert.ok(
       parsedJson.nodes.some(
         (node: { id?: string; kind?: string }) =>
@@ -298,6 +306,7 @@ describe("Feature coverage — project graph export", () => {
       graphMl.content,
       /source="file:\/\/\/workspace\/src\/Vault.sol#Vault:function:deposit:4:13"/,
     );
+    assert.match(graphMl.content, /&quot;visibility&quot;:&quot;external&quot;/);
 
     const codeGraph = serializeProjectGraphForExport(sampleGraph, "codegraph-json", stats);
     assert.equal(codeGraph.language, "json");
@@ -312,6 +321,13 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(parsed.edges[0].resolutionConfidence, "parser");
     assert.equal(parsed.edges[0].unresolvedTarget, undefined);
     assert.equal(parsed.edges[0].evidence.summary, "usesType: IERC20 as parameter");
+    assert.equal(
+      parsed.nodes.find(
+        (node: { id?: string }) =>
+          node.id === "file:///workspace/src/Vault.sol#Vault:function:deposit:4:13",
+      )?.metadata?.visibility,
+      "external",
+    );
     assert.equal(parsed.edges[1].resolutionConfidence, "heuristic");
     assert.equal(parsed.edges[1].unresolvedTarget, true);
     assert.equal(parsed.edges[1].evidence.summary, "unresolved externalCall: call");

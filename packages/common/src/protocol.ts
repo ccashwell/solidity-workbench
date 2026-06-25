@@ -297,6 +297,7 @@ export interface ProjectGraphNode {
   containerId?: string;
   containerName?: string;
   detail?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ProjectGraphEdge {

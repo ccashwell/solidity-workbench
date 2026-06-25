@@ -143,7 +143,7 @@ const ZERO_RANGE: SourceRange = {
   end: { line: 0, character: 0 },
 };
 
-const CACHE_VERSION = 3;
+const CACHE_VERSION = 4;
 
 const CALL_TARGET_NODE_KINDS = new Set<SolidityGraphNodeKind>([
   "function",
@@ -1045,13 +1045,13 @@ export class GraphIndex {
     target?: SolidityGraphNode;
     missReason: ProjectGraphQueryMissReason;
   } {
+    const allowedKinds = params.targetKinds?.length
+      ? new Set<ProjectGraphNodeKind>(params.targetKinds)
+      : null;
     if (params.target) {
       const target = this.resolveGraphEndpoint(params.target);
       if (!target) return { missReason: "targetNotFound" };
-      const allowedKinds = params.targetKinds?.length
-        ? new Set<ProjectGraphNodeKind>(params.targetKinds)
-        : null;
-      return !allowedKinds || allowedKinds.has(target.kind)
+      return this.isAllowedGraphQueryTarget(params.kind, target, allowedKinds)
         ? { target, missReason: "targetNotFound" }
         : { missReason: "targetKindMismatch" };
     }
@@ -1060,8 +1060,10 @@ export class GraphIndex {
     const target = this.search({
       query,
       kinds: params.targetKinds,
-      maxResults: 1,
-    }).matches[0]?.node;
+      maxResults: 500,
+    }).matches.find((match) =>
+      this.isAllowedGraphQueryTarget(params.kind, match.node, allowedKinds),
+    )?.node;
     if (target) return { target, missReason: "targetNotFound" };
     const mismatchedTarget = params.targetKinds?.length
       ? this.search({ query, maxResults: 1 }).matches[0]?.node
@@ -1069,6 +1071,17 @@ export class GraphIndex {
     return mismatchedTarget
       ? { missReason: "targetKindMismatch" }
       : { missReason: "targetNotFound" };
+  }
+
+  private isAllowedGraphQueryTarget(
+    kind: ProjectGraphQueryKind,
+    node: SolidityGraphNode,
+    allowedKinds: Set<ProjectGraphNodeKind> | null,
+  ): boolean {
+    if (allowedKinds && !allowedKinds.has(node.kind)) return false;
+    return (
+      kind !== "callers" || node.kind !== "stateVariable" || node.metadata?.publicGetter === true
+    );
   }
 
   private pathResult(
@@ -1507,7 +1520,18 @@ export class GraphIndex {
       variable.name,
       variable.range,
       variable.nameRange,
-      { containerName, detail: variable.typeName },
+      {
+        containerName,
+        detail: variable.typeName,
+        metadata: {
+          visibility: variable.visibility,
+          publicGetter: variable.visibility === "public",
+          getterArgumentCount:
+            variable.visibility === "public"
+              ? this.publicStateVariableGetterArgumentCount(variable)
+              : undefined,
+        },
+      },
     );
     this.addNode(node);
     this.addEdge({ source: parentId, target: node.id, kind: "contains" });
@@ -3133,8 +3157,13 @@ export class GraphIndex {
       typeof candidate.filePath === "string" &&
       typeof candidate.tier === "string" &&
       this.isSourceRange(candidate.range) &&
-      this.isSourceRange(candidate.selectionRange)
+      this.isSourceRange(candidate.selectionRange) &&
+      (candidate.metadata === undefined || this.isRecord(candidate.metadata))
     );
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === "object" && !Array.isArray(value);
   }
 
   private isCacheEdge(edge: unknown): edge is SolidityGraphEdge {
@@ -3191,7 +3220,7 @@ export class GraphIndex {
     name: string,
     range: SourceRange,
     selectionRange: SourceRange,
-    extra: Pick<SolidityGraphNode, "containerName" | "detail"> = {},
+    extra: Pick<SolidityGraphNode, "containerName" | "detail" | "metadata"> = {},
   ): SolidityGraphNode {
     const id = this.memberNodeId(uri, extra.containerName, kind, name, selectionRange);
     const qualifiedName = extra.containerName ? `${extra.containerName}.${name}` : name;
@@ -3208,6 +3237,7 @@ export class GraphIndex {
       containerId: parentId,
       containerName: extra.containerName,
       detail: extra.detail,
+      metadata: extra.metadata,
     };
   }
 

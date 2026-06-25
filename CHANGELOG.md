@@ -97,6 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   getter call targets, including mapping and array getter arguments.
 - Project Graph callers queries can now target state-variable getter nodes, so
   indexed public getter calls are discoverable from the graph panel.
+- Project Graph state-variable nodes now carry visibility/getter metadata, and
+  callers queries reject non-public state variables as getter targets.
 
 ### Fixed
 

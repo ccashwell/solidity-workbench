@@ -107,6 +107,7 @@ interface ExportGraphNode {
   containerId?: string;
   containerName?: string;
   detail?: string;
+  metadata?: ProjectGraphNode["metadata"];
   range?: ProjectGraphNode["range"];
   selectionRange?: ProjectGraphNode["selectionRange"];
 }
@@ -297,6 +298,7 @@ function projectGraphToJson(graph: ProjectGraphResult, stats?: ProjectGraphStats
       containerId: node.containerId,
       containerName: node.containerName,
       detail: node.detail,
+      metadata: node.metadata,
     })),
   };
 }
@@ -332,7 +334,7 @@ function projectGraphToGraphMl(graph: ProjectGraphResult): string {
     '  <key id="qualifiedName" for="node" attr.name="qualifiedName" attr.type="string"/>',
     '  <key id="filePath" for="node" attr.name="filePath" attr.type="string"/>',
     '  <key id="tier" for="node" attr.name="tier" attr.type="string"/>',
-    '  <key id="metadata" for="edge" attr.name="metadata" attr.type="string"/>',
+    '  <key id="metadata" for="all" attr.name="metadata" attr.type="string"/>',
     '  <graph id="SolidityProjectGraph" edgedefault="directed">',
   ];
   for (const node of nodes) {
@@ -342,6 +344,9 @@ function projectGraphToGraphMl(graph: ProjectGraphResult): string {
     lines.push(`      <data key="qualifiedName">${xmlText(node.qualifiedName)}</data>`);
     lines.push(`      <data key="filePath">${xmlText(node.filePath)}</data>`);
     lines.push(`      <data key="tier">${xmlText(node.tier)}</data>`);
+    if (node.metadata && Object.keys(node.metadata).length > 0) {
+      lines.push(`      <data key="metadata">${xmlText(JSON.stringify(node.metadata))}</data>`);
+    }
     lines.push("    </node>");
   }
   graph.edges.forEach((edge, index) => {
@@ -373,6 +378,7 @@ function projectGraphToCodeGraphJson(
     containerId: node.containerId,
     containerName: node.containerName,
     detail: node.detail,
+    metadata: node.metadata,
     range: node.range,
     selectionRange: node.selectionRange,
     line: node.selectionRange ? node.selectionRange.start.line + 1 : undefined,
@@ -415,6 +421,7 @@ function exportGraphNodes(graph: ProjectGraphResult): ExportGraphNode[] {
         containerId: node.containerId,
         containerName: node.containerName,
         detail: node.detail,
+        metadata: node.metadata,
         range: node.range,
         selectionRange: node.selectionRange,
       },

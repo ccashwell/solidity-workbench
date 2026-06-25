@@ -1631,6 +1631,14 @@ contract Caller {
       assert.ok(totalAssets, "expected Vault.totalAssets node");
       assert.ok(balanceOf, "expected Vault.balanceOf node");
       assert.ok(internalAssets, "expected Vault.internalAssets node");
+      assert.equal(totalAssets.metadata?.visibility, "public");
+      assert.equal(totalAssets.metadata?.publicGetter, true);
+      assert.equal(totalAssets.metadata?.getterArgumentCount, 0);
+      assert.equal(balanceOf.metadata?.visibility, "public");
+      assert.equal(balanceOf.metadata?.publicGetter, true);
+      assert.equal(balanceOf.metadata?.getterArgumentCount, 1);
+      assert.equal(internalAssets.metadata?.visibility, "internal");
+      assert.equal(internalAssets.metadata?.publicGetter, false);
 
       const calls = graph.getOutgoingEdges(read.id, "calls");
       assert.ok(
@@ -1677,6 +1685,22 @@ contract Caller {
         balanceOfCallers.nodes.some((node) => node.id === read.id),
         "expected text callers query to include caller of public mapping getter",
       );
+
+      const internalAssetsCallers = graph.query({
+        kind: "callers",
+        target: { nodeId: internalAssets.id },
+        targetKinds: ["function", "stateVariable"],
+      });
+      assert.equal(internalAssetsCallers.found, false);
+      assert.equal(internalAssetsCallers.missReason, "targetKindMismatch");
+
+      const internalAssetsTextCallers = graph.query({
+        kind: "callers",
+        query: "internalAssets",
+        targetKinds: ["function", "stateVariable"],
+      });
+      assert.equal(internalAssetsTextCallers.found, false);
+      assert.equal(internalAssetsTextCallers.missReason, "targetKindMismatch");
 
       assert.ok(
         graph
