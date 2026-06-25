@@ -367,6 +367,36 @@ export interface ProjectGraphSearchResult {
   truncated?: boolean;
 }
 
+/** Request a focused graph query over callers, callees, or impact radius. */
+export const QueryProjectGraph = "solidity-workbench/queryProjectGraph";
+
+export type ProjectGraphQueryKind = "callers" | "callees" | "impact";
+
+export interface QueryProjectGraphParams {
+  kind: ProjectGraphQueryKind;
+  /** Explicit graph endpoint to query. Takes precedence over query. */
+  target?: ProjectGraphEndpoint;
+  /** Symbol query used when target is omitted. The best ranked match is queried. */
+  query?: string;
+  /** Restrict query target candidates when resolving by text query. */
+  targetKinds?: ProjectGraphNodeKind[];
+  /** Optional edge-kind filter. Defaults depend on query kind. */
+  edgeKinds?: ProjectGraphEdgeKind[];
+  /** Maximum traversal depth. Defaults to 1 for callers/callees and 2 for impact. */
+  maxDepth?: number;
+  /** Maximum nodes to return. Defaults to 240. */
+  maxNodes?: number;
+  /** Include containing declarations for context. Defaults to true. */
+  includeContainers?: boolean;
+}
+
+export interface ProjectGraphQueryResult extends ProjectGraphResult {
+  kind: ProjectGraphQueryKind;
+  query?: string;
+  targetId?: string;
+  found: boolean;
+}
+
 /** Request lightweight project graph size and timing stats. */
 export const GetProjectGraphStats = "solidity-workbench/getProjectGraphStats";
 

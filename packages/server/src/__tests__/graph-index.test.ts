@@ -320,6 +320,53 @@ contract Child is Base {
       assert.equal(cappedSearch.matches.length, 1);
       assert.equal(cappedSearch.truncated, true);
 
+      const helperCallers = graph.query({
+        kind: "callers",
+        query: "helper",
+        targetKinds: ["function"],
+      });
+      assert.equal(helperCallers.found, true);
+      assert.equal(helperCallers.targetId, helper.id);
+      assert.ok(
+        helperCallers.nodes.some((node) => node.id === entry.id),
+        "expected callers query to include the function that calls helper",
+      );
+      assert.ok(
+        helperCallers.edges.some((edge) => edge.source === entry.id && edge.target === helper.id),
+        "expected callers query to include the incoming call edge",
+      );
+
+      const entryCallees = graph.query({
+        kind: "callees",
+        target: { nodeId: entry.id },
+      });
+      assert.equal(entryCallees.found, true);
+      assert.deepEqual(
+        entryCallees.edges.map((edge) => edge.target).sort(),
+        [helper.id, inherited.id].sort(),
+        "expected callees query to include outgoing call-like targets",
+      );
+
+      const countImpact = graph.query({
+        kind: "impact",
+        target: { nodeId: count.id },
+        maxDepth: 1,
+      });
+      assert.equal(countImpact.found, true);
+      assert.ok(
+        countImpact.nodes.some((node) => node.id === entry.id),
+        "expected impact query to include functions that read or write the target state variable",
+      );
+      assert.ok(
+        countImpact.edges.some(
+          (edge) =>
+            edge.source === entry.id &&
+            edge.target === count.id &&
+            (edge.kind === "reads" || edge.kind === "writes"),
+        ),
+        "expected impact query to include incoming state access edges",
+      );
+
       const stats = graph.getStats();
       assert.equal(stats.nodesByKind.contract, 2);
       assert.equal(stats.edgesByKind.inherits, 1);

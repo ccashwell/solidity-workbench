@@ -406,6 +406,10 @@
         "title": "Solidity Workbench: Search Project Graph"
       },
       {
+        "command": "solidity-workbench.queryProjectGraph",
+        "title": "Solidity Workbench: Query Project Graph"
+      },
+      {
         "command": "solidity-workbench.projectGraphStats",
         "title": "Solidity Workbench: Show Project Graph Stats"
       },

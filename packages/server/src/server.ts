@@ -54,6 +54,7 @@ import {
   GetProjectGraphNeighborhood,
   GetProjectGraphPath,
   GetProjectGraphStats,
+  QueryProjectGraph,
   RebuildProjectGraph,
   SearchProjectGraph,
   SolSemanticTokenTypes,
@@ -68,9 +69,11 @@ import {
   type ListTestsParams,
   type ListTestsResult,
   type ProjectGraphPathResult,
+  type ProjectGraphQueryResult,
   type ProjectGraphResult,
   type ProjectGraphSearchResult,
   type ProjectGraphStatsResult,
+  type QueryProjectGraphParams,
   type RebuildProjectGraphParams,
   type SearchProjectGraphParams,
   type ServerStateParams,
@@ -839,6 +842,15 @@ connection.onRequest(
   async (params: SearchProjectGraphParams): Promise<ProjectGraphSearchResult> => {
     graphIndex.ensureWorkspaceDeclarations();
     return graphIndex.search(params);
+  },
+);
+
+connection.onRequest(
+  QueryProjectGraph,
+  async (params: QueryProjectGraphParams): Promise<ProjectGraphQueryResult> => {
+    graphIndex.ensureWorkspaceDeclarations();
+    if (params.target?.uri) graphIndex.ensureFileRelationships(params.target.uri);
+    return graphIndex.query(params);
   },
 );
 

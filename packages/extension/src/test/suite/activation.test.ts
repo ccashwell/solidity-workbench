@@ -65,6 +65,7 @@ describe("Extension activation", () => {
       "solidity-workbench.projectGraphCursor",
       "solidity-workbench.exportProjectGraph",
       "solidity-workbench.searchProjectGraph",
+      "solidity-workbench.queryProjectGraph",
       "solidity-workbench.projectGraphStats",
       "solidity-workbench.rebuildProjectGraph",
       "solidity-workbench.clearProjectGraphCache",

@@ -6,12 +6,15 @@ import {
   GetProjectGraphNeighborhood,
   GetProjectGraphPath,
   GetProjectGraphStats,
+  QueryProjectGraph,
   RebuildProjectGraph,
   SearchProjectGraph,
   type ProjectGraphEdge,
   type ProjectGraphEdgeKind,
   type ProjectGraphNode,
   type ProjectGraphPathResult,
+  type ProjectGraphQueryKind,
+  type ProjectGraphQueryResult,
   type ProjectGraphResolutionConfidence,
   type ProjectGraphResult,
   type ProjectGraphSearchMatch,
@@ -394,6 +397,9 @@ export class ProjectGraphExporter {
       vscode.commands.registerCommand("solidity-workbench.searchProjectGraph", () =>
         this.searchProjectGraph(),
       ),
+      vscode.commands.registerCommand("solidity-workbench.queryProjectGraph", () =>
+        this.queryProjectGraph(),
+      ),
       vscode.commands.registerCommand("solidity-workbench.projectGraphStats", () =>
         this.showProjectGraphStats(),
       ),
@@ -648,6 +654,86 @@ export class ProjectGraphExporter {
     await this.openProjectGraphNode(selected.match.node);
   }
 
+  private async queryProjectGraph(): Promise<void> {
+    const pickedKind = await vscode.window.showQuickPick(
+      [
+        { label: "Callers", description: "Incoming call-like edges", queryKind: "callers" },
+        { label: "Callees", description: "Outgoing call-like edges", queryKind: "callees" },
+        { label: "Impact", description: "Incoming dependency radius", queryKind: "impact" },
+      ] satisfies (vscode.QuickPickItem & { queryKind: ProjectGraphQueryKind })[],
+      {
+        title: "Query Solidity Project Graph",
+        placeHolder: "Choose the graph query",
+      },
+    );
+    if (!pickedKind) return;
+
+    const focused = this.activeSolidityPosition();
+    const useCursor = focused
+      ? await vscode.window.showQuickPick(
+          [
+            { label: "Cursor Symbol", description: "Use active Solidity cursor", value: true },
+            { label: "Search Query", description: "Type a graph symbol query", value: false },
+          ],
+          {
+            title: "Query Solidity Project Graph",
+            placeHolder: "Choose query target",
+          },
+        )
+      : undefined;
+    if (focused && !useCursor) return;
+
+    const textQuery =
+      !focused || useCursor?.value === false
+        ? await vscode.window.showInputBox({
+            title: "Query Solidity Project Graph",
+            placeHolder: "Contract.function, function, event, error, or type name",
+            prompt: "The best ranked project graph match will be queried.",
+          })
+        : undefined;
+    if (!focused && !textQuery?.trim()) return;
+
+    const result = await this.client.sendRequest<ProjectGraphQueryResult>(QueryProjectGraph, {
+      kind: pickedKind.queryKind,
+      target:
+        focused && useCursor?.value !== false
+          ? { uri: focused.uri.toString(), position: focused.position }
+          : undefined,
+      query: textQuery,
+      maxNodes: 120,
+    });
+
+    if (!result.found) {
+      vscode.window.showInformationMessage("No project graph query target found.");
+      return;
+    }
+
+    const selectableNodes = this.queryResultNodes(result);
+    if (selectableNodes.length === 0) {
+      vscode.window.showInformationMessage(`No ${pickedKind.label.toLowerCase()} found.`);
+      return;
+    }
+
+    const selected = await vscode.window.showQuickPick(
+      selectableNodes.map((node) => ({
+        label: node.qualifiedName,
+        description: `${node.kind} · ${node.tier}`,
+        detail: node.filePath,
+        node,
+      })),
+      {
+        title: result.truncated
+          ? `${pickedKind.label} (truncated)`
+          : `${pickedKind.label} for project graph target`,
+        placeHolder: "Select a declaration to open",
+        matchOnDescription: true,
+        matchOnDetail: true,
+      },
+    );
+    if (!selected) return;
+    await this.openProjectGraphNode(selected.node);
+  }
+
   private async showProjectGraphStats(): Promise<void> {
     const startedAt = Date.now();
     const stats = await this.getProjectGraphStats();
@@ -670,6 +756,26 @@ export class ProjectGraphExporter {
       detail: `${match.node.filePath}${edgeCount > 0 ? ` · ${edgeLabel}` : ""}`,
       match,
     };
+  }
+
+  private queryResultNodes(result: ProjectGraphQueryResult): ProjectGraphNode[] {
+    const nodesById = new Map(result.nodes.map((node) => [node.id, node]));
+    const relatedIds = new Set<string>();
+    for (const edge of result.edges) {
+      if (result.kind === "callees" && edge.source === result.targetId) {
+        relatedIds.add(edge.target);
+        continue;
+      }
+      if (result.kind !== "callees" && edge.target === result.targetId) {
+        relatedIds.add(edge.source);
+      }
+    }
+    const related = Array.from(relatedIds)
+      .map((id) => nodesById.get(id))
+      .filter((node): node is ProjectGraphNode => Boolean(node));
+    return related.length > 0
+      ? related
+      : result.nodes.filter((node) => node.id !== result.targetId);
   }
 
   private async openProjectGraphNode(node: ProjectGraphNode): Promise<void> {

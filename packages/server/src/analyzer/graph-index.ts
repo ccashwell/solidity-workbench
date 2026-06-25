@@ -19,6 +19,8 @@ import type {
   GetProjectGraphNeighborhoodParams,
   GetProjectGraphPathParams,
   ProjectGraphEndpoint,
+  ProjectGraphQueryKind,
+  ProjectGraphQueryResult,
   ProjectGraphSearchMatch,
   ProjectGraphSearchResult,
   StateVariableDeclaration,
@@ -28,6 +30,7 @@ import type {
   EnumDefinition,
   UserDefinedValueTypeDefinition,
   FileConstantDefinition,
+  QueryProjectGraphParams,
   SearchProjectGraphParams,
 } from "@solidity-workbench/common";
 import type { SymbolIndex } from "./symbol-index.js";
@@ -677,6 +680,39 @@ export class GraphIndex {
     return { query: params.query, matches, truncated };
   }
 
+  query(params: QueryProjectGraphParams): ProjectGraphQueryResult {
+    const target = this.resolveGraphQueryTarget(params);
+    if (!target) {
+      return {
+        nodes: [],
+        edges: [],
+        kind: params.kind,
+        query: params.query,
+        found: false,
+      };
+    }
+
+    const edgeKinds = params.edgeKinds?.length
+      ? params.edgeKinds
+      : defaultGraphQueryEdgeKinds(params.kind);
+    const graph = this.toNeighborhood({
+      rootId: target.id,
+      depth: params.maxDepth ?? (params.kind === "impact" ? 2 : 1),
+      direction: graphQueryDirection(params.kind),
+      edgeKinds,
+      maxNodes: params.maxNodes,
+      includeContainers: params.includeContainers,
+    });
+
+    return {
+      ...graph,
+      kind: params.kind,
+      query: params.query,
+      targetId: target.id,
+      found: true,
+    };
+  }
+
   toNeighborhood(params: GetProjectGraphNeighborhoodParams): ProjectGraphResult {
     const root = this.resolveNeighborhoodRoot(params);
     if (!root) return { nodes: [], edges: [] };
@@ -913,6 +949,17 @@ export class GraphIndex {
     if (endpoint.nodeId) return this.nodes.get(endpoint.nodeId);
     if (!endpoint.uri || !endpoint.position) return undefined;
     return this.findInnermostNodeAtPosition(endpoint.uri, endpoint.position);
+  }
+
+  private resolveGraphQueryTarget(params: QueryProjectGraphParams): SolidityGraphNode | undefined {
+    if (params.target) return this.resolveGraphEndpoint(params.target);
+    const query = params.query?.trim();
+    if (!query) return undefined;
+    return this.search({
+      query,
+      kinds: params.targetKinds,
+      maxResults: 1,
+    }).matches[0]?.node;
   }
 
   private pathResult(
@@ -3294,6 +3341,34 @@ export class GraphIndex {
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function defaultGraphQueryEdgeKinds(kind: ProjectGraphQueryKind): ProjectGraphEdgeKind[] {
+  if (kind === "impact") {
+    return [
+      "imports",
+      "inherits",
+      "implements",
+      "overrides",
+      "calls",
+      "externalCall",
+      "delegateCall",
+      "creates",
+      "usesModifier",
+      "reads",
+      "writes",
+      "emits",
+      "revertsWith",
+      "usesType",
+    ];
+  }
+  return ["calls", "externalCall", "delegateCall", "usesModifier", "creates"];
+}
+
+function graphQueryDirection(
+  kind: ProjectGraphQueryKind,
+): GetProjectGraphNeighborhoodParams["direction"] {
+  return kind === "callees" ? "outgoing" : "incoming";
 }
 
 interface GraphSearchScore {
