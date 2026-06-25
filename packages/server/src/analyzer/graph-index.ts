@@ -355,7 +355,8 @@ export class GraphIndex {
   rebuildWorkspace(): void {
     const startedAt = Date.now();
     const uris = this.resetWorkspaceGraph();
-    for (const uri of uris) this.updateFile(uri, false);
+    this.resolver.invalidate();
+    for (const uri of uris) this.updateFile(uri, false, false);
     for (const uri of this.relationshipFileUris(uris)) {
       this.indexFileRelationships(uri);
       this.relationshipIndexedUris.add(uri);
@@ -366,7 +367,8 @@ export class GraphIndex {
   rebuildWorkspaceDeclarations(): void {
     const startedAt = Date.now();
     const uris = this.resetWorkspaceGraph();
-    for (const uri of uris) this.updateFile(uri, false);
+    this.resolver.invalidate();
+    for (const uri of uris) this.updateFile(uri, false, false);
     this.enqueueRelationshipFiles(uris);
     this.lastRebuildDurationMs = Date.now() - startedAt;
   }
@@ -374,9 +376,10 @@ export class GraphIndex {
   ensureWorkspaceDeclarations(): void {
     const startedAt = Date.now();
     const uris = this.prioritizeWorkspaceUris(this.graphFileUris());
+    this.resolver.invalidate();
     for (const uri of uris) {
       if (this.nodeIdsByFile.has(uri) && this.nodes.has(this.fileNodeId(uri))) continue;
-      this.updateFile(uri, false);
+      this.updateFile(uri, false, false);
     }
     this.enqueueRelationshipFiles(uris.filter((uri) => !this.relationshipIndexedUris.has(uri)));
     this.lastRebuildDurationMs = Date.now() - startedAt;
@@ -427,9 +430,10 @@ export class GraphIndex {
     return this.relationshipProgress().remaining === 0;
   }
 
-  updateFile(uri: string, includeRelationshipEdges = true): void {
+  updateFile(uri: string, includeRelationshipEdges = true, invalidateResolver = true): void {
     const startedAt = Date.now();
     this.clearResolutionCaches();
+    if (invalidateResolver) this.resolver.invalidate(uri);
     this.clearFileForUpdate(uri);
     const result = this.parser.get(uri);
     if (!result) {
@@ -516,19 +520,21 @@ export class GraphIndex {
 
   updateFileAndDependents(uri: string, includeRelationshipEdges = true): string[] {
     const dependents = this.collectImportDependents(uri);
-    this.updateFile(uri, includeRelationshipEdges);
+    this.resolver.invalidate();
+    this.updateFile(uri, includeRelationshipEdges, false);
     for (const dependentUri of dependents) {
-      this.updateFile(dependentUri, includeRelationshipEdges);
+      this.updateFile(dependentUri, includeRelationshipEdges, false);
     }
     const refreshedUris = [uri, ...dependents];
     if (!includeRelationshipEdges) this.enqueueRelationshipFiles(refreshedUris);
     return refreshedUris;
   }
 
-  removeFile(uri: string): void {
+  removeFile(uri: string, invalidateResolver = true): void {
     const removed = this.nodeIdsByFile.get(uri);
     if (!removed) return;
     this.clearResolutionCaches();
+    if (invalidateResolver) this.resolver.invalidate(uri);
 
     for (const id of removed) this.nodes.delete(id);
     this.edges = this.edges.filter(
@@ -543,9 +549,10 @@ export class GraphIndex {
 
   removeFileAndDependents(uri: string, includeRelationshipEdges = true): string[] {
     const dependents = this.collectImportDependents(uri);
-    this.removeFile(uri);
+    this.resolver.invalidate();
+    this.removeFile(uri, false);
     for (const dependentUri of dependents) {
-      this.updateFile(dependentUri, includeRelationshipEdges);
+      this.updateFile(dependentUri, includeRelationshipEdges, false);
     }
     if (!includeRelationshipEdges) this.enqueueRelationshipFiles(dependents);
     return [uri, ...dependents];
@@ -1023,16 +1030,19 @@ export class GraphIndex {
     const dependents: string[] = [];
     const seen = new Set<string>([uri]);
     const queue = [uri];
+    const importSourcesByTarget = new Map<string, string[]>();
+
+    for (const edge of this.edges) {
+      if (edge.kind !== "imports" || !edge.source.startsWith("file:")) continue;
+      const sources = importSourcesByTarget.get(edge.target) ?? [];
+      sources.push(edge.source.slice("file:".length));
+      importSourcesByTarget.set(edge.target, sources);
+    }
 
     while (queue.length > 0) {
       const currentUri = queue.shift()!;
       const currentFileId = this.fileNodeId(currentUri);
-      const incomingImports = this.edges.filter(
-        (edge) => edge.kind === "imports" && edge.target === currentFileId,
-      );
-      for (const edge of incomingImports) {
-        if (!edge.source.startsWith("file:")) continue;
-        const dependentUri = edge.source.slice("file:".length);
+      for (const dependentUri of importSourcesByTarget.get(currentFileId) ?? []) {
         if (seen.has(dependentUri)) continue;
         seen.add(dependentUri);
         dependents.push(dependentUri);
@@ -1066,16 +1076,6 @@ export class GraphIndex {
       rawContractNode: this.findRawContractNode(uri, contract.name),
       stateTargets: this.collectStateVariableTargets(contract, uri),
     };
-
-    for (const base of contract.baseContracts) {
-      const resolved = this.resolver.resolveBaseContract(uri, base.baseName);
-      this.addEdge({
-        source: contractId,
-        target: resolved?.id ?? this.externalNodeId(base.baseName),
-        kind: "inherits",
-        metadata: { baseName: base.baseName, resolved: Boolean(resolved) },
-      });
-    }
 
     for (const usingFor of contract.usingFor) {
       if (usingFor.libraryName) {
@@ -1136,6 +1136,17 @@ export class GraphIndex {
       selectionRange: contract.nameRange,
     });
     this.addEdge({ source: fileNodeId, target: contractId, kind: "contains" });
+    for (const base of contract.baseContracts) {
+      const resolved = this.resolver.resolveBaseContract(uri, base.baseName);
+      this.addEdge({
+        source: contractId,
+        target: resolved?.id ?? this.externalNodeId(base.baseName),
+        kind: "inherits",
+        unresolvedTarget: resolved ? undefined : true,
+        resolutionConfidence: resolved ? "parser" : "unknown",
+        metadata: { baseName: base.baseName, resolved: Boolean(resolved) },
+      });
+    }
     return contractId;
   }
 

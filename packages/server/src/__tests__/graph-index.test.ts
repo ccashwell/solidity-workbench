@@ -764,6 +764,135 @@ contract Child is Base {
     }
   });
 
+  it("updates import, inheritance, and call edges when a file changes imported bases", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-import-change-test-"));
+    try {
+      const files = {
+        "src/BaseA.sol": `pragma solidity ^0.8.24;
+contract BaseA {
+    function pingA() internal pure returns (uint256) {
+        return 1;
+    }
+}
+`,
+        "src/BaseB.sol": `pragma solidity ^0.8.24;
+contract BaseB {
+    function pingB() internal pure returns (uint256) {
+        return 2;
+    }
+}
+`,
+        "src/Child.sol": `pragma solidity ^0.8.24;
+import "./BaseA.sol";
+
+contract Child is BaseA {
+    function run() external pure returns (uint256) {
+        return pingA();
+    }
+}
+`,
+      };
+
+      const uris: string[] = [];
+      const parser = new SolidityParser();
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const childUri = URI.file(path.join(tmpDir, "src/Child.sol")).toString();
+      const baseAUri = URI.file(path.join(tmpDir, "src/BaseA.sol")).toString();
+      const baseBUri = URI.file(path.join(tmpDir, "src/BaseB.sol")).toString();
+      const childId = resolver.contractId(childUri, "Child");
+      const baseAId = resolver.contractId(baseAUri, "BaseA");
+      const baseBId = resolver.contractId(baseBUri, "BaseB");
+      const childRun = graph
+        .getNodes()
+        .find((node) => node.name === "run" && node.containerName === "Child");
+      const pingA = graph
+        .getNodes()
+        .find((node) => node.name === "pingA" && node.containerName === "BaseA");
+      assert.ok(childRun, "expected Child.run graph node");
+      assert.ok(pingA, "expected BaseA.pingA graph node");
+      assert.equal(graph.getOutgoingEdges(childId, "inherits")[0]?.target, baseAId);
+      assert.ok(
+        graph.getOutgoingEdges(childRun.id, "calls").some((edge) => edge.target === pingA.id),
+        "expected initial call edge to BaseA.pingA",
+      );
+
+      const updatedChild = files["src/Child.sol"]
+        .replace("./BaseA.sol", "./BaseB.sol")
+        .replace("BaseA", "BaseB")
+        .replace("pingA", "pingB");
+      fs.writeFileSync(path.join(tmpDir, "src/Child.sol"), updatedChild, "utf-8");
+      parser.parse(childUri, updatedChild);
+      symbolIndex.updateFile(childUri);
+      const refreshed = graph.updateFileAndDependents(childUri, false);
+
+      assert.deepEqual(refreshed, [childUri]);
+      assert.equal(
+        graph.getOutgoingEdges(`file:${childUri}`, "imports")[0]?.target,
+        `file:${baseBUri}`,
+        "expected import edge to retarget BaseB",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(`file:${childUri}`, "imports")
+          .every((edge) => edge.target !== `file:${baseAUri}`),
+        "expected stale import edge to BaseA to be removed",
+      );
+      assert.equal(
+        graph.getOutgoingEdges(childId, "inherits")[0]?.target,
+        baseBId,
+        "expected inheritance edge to retarget BaseB",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(childId, "inherits").every((edge) => edge.target !== baseAId),
+        "expected stale inheritance edge to BaseA to be removed",
+      );
+      assert.equal(
+        graph.getOutgoingEdges(childRun.id, "calls").length,
+        0,
+        "declaration-only import change refresh should remove stale relationship edges",
+      );
+
+      graph.ensureFileRelationships(childUri);
+      const refreshedChildRun = graph
+        .getNodes()
+        .find((node) => node.name === "run" && node.containerName === "Child");
+      const pingB = graph
+        .getNodes()
+        .find((node) => node.name === "pingB" && node.containerName === "BaseB");
+      assert.ok(refreshedChildRun, "expected refreshed Child.run graph node");
+      assert.ok(pingB, "expected BaseB.pingB graph node");
+      assert.ok(
+        graph
+          .getOutgoingEdges(refreshedChildRun.id, "calls")
+          .some((edge) => edge.target === pingB.id),
+        "expected focused relationship indexing to add call edge to BaseB.pingB",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(refreshedChildRun.id, "calls")
+          .every((edge) => edge.target !== pingA.id),
+        "expected stale call edge to BaseA.pingA to stay removed",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("removes deleted files, refreshes import dependents, and evicts stale parser state", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-delete-test-"));
     try {
@@ -848,10 +977,17 @@ contract Child is Base {
         0,
         "expected unresolved import edge to be removed after dependent refresh",
       );
+      const inheritanceEdges = graph.getOutgoingEdges(childId, "inherits");
+      assert.equal(inheritanceEdges.length, 1, "expected unresolved inheritance edge to remain");
       assert.equal(
-        graph.getOutgoingEdges(childId, "inherits").length,
-        0,
-        "expected stale inheritance edge to deleted Base to be removed",
+        inheritanceEdges[0].target,
+        graph.externalNodeId("Base"),
+        "expected deleted Base inheritance to retarget an unresolved external node",
+      );
+      assert.equal(inheritanceEdges[0].unresolvedTarget, true);
+      assert.ok(
+        inheritanceEdges.every((edge) => edge.target !== baseId),
+        "expected stale inheritance edge to deleted Base file node to be removed",
       );
       assert.equal(
         graph.getOutgoingEdges(childRun.id, "calls").length,

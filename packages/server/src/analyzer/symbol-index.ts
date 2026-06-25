@@ -631,7 +631,11 @@ export class SymbolIndex {
 
   private removeFileSymbols(uri: string): void {
     const oldSymbols = this.symbolsByFile.get(uri) ?? [];
+    const removedContractNames = new Set<string>();
     for (const sym of oldSymbols) {
+      if (sym.kind === "contract" || sym.kind === "interface" || sym.kind === "library") {
+        removedContractNames.add(sym.name);
+      }
       const byName = this.symbolsByName.get(sym.name);
       if (!byName) continue;
       const filtered = byName.filter((s) => s.filePath !== uri);
@@ -646,9 +650,25 @@ export class SymbolIndex {
       }
     }
     this.symbolsByFile.delete(uri);
-    for (const [name, entry] of this.contractsByName) {
-      if (entry.uri === uri) this.contractsByName.delete(name);
+    for (const name of removedContractNames) {
+      if (this.contractsByName.get(name)?.uri === uri) {
+        this.restoreContractEntry(name);
+      }
     }
+  }
+
+  private restoreContractEntry(name: string): void {
+    this.contractsByName.delete(name);
+    const remaining = this.symbolsByName
+      .get(name)
+      ?.find(
+        (sym) => sym.kind === "contract" || sym.kind === "interface" || sym.kind === "library",
+      );
+    if (!remaining) return;
+    const contract = this.parser
+      .get(remaining.filePath)
+      ?.sourceUnit.contracts.find((candidate) => candidate.name === name);
+    if (contract) this.contractsByName.set(name, { uri: remaining.filePath, contract });
   }
 
   private indexStruct(

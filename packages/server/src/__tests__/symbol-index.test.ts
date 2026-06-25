@@ -288,6 +288,24 @@ contract B {
       assert.equal(idx.getContract("DeletedContract"), undefined);
       assert.deepEqual(idx.findWorkspaceSymbols("DeletedContract"), []);
     });
+
+    it("preserves remaining same-name contract entries when one file is removed", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      const firstUri = "file:///w/src/Shared.sol";
+      const secondUri = "file:///w/test/Shared.sol";
+
+      indexText(parser, idx, firstUri, `contract Shared { function projectOnly() external {} }`);
+      indexText(parser, idx, secondUri, `contract Shared { function mockOnly() external {} }`);
+      assert.equal(idx.findSymbols("Shared").length, 2);
+      assert.equal(idx.getContract("Shared")?.contract.functions[0]?.name, "mockOnly");
+
+      idx.removeFile(secondUri);
+
+      assert.equal(idx.findSymbols("Shared").length, 1);
+      assert.equal(idx.getContract("Shared")?.contract.functions[0]?.name, "projectOnly");
+      assert.equal(idx.getContract("Shared")?.contract.name, "Shared");
+    });
   });
 
   describe("reference index integration", () => {

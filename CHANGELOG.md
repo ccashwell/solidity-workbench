@@ -56,6 +56,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   synchronous full edge rebuilds on every edit.
 - Deleted Solidity files now evict parser, symbol, and graph state, refresh
   importing dependents, and queue those dependents for relationship reindexing.
+- Project Graph updates now invalidate semantic resolver state during file
+  refreshes, retarget import and inheritance edges when imported bases change,
+  and preserve unresolved inheritance edges when a deleted base is still named
+  in source.
+- Project Graph dependent refresh now uses an incoming-import map instead of
+  repeatedly scanning all edges, keeping shared-base incremental updates within
+  the interactive budget for larger Foundry-shaped workspaces.
+- Symbol indexing now preserves the remaining same-name contract entry when a
+  duplicate contract file is removed or re-indexed.
 - Project Graph rebuilds now index declarations before function bodies, so
   receiver-typed calls resolve correctly even when a caller file is visited
   before the imported interface or contract that declares the callee.
