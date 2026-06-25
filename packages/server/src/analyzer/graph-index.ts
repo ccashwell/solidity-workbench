@@ -2094,6 +2094,7 @@ export class GraphIndex {
           for (const arg of node.arguments ?? []) visitExpression(arg);
           return;
         case "BinaryOperation":
+          this.indexRawUsingForOperatorCall(uri, text, contract, sourceId, node);
           visitExpression(node.left, {
             assignmentTarget: this.isAssignmentOperator(node.operator),
             compoundAssignmentTarget: this.isCompoundAssignmentOperator(node.operator),
@@ -2342,6 +2343,62 @@ export class GraphIndex {
     if (!target.containerId) return false;
     const container = this.nodes.get(target.containerId);
     return container?.kind === "contract" || container?.kind === "interface";
+  }
+
+  private indexRawUsingForOperatorCall(
+    uri: string,
+    text: string,
+    contract: ContractDefinition,
+    sourceId: string,
+    operation: RawAstNode,
+  ): void {
+    const operator = typeof operation.operator === "string" ? operation.operator : undefined;
+    if (!operator) return;
+    const receiver = this.rawExpressionToString(operation.left);
+    if (!receiver) return;
+    const range = this.rawOperatorRange(text, operation, operator);
+    const receiverInfo = this.resolveReceiverInfo(uri, contract, receiver, range.start);
+    const receiverType = receiverInfo?.typeName;
+    if (!receiverType) return;
+    const target = this.resolveUsingForTarget(uri, contract, receiverType, operator, 1);
+    if (!target) return;
+    const resolved = this.resolveGraphTargetWithSolc(
+      uri,
+      range.start,
+      target,
+      "parser",
+      CALL_TARGET_NODE_KINDS,
+    );
+
+    if (resolved.solcTargetUnmapped) {
+      this.addEdge({
+        source: sourceId,
+        target: sourceId,
+        kind: "calls",
+        range,
+        metadata: {
+          calleeName: operator,
+          operator,
+          ...this.receiverMetadata(receiver, receiverInfo),
+          unresolvedTarget: true,
+          ...resolved.metadata,
+        },
+      });
+      return;
+    }
+
+    this.addEdge({
+      source: sourceId,
+      target: resolved.node.id,
+      kind: "calls",
+      range,
+      metadata: {
+        calleeName: operator,
+        operator,
+        ...this.receiverMetadata(receiver, receiverInfo),
+        ...resolved.metadata,
+      },
+    });
   }
 
   private indexRawLowLevelExternalCall(
@@ -2887,6 +2944,18 @@ export class GraphIndex {
     const end = node.range?.[1];
     if (end === undefined) return ZERO_RANGE;
     return this.textOffsetToRange(text, end - memberName.length + 1, memberName.length);
+  }
+
+  private rawOperatorRange(text: string, node: RawAstNode, operator: string): SourceRange {
+    const leftEnd = node.left?.range?.[1];
+    const rightStart = node.right?.range?.[0];
+    const start = typeof leftEnd === "number" ? leftEnd + 1 : node.range?.[0];
+    const end = typeof rightStart === "number" ? rightStart : node.range?.[1];
+    if (typeof start !== "number" || typeof end !== "number" || end < start) return ZERO_RANGE;
+    const segment = text.slice(start, end);
+    const relative = segment.indexOf(operator);
+    const offset = relative >= 0 ? start + relative : start;
+    return this.textOffsetToRange(text, offset, operator.length);
   }
 
   private collectLocalVariableNames(node: RawAstNode | undefined, out: Set<string>): void {

@@ -25,6 +25,26 @@ export function collectUsingForDirectives(
   return directives;
 }
 
+export function collectUsingForDirectivesInScope(
+  parser: SolidityParser,
+  uri: string,
+  sourceUnit: SoliditySourceUnit,
+  contract: ContractDefinition | undefined,
+  resolver?: SemanticResolver,
+): UsingForDirective[] {
+  const directives = collectUsingForDirectives(sourceUnit, contract);
+  if (!resolver) return directives;
+
+  for (const reachableUri of resolver.collectReachableUris(uri)) {
+    if (reachableUri === uri) continue;
+    const reachableSourceUnit = parser.get(reachableUri)?.sourceUnit;
+    if (!reachableSourceUnit) continue;
+    directives.push(...reachableSourceUnit.usingFor.filter((directive) => directive.isGlobal));
+  }
+
+  return directives;
+}
+
 /**
  * Resolve `receiver.member()` when `member` is bound via `using ... for`
  * (library extension or global free-function attachment).
@@ -42,7 +62,13 @@ export function findUsingForFunction(
   const sourceUnit = parser.get(uri)?.sourceUnit;
   if (!sourceUnit) return null;
 
-  for (const directive of collectUsingForDirectives(sourceUnit, contract)) {
+  for (const directive of collectUsingForDirectivesInScope(
+    parser,
+    uri,
+    sourceUnit,
+    contract,
+    resolver,
+  )) {
     if (directive.typeName !== undefined && !isSameTypeName(directive.typeName, receiverType)) {
       continue;
     }

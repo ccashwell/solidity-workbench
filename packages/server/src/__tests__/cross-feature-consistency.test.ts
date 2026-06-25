@@ -472,6 +472,113 @@ function clear(uint256 self) pure returns (uint256) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("resolves imported global using-for operators in graph and call hierarchy", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "semantic-consistency-"));
+    try {
+      const files = {
+        "src/WadMath.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+type Wad is uint256;
+
+function add(Wad left, Wad right) pure returns (Wad) {
+    return Wad.wrap(Wad.unwrap(left) + Wad.unwrap(right));
+}
+
+using {add as +} for Wad global;
+`,
+        "src/UsesWad.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import { Wad } from "./WadMath.sol";
+
+contract UsesWad {
+    function sum(Wad left, Wad right) external pure returns (Wad) {
+        return left + right;
+    }
+}
+`,
+        "test/WadMath.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+type TestWad is uint256;
+
+function add(TestWad left, TestWad right) pure returns (TestWad) {
+    return left;
+}
+`,
+      };
+
+      const uris: string[] = [];
+      const parser = new SolidityParser();
+      const docs: Record<string, TextDocument> = {};
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+        docs[name] = TextDocument.create(uri, "solidity", 1, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const callHierarchyProvider = new CallHierarchyProvider(
+        symbolIndex,
+        workspace,
+        parser,
+        resolver,
+        graph,
+      );
+
+      const sourceAdd = graph
+        .getNodes()
+        .find((node) => node.name === "add" && node.filePath.endsWith("src/WadMath.sol"));
+      const testAdd = graph
+        .getNodes()
+        .find((node) => node.name === "add" && node.filePath.endsWith("test/WadMath.sol"));
+      const sumNode = graph
+        .getNodes()
+        .find((node) => node.name === "sum" && node.containerName === "UsesWad");
+      assert.ok(sourceAdd, "expected imported source add graph node");
+      assert.ok(testAdd, "expected same-name test add graph node");
+      assert.ok(sumNode, "expected UsesWad.sum graph node");
+
+      const graphCalls = graph.getOutgoingEdges(sumNode.id, "calls");
+      const operatorCall = graphCalls.find((edge) => edge.target === sourceAdd.id);
+      assert.ok(operatorCall, "Project Graph should target imported add() through left + right");
+      assert.equal(operatorCall.metadata?.operator, "+");
+      assert.equal(operatorCall.metadata?.receiverType, "Wad");
+      assert.ok(
+        graphCalls.every((edge) => edge.target !== testAdd.id),
+        "Project Graph must not target same-name test add()",
+      );
+
+      const outgoing = await callHierarchyProvider.getOutgoingCalls({
+        name: "sum",
+        kind: SymbolKind.Function,
+        uri: docs["src/UsesWad.sol"].uri,
+        range: sumNode.range,
+        selectionRange: sumNode.selectionRange,
+        detail: "UsesWad",
+      });
+      const callHierarchyTarget = outgoing.find((call) => call.to.name === "add");
+      assert.ok(callHierarchyTarget, "expected call hierarchy target for using operator");
+      assert.equal(
+        callHierarchyTarget.to.uri,
+        URI.file(path.join(tmpDir, "src/WadMath.sol")).toString(),
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 function makeWorkspace(tmpDir: string, uris: string[]): WorkspaceManager {

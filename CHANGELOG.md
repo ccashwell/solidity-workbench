@@ -49,6 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph webview controls now have runtime regression coverage for
   filtering, indexed search messages, and render-cap expansion, including a fix
   for edge-title rendering in the generated SVG.
+- Project Graph and call hierarchy now resolve imported `global`
+  `using {fn as +} for T` operator bindings as calls to the bound free
+  function instead of dropping the operator edge.
 - Project Graph edges now include normalized evidence with source/target labels,
   syntax ranges, resolver, and a short reason for why the edge exists.
 - Project Graph edge evidence in the details panel can now jump directly to the

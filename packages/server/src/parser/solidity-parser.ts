@@ -330,6 +330,7 @@ export class SolidityParser {
 
   private mapUsingForFunctionAliases(node: {
     functions?: unknown;
+    operators?: unknown;
     range?: unknown;
   }): { functionName: string; memberName: string }[] {
     if (!this.currentText || !Array.isArray(node.functions) || node.functions.length === 0) {
@@ -346,11 +347,12 @@ export class SolidityParser {
     for (const rawEntry of list.split(",")) {
       const entry = rawEntry.trim();
       if (!entry) continue;
-      const match = /^([A-Za-z_$][\w$.]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/.exec(entry);
+      const match = /^([A-Za-z_$][\w$.]*)(?:\s+as\s+(.+?))?$/.exec(entry);
       if (!match) continue;
       const functionName = match[1].split(".").pop();
       if (!functionName) continue;
-      aliases.push({ functionName, memberName: match[2] ?? functionName });
+      const memberName = match[2]?.trim() || functionName;
+      aliases.push({ functionName, memberName });
     }
     return aliases;
   }

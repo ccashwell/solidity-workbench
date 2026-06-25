@@ -95,6 +95,26 @@ using {clear as wipe} for Data;
     ]);
   });
 
+  it("parses operator using aliases as exposed member names", () => {
+    const parser = new SolidityParser();
+    const result = parser.parse(
+      "file:///w/Operator.sol",
+      `pragma solidity 0.8.26;
+type Wad is uint256;
+function add(Wad left, Wad right) pure returns (Wad) {
+    return left;
+}
+using {add as +} for Wad global;
+`,
+    );
+    assert.equal(result.sourceUnit.usingFor.length, 1);
+    assert.equal(result.sourceUnit.usingFor[0].isGlobal, true);
+    assert.deepEqual(result.sourceUnit.usingFor[0].functionNames, ["+"]);
+    assert.deepEqual(result.sourceUnit.usingFor[0].functionAliases, [
+      { functionName: "add", memberName: "+" },
+    ]);
+  });
+
   it("hovers on a globally bound free function call", () => {
     const uri = "file:///w/Owner.sol";
     const { doc, parser, idx } = setup(uri, OWNER_FIXTURE);

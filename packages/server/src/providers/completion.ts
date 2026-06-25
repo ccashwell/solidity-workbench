@@ -8,7 +8,7 @@ import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
 import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { resolveReceiverTypeName, isSameTypeName } from "../utils/receiver-type.js";
-import { collectUsingForDirectives, findUsingForFunction } from "../utils/using-for.js";
+import { collectUsingForDirectivesInScope, findUsingForFunction } from "../utils/using-for.js";
 import { getEnclosingContract } from "../utils/scope.js";
 import { extractDottedReceiver } from "../utils/text.js";
 
@@ -372,7 +372,13 @@ export class CompletionProvider {
     const items: CompletionItem[] = [];
     const seen = new Set<string>();
 
-    for (const directive of collectUsingForDirectives(sourceUnit, contract)) {
+    for (const directive of collectUsingForDirectivesInScope(
+      this.parser,
+      uri,
+      sourceUnit,
+      contract,
+      this.resolver,
+    )) {
       if (directive.typeName !== undefined && !isSameTypeName(directive.typeName, receiverType)) {
         continue;
       }
