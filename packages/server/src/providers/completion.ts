@@ -60,7 +60,7 @@ export class CompletionProvider {
 
     return [
       ...this.provideKeywordCompletions(textBefore),
-      ...this.provideTypeCompletions(),
+      ...this.provideTypeCompletions(document.uri),
       ...this.provideSymbolCompletions(document.uri, textBefore),
       ...this.provideSnippetCompletions(textBefore),
     ];
@@ -489,7 +489,7 @@ export class CompletionProvider {
     }));
   }
 
-  private provideTypeCompletions(): CompletionItem[] {
+  private provideTypeCompletions(uri: string): CompletionItem[] {
     const types = [
       // Value types
       "bool",
@@ -525,16 +525,60 @@ export class CompletionProvider {
       detail: "Solidity type",
     }));
 
-    // Add known contracts/interfaces/structs as types
-    for (const [name] of this.symbolIndex.getAllContracts()) {
+    const seen = new Set(items.map((item) => item.label));
+    const typeSymbols = this.visibleTypeSymbols(uri);
+    for (const sym of typeSymbols) {
+      if (seen.has(sym.name)) continue;
+      seen.add(sym.name);
       items.push({
-        label: name,
-        kind: CompletionItemKind.Class,
-        detail: "contract/interface",
+        label: sym.name,
+        kind: this.symbolToCompletionKind(sym.kind),
+        detail: sym.detail ?? this.typeCompletionDetail(sym.kind),
+        data: {
+          symbolName: sym.name,
+          filePath: sym.filePath,
+          kind: sym.kind,
+          containerName: sym.containerName,
+        },
       });
     }
 
     return items;
+  }
+
+  private visibleTypeSymbols(uri: string): SolSymbol[] {
+    const reachableUris = this.resolver
+      ? Array.from(this.resolver.collectReachableUris(uri))
+      : [uri];
+    return reachableUris
+      .flatMap((reachableUri) => this.symbolIndex.getFileSymbols(reachableUri))
+      .filter((sym) => this.isTypeCompletionSymbol(sym));
+  }
+
+  private isTypeCompletionSymbol(sym: SolSymbol): boolean {
+    return (
+      sym.kind === "contract" ||
+      sym.kind === "interface" ||
+      sym.kind === "library" ||
+      sym.kind === "struct" ||
+      sym.kind === "enum" ||
+      sym.kind === "userDefinedValueType"
+    );
+  }
+
+  private typeCompletionDetail(kind: SymbolKind): string {
+    switch (kind) {
+      case "contract":
+      case "interface":
+      case "library":
+        return "contract/interface";
+      case "struct":
+      case "enum":
+      case "userDefinedValueType":
+        return kind;
+      default:
+        return "type";
+    }
   }
 
   private provideSymbolCompletions(uri: string, _textBefore: string): CompletionItem[] {

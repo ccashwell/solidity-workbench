@@ -149,6 +149,40 @@ contract User {
       assert.match(resolved.documentation.value, /claims are redeemed/);
     });
 
+    it("does not offer unreachable test-only types in general completions", () => {
+      const currentUri = "file:///w/src/User.sol";
+      const files = {
+        "file:///w/src/Types.sol": `pragma solidity ^0.8.24;
+contract ProductionVault {}
+struct ProductionParams {
+    uint256 amount;
+}
+`,
+        "file:///w/test/Mocks.sol": `pragma solidity ^0.8.24;
+contract MockVault {}
+struct MockParams {
+    address account;
+}
+`,
+        [currentUri]: `pragma solidity ^0.8.24;
+import {ProductionVault, ProductionParams} from "./Types.sol";
+
+contract User {
+    function run() external {
+
+    }
+}`,
+      };
+      const { doc, provider } = setupFiles(currentUri, files);
+      const items = provider.provideCompletions(doc, { line: 5, character: 8 });
+      const ls = labels(items);
+
+      assert.ok(ls.has("ProductionVault"), "expected imported production contract");
+      assert.ok(ls.has("ProductionParams"), "expected imported production struct");
+      assert.equal(ls.has("MockVault"), false, "unreachable test contract should not complete");
+      assert.equal(ls.has("MockParams"), false, "unreachable test struct should not complete");
+    });
+
     it("includes the Foundry test snippets", () => {
       const { doc, provider } = setup(
         "file:///w/X.t.sol",
