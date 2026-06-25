@@ -120,6 +120,8 @@ export const PROJECT_GRAPH_CALLABLE_NODE_KINDS: ProjectGraphNodeKind[] = [
 export const PROJECT_GRAPH_CALLER_TARGET_NODE_KINDS: ProjectGraphNodeKind[] = [
   ...PROJECT_GRAPH_CALLABLE_NODE_KINDS,
   "stateVariable",
+  "event",
+  "error",
 ];
 
 export function projectGraphQueryTargetKinds(
@@ -151,7 +153,7 @@ export function projectGraphQueryMissLabel(
     return kind === "impact"
       ? "No project graph query target found."
       : kind === "callers"
-        ? "Project graph callers queries require a function, constructor, receive/fallback, modifier, or state-variable getter target."
+        ? "Project graph callers queries require a function, constructor, receive/fallback, modifier, state-variable getter, event, or error target."
         : "Project graph callees queries require a function, constructor, receive/fallback, or modifier target.";
   }
   return kind === "impact"

@@ -160,6 +160,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native Call Hierarchy now treats emitted events and custom-error reverts as
   navigable targets, including file-level declarations and graph-backed
   `emits` / `revertsWith` edges.
+- Project Graph callers/callees queries now include emitted events and
+  custom-error reverts, so graph queries stay aligned with native Call
+  Hierarchy navigation.
 - Live Project Graph updates now refresh declarations and dependents
   immediately but queue relationship reindexing in the background, avoiding
   synchronous full edge rebuilds on every edit.

@@ -4647,7 +4647,15 @@ function defaultGraphQueryEdgeKinds(kind: ProjectGraphQueryKind): ProjectGraphEd
       "usesType",
     ];
   }
-  return ["calls", "externalCall", "delegateCall", "usesModifier", "creates"];
+  return [
+    "calls",
+    "externalCall",
+    "delegateCall",
+    "usesModifier",
+    "creates",
+    "emits",
+    "revertsWith",
+  ];
 }
 
 function graphQueryDirection(

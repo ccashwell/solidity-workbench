@@ -387,8 +387,34 @@ contract Child is Base {
       assert.equal(entryCallees.found, true);
       assert.deepEqual(
         entryCallees.edges.map((edge) => edge.target).sort(),
-        [helper.id, inherited.id].sort(),
-        "expected callees query to include outgoing call-like targets",
+        [helper.id, inherited.id, updated.id, unauthorized.id].sort(),
+        "expected callees query to include outgoing calls, emitted events, and custom-error reverts",
+      );
+
+      const updatedCallers = graph.query({
+        kind: "callers",
+        target: { nodeId: updated.id },
+        targetKinds: ["event"],
+      });
+      assert.equal(updatedCallers.found, true);
+      assert.equal(updatedCallers.targetId, updated.id);
+      assert.ok(
+        updatedCallers.edges.some((edge) => edge.source === entry.id && edge.target === updated.id),
+        "expected callers query to include the function that emits the event",
+      );
+
+      const unauthorizedCallers = graph.query({
+        kind: "callers",
+        target: { nodeId: unauthorized.id },
+        targetKinds: ["error"],
+      });
+      assert.equal(unauthorizedCallers.found, true);
+      assert.equal(unauthorizedCallers.targetId, unauthorized.id);
+      assert.ok(
+        unauthorizedCallers.edges.some(
+          (edge) => edge.source === entry.id && edge.target === unauthorized.id,
+        ),
+        "expected callers query to include the function that reverts with the custom error",
       );
 
       const nonCallableCallers = graph.query({

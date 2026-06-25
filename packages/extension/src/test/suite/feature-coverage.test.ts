@@ -1102,7 +1102,7 @@ describe("Feature coverage — project graph export", () => {
     );
   });
 
-  it("constrains graph call queries to callable targets", () => {
+  it("constrains graph call queries to supported target kinds", () => {
     assert.deepEqual(PROJECT_GRAPH_CALLABLE_NODE_KINDS, [
       "function",
       "constructor",
@@ -1113,6 +1113,8 @@ describe("Feature coverage — project graph export", () => {
     assert.deepEqual(PROJECT_GRAPH_CALLER_TARGET_NODE_KINDS, [
       ...PROJECT_GRAPH_CALLABLE_NODE_KINDS,
       "stateVariable",
+      "event",
+      "error",
     ]);
     assert.deepEqual(
       projectGraphQueryTargetKinds("callers"),
@@ -1123,7 +1125,7 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(projectGraphQueryMissLabel("callers"), "No project graph callers target found.");
     assert.equal(
       projectGraphQueryMissLabel("callers", "targetKindMismatch"),
-      "Project graph callers queries require a function, constructor, receive/fallback, modifier, or state-variable getter target.",
+      "Project graph callers queries require a function, constructor, receive/fallback, modifier, state-variable getter, event, or error target.",
     );
     assert.equal(
       projectGraphQueryMissLabel("callees", "targetKindMismatch"),
