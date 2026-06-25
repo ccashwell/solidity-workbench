@@ -26,6 +26,7 @@ import {
   type ProjectGraphResult,
   type ProjectGraphSearchMatch,
   type ProjectGraphSearchResult,
+  type ProjectGraphScopeDiagnostics,
   type ProjectGraphStatsResult,
   type QueryProjectGraphParams,
   type SearchProjectGraphParams,
@@ -400,7 +401,11 @@ export function summarizeProjectGraphEdgeQuality(
 export function summarizeProjectGraphResultDiagnostics(result?: {
   indexStatus?: ProjectGraphIndexStatus;
   edgeQuality?: ProjectGraphEdgeQuality;
+  scope?: ProjectGraphScopeDiagnostics;
   truncated?: boolean;
+  nodes?: unknown[];
+  matches?: unknown[];
+  found?: boolean;
 }): ProjectGraphResultDiagnostics | undefined {
   if (!result) return undefined;
   const details: string[] = [];
@@ -441,12 +446,52 @@ export function summarizeProjectGraphResultDiagnostics(result?: {
     );
   }
 
+  const scopeHint = projectGraphHiddenScopeHint(result.scope);
+  const emptyResult =
+    result.found === false ||
+    (Array.isArray(result.nodes) && result.nodes.length === 0) ||
+    (Array.isArray(result.matches) && result.matches.length === 0);
+  if (scopeHint && emptyResult) {
+    if (state === "ok") state = "warning";
+    details.push(scopeHint);
+  }
+
   if (details.length === 0) return undefined;
   return {
     state,
     label: state === "partial" ? "Partial graph result" : "Graph result needs review",
     detail: details.join(" "),
   };
+}
+
+export function projectGraphHiddenScopeHint(
+  scope?: ProjectGraphScopeDiagnostics,
+): string | undefined {
+  if (!scope || scope.hiddenNodeCount <= 0) return undefined;
+  const hidden: string[] = [];
+  if (!scope.includeTests && scope.hiddenTestNodeCount > 0) {
+    hidden.push(
+      `${scope.hiddenTestNodeCount} test ${scope.hiddenTestNodeCount === 1 ? "node" : "nodes"}`,
+    );
+  }
+  if (!scope.includeDependencies && scope.hiddenDependencyNodeCount > 0) {
+    hidden.push(
+      `${scope.hiddenDependencyNodeCount} dependency ${scope.hiddenDependencyNodeCount === 1 ? "node" : "nodes"}`,
+    );
+  }
+  if (scope.hiddenOtherNodeCount > 0) {
+    hidden.push(
+      `${scope.hiddenOtherNodeCount} scoped ${scope.hiddenOtherNodeCount === 1 ? "node" : "nodes"}`,
+    );
+  }
+  if (hidden.length === 0) return undefined;
+  return `Current scope hides ${joinEnglishList(hidden)}. Enable Tests or Deps to expand the result.`;
+}
+
+function joinEnglishList(values: string[]): string {
+  if (values.length <= 1) return values[0] ?? "";
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(", ")}, and ${values[values.length - 1]}`;
 }
 
 function projectGraphToJson(graph: ProjectGraphResult, stats?: ProjectGraphStatsResult): unknown {
@@ -851,7 +896,12 @@ export class ProjectGraphExporter {
             },
           );
           if (result.matches.length === 0) {
-            await this.postProjectGraphStatus(`No project graph matches for '${query}'.`);
+            await this.postProjectGraphStatus(
+              this.graphMissStatus(
+                `No project graph matches for '${query}'.`,
+                projectGraphHiddenScopeHint(result.scope),
+              ),
+            );
             return;
           }
           const stats = await this.getProjectGraphStats();
@@ -893,7 +943,12 @@ export class ProjectGraphExporter {
             ...this.scopeFromMessage(msg),
           });
           if (!result.found) {
-            await this.postProjectGraphStatus(projectGraphQueryMissLabel(kind, result.missReason));
+            await this.postProjectGraphStatus(
+              this.graphMissStatus(
+                projectGraphQueryMissLabel(kind, result.missReason),
+                projectGraphHiddenScopeHint(result.scope),
+              ),
+            );
             return;
           }
           const stats = await this.getProjectGraphStats();
@@ -948,7 +1003,10 @@ export class ProjectGraphExporter {
             if (this.panel) {
               await this.panel.webview.postMessage({
                 type: "status",
-                message: "No project graph path found.",
+                message: this.graphMissStatus(
+                  "No project graph path found.",
+                  projectGraphHiddenScopeHint(pathGraph.scope),
+                ),
               });
             }
             return;
@@ -1043,7 +1101,12 @@ export class ProjectGraphExporter {
       ...graphScope,
     });
     if (result.matches.length === 0) {
-      vscode.window.showInformationMessage(`No project graph matches for '${query}'.`);
+      vscode.window.showInformationMessage(
+        this.graphMissStatus(
+          `No project graph matches for '${query}'.`,
+          projectGraphHiddenScopeHint(result.scope),
+        ),
+      );
       return;
     }
 
@@ -1118,7 +1181,10 @@ export class ProjectGraphExporter {
 
     if (!result.found) {
       vscode.window.showInformationMessage(
-        projectGraphQueryMissLabel(pickedKind.queryKind, result.missReason),
+        this.graphMissStatus(
+          projectGraphQueryMissLabel(pickedKind.queryKind, result.missReason),
+          projectGraphHiddenScopeHint(result.scope),
+        ),
       );
       return;
     }
@@ -1363,6 +1429,10 @@ export class ProjectGraphExporter {
     return [prefix, result.truncated ? "truncated" : "", this.graphResultDetail(result)]
       .filter(Boolean)
       .join(" · ");
+  }
+
+  private graphMissStatus(message: string, scopeHint?: string): string {
+    return scopeHint ? `${message} ${scopeHint}` : message;
   }
 
   private async postProjectGraphStatus(message: string): Promise<void> {

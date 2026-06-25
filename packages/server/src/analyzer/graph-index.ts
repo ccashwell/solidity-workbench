@@ -26,6 +26,7 @@ import type {
   ProjectGraphQueryResult,
   ProjectGraphSearchMatch,
   ProjectGraphSearchResult,
+  ProjectGraphScopeDiagnostics,
   StateVariableDeclaration,
   ProjectGraphMeasuredRequestKind,
   ProjectGraphPerformanceSummary,
@@ -668,7 +669,8 @@ export class GraphIndex {
     includeDependencies = false,
   ): ProjectGraphResult {
     const allowed = edgeKinds?.length ? new Set<ProjectGraphEdgeKind>(edgeKinds) : null;
-    const excluded = this.excludedGraphNodeIds({ includeTests, includeDependencies });
+    const scope = { includeTests, includeDependencies };
+    const excluded = this.excludedGraphNodeIds(scope);
     let nodes = this.getNodes().filter((node) => !excluded.has(node.id));
     let edges = allowed ? this.edges.filter((edge) => allowed.has(edge.kind)) : this.edges;
     edges = edges.filter((edge) => !excluded.has(edge.source) && !excluded.has(edge.target));
@@ -684,6 +686,7 @@ export class GraphIndex {
       nodes,
       edges: edges.slice(),
       truncated,
+      scope: this.graphScopeDiagnostics(scope, excluded),
     };
   }
 
@@ -695,6 +698,7 @@ export class GraphIndex {
         matches: [],
         indexStatus: this.graphIndexStatus(),
         edgeQuality: this.summarizeEdgeQuality([]),
+        scope: this.graphScopeDiagnostics(params, this.excludedGraphNodeIds(params)),
       };
     }
 
@@ -756,6 +760,7 @@ export class GraphIndex {
       truncated,
       indexStatus: this.graphIndexStatus(),
       edgeQuality: this.summarizeEdgeQuality(includedEdges),
+      scope: this.graphScopeDiagnostics(params, excluded),
     };
   }
 
@@ -773,6 +778,7 @@ export class GraphIndex {
         missReason: resolvedTarget.missReason,
         indexStatus: this.graphIndexStatus(),
         edgeQuality: this.summarizeEdgeQuality([]),
+        scope: this.graphScopeDiagnostics(params, excluded),
       };
     }
     if (excluded.has(target.id)) {
@@ -785,6 +791,7 @@ export class GraphIndex {
         missReason: "targetNotFound",
         indexStatus: this.graphIndexStatus(),
         edgeQuality: this.summarizeEdgeQuality([]),
+        scope: this.graphScopeDiagnostics(params, excluded),
       };
     }
     if (params.kind === "callees") this.ensureFileRelationships(target.uri);
@@ -819,10 +826,11 @@ export class GraphIndex {
 
   toNeighborhood(params: GetProjectGraphNeighborhoodParams): ProjectGraphResult {
     const root = this.resolveNeighborhoodRoot(params);
-    if (!root) return { nodes: [], edges: [] };
-
     const excluded = this.excludedGraphNodeIds(params);
-    if (excluded.has(root.id)) return { nodes: [], edges: [] };
+    if (!root) return { nodes: [], edges: [], scope: this.graphScopeDiagnostics(params, excluded) };
+    if (excluded.has(root.id)) {
+      return { nodes: [], edges: [], scope: this.graphScopeDiagnostics(params, excluded) };
+    }
 
     const depth = Math.max(0, Math.min(params.depth ?? 2, 8));
     const maxNodes = Math.max(1, Math.min(params.maxNodes ?? 240, 2_000));
@@ -889,16 +897,33 @@ export class GraphIndex {
       edges,
       focusId: root.id,
       truncated,
+      scope: this.graphScopeDiagnostics(params, excluded),
     };
   }
 
   toShortestPath(params: GetProjectGraphPathParams): ProjectGraphPathResult {
     const from = this.resolveGraphEndpoint(params.from);
     const to = this.resolveGraphEndpoint(params.to);
-    if (!from || !to) return { nodes: [], edges: [], fromId: from?.id, toId: to?.id, found: false };
     const excluded = this.excludedGraphNodeIds(params);
+    if (!from || !to) {
+      return {
+        nodes: [],
+        edges: [],
+        fromId: from?.id,
+        toId: to?.id,
+        found: false,
+        scope: this.graphScopeDiagnostics(params, excluded),
+      };
+    }
     if (excluded.has(from.id) || excluded.has(to.id)) {
-      return { nodes: [], edges: [], fromId: from.id, toId: to.id, found: false };
+      return {
+        nodes: [],
+        edges: [],
+        fromId: from.id,
+        toId: to.id,
+        found: false,
+        scope: this.graphScopeDiagnostics(params, excluded),
+      };
     }
     this.ensureFileRelationships(from.uri);
     this.ensureFileRelationships(to.uri);
@@ -910,6 +935,7 @@ export class GraphIndex {
         fromId: from.id,
         toId: to.id,
         found: true,
+        scope: this.graphScopeDiagnostics(params, excluded),
       };
     }
 
@@ -937,7 +963,12 @@ export class GraphIndex {
         if (!this.nodes.has(next) || visited.has(next) || excluded.has(next)) continue;
         const path = [...current.path, edge];
         if (next === to.id) {
-          return this.pathResult(from.id, to.id, path);
+          return this.pathResult(
+            from.id,
+            to.id,
+            path,
+            this.graphScopeDiagnostics(params, excluded),
+          );
         }
         visited.add(next);
         queue.push({ nodeId: next, depth: current.depth + 1, path });
@@ -951,6 +982,7 @@ export class GraphIndex {
       fromId: from.id,
       toId: to.id,
       found: false,
+      scope: this.graphScopeDiagnostics(params, excluded),
     };
   }
 
@@ -1288,6 +1320,7 @@ export class GraphIndex {
     fromId: string,
     toId: string,
     pathEdges: SolidityGraphEdge[],
+    scope: ProjectGraphScopeDiagnostics,
   ): ProjectGraphPathResult {
     const ids = new Set<string>([fromId, toId]);
     for (const edge of pathEdges) {
@@ -1303,6 +1336,7 @@ export class GraphIndex {
       fromId,
       toId,
       found: true,
+      scope,
     };
   }
 
@@ -1411,6 +1445,34 @@ export class GraphIndex {
     }
 
     return excluded;
+  }
+
+  private graphScopeDiagnostics(
+    scope: GraphScopeFilter,
+    excluded: Set<string>,
+  ): ProjectGraphScopeDiagnostics {
+    let hiddenTestNodeCount = 0;
+    let hiddenDependencyNodeCount = 0;
+    let hiddenOtherNodeCount = 0;
+    for (const id of excluded) {
+      const node = this.nodes.get(id);
+      if (!node) continue;
+      if (node.tier === "deps") {
+        hiddenDependencyNodeCount++;
+      } else if (node.tier === "tests") {
+        hiddenTestNodeCount++;
+      } else {
+        hiddenOtherNodeCount++;
+      }
+    }
+    return {
+      includeTests: scope.includeTests === true,
+      includeDependencies: scope.includeDependencies === true,
+      hiddenNodeCount: hiddenTestNodeCount + hiddenDependencyNodeCount + hiddenOtherNodeCount,
+      hiddenTestNodeCount,
+      hiddenDependencyNodeCount,
+      hiddenOtherNodeCount,
+    };
   }
 
   private isContractLikeNode(node: SolidityGraphNode): boolean {

@@ -3320,6 +3320,10 @@ contract Dep {
         false,
         "expected dependency declarations to stay hidden from project graph results by default",
       );
+      assert.ok(
+        (declarationsOnlyDeps.toProjectGraph().scope?.hiddenDependencyNodeCount ?? 0) > 0,
+        "expected default graph result to explain hidden dependency nodes",
+      );
       assert.equal(
         declarationsOnlyDeps
           .toProjectGraph(undefined, undefined, false, true)
@@ -3328,11 +3332,22 @@ contract Dep {
         "expected includeDependencies to expose indexed dependency declarations",
       );
       assert.equal(
-        declarationsOnlyDeps
-          .search({ query: "Dep" })
-          .matches.some((match) => match.node.containerName === "Dep" || match.node.name === "Dep"),
+        declarationsOnlyDeps.toProjectGraph(undefined, undefined, false, true).scope
+          ?.hiddenDependencyNodeCount,
+        0,
+        "expected includeDependencies to clear dependency hidden-node diagnostics",
+      );
+      const hiddenDependencySearch = declarationsOnlyDeps.search({ query: "Dep" });
+      assert.equal(
+        hiddenDependencySearch.matches.some(
+          (match) => match.node.containerName === "Dep" || match.node.name === "Dep",
+        ),
         false,
         "expected dependency declarations to stay hidden from graph search by default",
+      );
+      assert.ok(
+        (hiddenDependencySearch.scope?.hiddenDependencyNodeCount ?? 0) > 0,
+        "expected search result to explain hidden dependency nodes",
       );
       assert.ok(
         declarationsOnlyDeps

@@ -140,6 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph now opens a recoverable empty-scope view when the default
   filters hide every indexed node, so users can opt into tests or dependencies
   directly from the graph webview.
+- Empty Project Graph search, query, and path results now report when the
+  current scope is hiding test or dependency nodes that may explain the miss.
 - VSIX verification now lives in a shared `scripts/verify-vsix.mjs` checker,
   and local packaging, CI, and publish workflows all verify the same exact
   versioned artifact before upload or release.

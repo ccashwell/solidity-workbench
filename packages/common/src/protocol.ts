@@ -340,6 +340,7 @@ export interface ProjectGraphResult {
   edges: ProjectGraphEdge[];
   focusId?: string;
   truncated?: boolean;
+  scope?: ProjectGraphScopeDiagnostics;
 }
 
 export interface ProjectGraphPathResult extends ProjectGraphResult {
@@ -390,6 +391,16 @@ export interface ProjectGraphSearchResult {
   truncated?: boolean;
   indexStatus?: ProjectGraphIndexStatus;
   edgeQuality?: ProjectGraphEdgeQuality;
+  scope?: ProjectGraphScopeDiagnostics;
+}
+
+export interface ProjectGraphScopeDiagnostics {
+  includeTests: boolean;
+  includeDependencies: boolean;
+  hiddenNodeCount: number;
+  hiddenTestNodeCount: number;
+  hiddenDependencyNodeCount: number;
+  hiddenOtherNodeCount: number;
 }
 
 export interface ProjectGraphIndexStatus {

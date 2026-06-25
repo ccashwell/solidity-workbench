@@ -36,6 +36,7 @@ import {
   projectGraphQueryTargetKinds,
   projectGraphIncludeDependenciesFlag,
   projectGraphIncludeTestsFlag,
+  projectGraphHiddenScopeHint,
   projectGraphShowMoreControlState,
   PROJECT_GRAPH_CALLABLE_NODE_KINDS,
   serializeProjectGraphForExport,
@@ -1281,6 +1282,31 @@ describe("Feature coverage — project graph export", () => {
     });
     assert.equal(warning?.state, "warning");
     assert.equal(warning?.label, "Graph result needs review");
+
+    const scoped = summarizeProjectGraphResultDiagnostics({
+      matches: [],
+      scope: {
+        includeTests: false,
+        includeDependencies: false,
+        hiddenNodeCount: 5,
+        hiddenTestNodeCount: 2,
+        hiddenDependencyNodeCount: 3,
+        hiddenOtherNodeCount: 0,
+      },
+    });
+    assert.equal(scoped?.state, "warning");
+    assert.match(scoped?.detail ?? "", /Current scope hides 2 test nodes and 3 dependency nodes/);
+    assert.match(
+      projectGraphHiddenScopeHint({
+        includeTests: true,
+        includeDependencies: false,
+        hiddenNodeCount: 1,
+        hiddenTestNodeCount: 0,
+        hiddenDependencyNodeCount: 1,
+        hiddenOtherNodeCount: 0,
+      }) ?? "",
+      /1 dependency node/,
+    );
   });
 
   it("summarizes project graph relationship indexing status", () => {
