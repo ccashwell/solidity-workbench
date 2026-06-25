@@ -198,6 +198,63 @@ contract C {
       assert.equal(syms[0].nameRange.start.line, 3);
     });
 
+    it("resolves file-level structs through plain imports", () => {
+      const parser = new SolidityParser();
+      const workspace = {
+        getAllFileUris: () => ["file:///w/Types.sol", "file:///w/User.sol", "file:///w/Named.sol"],
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, fromFile: string) =>
+          path.resolve(path.dirname(fromFile), importPath),
+      } as unknown as WorkspaceManager;
+      const idx = new SymbolIndex(parser, workspace);
+
+      indexText(
+        parser,
+        idx,
+        "file:///w/Types.sol",
+        `
+pragma solidity ^0.8.24;
+
+struct Receipt {
+    uint256 amount;
+}
+
+struct Other {
+    bool flag;
+}
+`,
+      );
+      indexText(
+        parser,
+        idx,
+        "file:///w/User.sol",
+        `
+pragma solidity ^0.8.24;
+import "./Types.sol";
+
+contract User {}
+`,
+      );
+      indexText(
+        parser,
+        idx,
+        "file:///w/Named.sol",
+        `
+pragma solidity ^0.8.24;
+import {Other} from "./Types.sol";
+
+contract Named {}
+`,
+      );
+
+      assert.equal(idx.getStruct("file:///w/User.sol", "Receipt")?.name, "Receipt");
+      assert.equal(
+        idx.getStruct("file:///w/Named.sol", "Receipt"),
+        undefined,
+        "named imports should not expose unrelated file-level structs",
+      );
+    });
+
     it("indexes file-level constants", () => {
       const parser = new SolidityParser();
       const idx = new SymbolIndex(parser, makeFakeWorkspace());

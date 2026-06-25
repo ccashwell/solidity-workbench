@@ -158,6 +158,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph and inheritance graph now keep source contracts visible when
   they inherit from a non-Foundry dependency that happens to declare
   `contract Test`, including through plain Solidity imports.
+- Plain-imported file-level structs now resolve through the shared symbol
+  index, improving struct receiver/member typing for files that use
+  `import "./Types.sol";`.
 - Project Graph snapshots and search edge previews now drop edges whose source
   or target node is hidden by the current scope or absent because dependency
   declarations were not indexed.

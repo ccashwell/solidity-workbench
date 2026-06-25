@@ -623,6 +623,11 @@ export class SymbolIndex {
         const visibleName = alias.alias ?? alias.symbol;
         if (visibleName === name) return { name: alias.symbol, uri: targetUri };
       }
+
+      if (!imp.unitAlias && (imp.symbolAliases ?? []).length === 0) {
+        const plainImportStruct = this.findStructInSourceUnit(targetUri, name);
+        if (plainImportStruct) return { name, uri: targetUri };
+      }
     }
 
     return undefined;
