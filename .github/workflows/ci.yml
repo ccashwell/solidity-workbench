@@ -108,6 +108,12 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Resolve package version
+        id: version
+        run: |
+          PKG_VERSION=$(node -p "require('./packages/extension/package.json').version")
+          echo "pkg=${PKG_VERSION}" >> "$GITHUB_OUTPUT"
+
       - name: Build
         run: pnpm -r build
 
@@ -116,7 +122,7 @@ jobs:
 
       - name: Verify VSIX contents
         run: |
-          VERSION=$(node -p "require('./packages/extension/package.json').version")
+          VERSION="${{ steps.version.outputs.pkg }}"
           VSIX="packages/extension/solidity-workbench-${VERSION}.vsix"
           echo "Inspecting $VSIX"
           test -f "$VSIX" || {
@@ -165,4 +171,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: solidity-workbench-vsix
-          path: packages/extension/*.vsix
+          path: packages/extension/solidity-workbench-${{ steps.version.outputs.pkg }}.vsix

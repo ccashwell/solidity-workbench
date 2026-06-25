@@ -82,13 +82,17 @@ jobs:
             echo "::error::OVSX_TOKEN (or legacy OVSX_PAT) is required to publish releases"
             exit 1
           fi
-          VSIX=$(ls packages/extension/*.vsix | head -n 1)
+          VSIX="packages/extension/solidity-workbench-${{ steps.version.outputs.pkg }}.vsix"
+          test -f "$VSIX" || {
+            echo "::error::Expected VSIX was not produced: $VSIX"
+            exit 1
+          }
           npx --yes ovsx publish "$VSIX" --pat "$OVSX_PAT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: packages/extension/*.vsix
+          files: packages/extension/solidity-workbench-${{ steps.version.outputs.pkg }}.vsix
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
