@@ -72,6 +72,9 @@ export class DefinitionProvider {
     const importSymbol = this.resolveImportSymbolAtPosition(text, position, document.uri);
     if (importSymbol) return importSymbol;
 
+    const importedSymbol = this.resolveImportedSymbolReference(word, document.uri);
+    if (importedSymbol) return importedSymbol;
+
     // Check for dotted access (Type.member or receiver.member)
     const dottedTarget = this.getDottedAccess(text, position);
     if (dottedTarget) {
@@ -106,7 +109,7 @@ export class DefinitionProvider {
     }
 
     // Look up in symbol index
-    const symbols = this.symbolIndex.findSymbols(word);
+    const symbols = this.filterVisibleSymbols(document.uri, this.symbolIndex.findSymbols(word));
     if (symbols.length === 0) return null;
 
     // If there's only one definition, go directly
@@ -260,6 +263,22 @@ export class DefinitionProvider {
     const sameFile = visible.filter((sym) => sym.filePath === fromUri);
     const selected = sameFile.length > 0 ? sameFile : visible;
     return selected.map((sym) => Location.create(sym.filePath, sym.nameRange));
+  }
+
+  private resolveImportedSymbolReference(word: string, fromUri: string): Definition | null {
+    const imported = this.resolver?.resolveImportedSymbol(word, fromUri);
+    if (!imported) return null;
+
+    const symbols = this.symbolIndex
+      .findSymbols(imported.name)
+      .filter((sym) => sym.filePath === imported.uri);
+    if (symbols.length === 0) return null;
+    if (symbols.length === 1) return Location.create(symbols[0].filePath, symbols[0].nameRange);
+    return symbols.map((sym) => Location.create(sym.filePath, sym.nameRange));
+  }
+
+  private filterVisibleSymbols<T extends { filePath: string }>(fromUri: string, symbols: T[]): T[] {
+    return this.resolver ? this.resolver.filterVisibleSymbols(fromUri, symbols) : symbols;
   }
 
   private isTypeSymbol(sym: SolSymbol): boolean {

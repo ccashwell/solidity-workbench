@@ -144,6 +144,110 @@ contract User {
       const loc = Array.isArray(def) ? def[0] : def;
       assert.equal(loc.uri, "file:///w/Token.sol");
     });
+
+    it("jumps from an aliased type reference to the exported symbol", () => {
+      const targetUri = "file:///w/src/Token.sol";
+      const testUri = "file:///w/test/Token.sol";
+      const currentUri = "file:///w/src/User.sol";
+      const files = {
+        [targetUri]: `pragma solidity ^0.8.24;
+contract Token {}`,
+        [testUri]: `pragma solidity ^0.8.24;
+contract Token {}`,
+        [currentUri]: `pragma solidity ^0.8.24;
+import {Token as RenamedToken} from "./Token.sol";
+
+contract User {
+    RenamedToken public token;
+}`,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, fromFile: string) => {
+          const slash = fromFile.lastIndexOf("/");
+          const base = slash >= 0 ? fromFile.slice(0, slash + 1) : "";
+          const normalized = new URL(importPath, URI.file(base).toString()).toString();
+          return normalized in files ? URI.parse(normalized).fsPath : null;
+        },
+      } as unknown as WorkspaceManager;
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, workspace);
+      const docs: Record<string, TextDocument> = {};
+      for (const [uri, text] of Object.entries(files)) {
+        parser.parse(uri, text);
+        idx.updateFile(uri);
+        docs[uri] = doc(uri, text);
+      }
+      const resolver = new SemanticResolver(parser, workspace, idx);
+      const provider = new DefinitionProvider(idx, parser, workspace, resolver);
+      const lines = files[currentUri].split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("RenamedToken public"));
+      const def = provider.provideDefinition(docs[currentUri], {
+        line,
+        character: lines[line].indexOf("RenamedToken") + 2,
+      });
+
+      assert.ok(def, "expected definition for aliased type reference");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc);
+      assert.equal(loc.uri, targetUri);
+    });
+
+    it("filters same-name definitions to files reachable from the current source", () => {
+      const helperUri = "file:///w/src/Helpers.sol";
+      const testHelperUri = "file:///w/test/Helpers.sol";
+      const currentUri = "file:///w/src/Use.sol";
+      const files = {
+        [helperUri]: `pragma solidity ^0.8.24;
+function helper() pure returns (uint256) {
+    return 1;
+}`,
+        [testHelperUri]: `pragma solidity ^0.8.24;
+function helper() pure returns (uint256) {
+    return 2;
+}`,
+        [currentUri]: `pragma solidity ^0.8.24;
+import "./Helpers.sol";
+
+contract Use {
+    function f() external pure returns (uint256) {
+        return helper();
+    }
+}`,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, fromFile: string) => {
+          const slash = fromFile.lastIndexOf("/");
+          const base = slash >= 0 ? fromFile.slice(0, slash + 1) : "";
+          const normalized = new URL(importPath, URI.file(base).toString()).toString();
+          return normalized in files ? URI.parse(normalized).fsPath : null;
+        },
+      } as unknown as WorkspaceManager;
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, workspace);
+      const docs: Record<string, TextDocument> = {};
+      for (const [uri, text] of Object.entries(files)) {
+        parser.parse(uri, text);
+        idx.updateFile(uri);
+        docs[uri] = doc(uri, text);
+      }
+      const resolver = new SemanticResolver(parser, workspace, idx);
+      const provider = new DefinitionProvider(idx, parser, workspace, resolver);
+      const lines = files[currentUri].split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("helper()"));
+      const def = provider.provideDefinition(docs[currentUri], {
+        line,
+        character: lines[line].indexOf("helper") + 2,
+      });
+
+      assert.ok(def, "expected definition for reachable helper");
+      const locs = Array.isArray(def) ? def : [def];
+      assert.equal(locs.length, 1, "expected unrelated test helper to be filtered out");
+      assert.equal(locs[0].uri, helperUri);
+    });
   });
 
   describe("cross-file resolution via remapped imports", () => {
