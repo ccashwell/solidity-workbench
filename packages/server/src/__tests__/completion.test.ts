@@ -448,6 +448,33 @@ struct Box {
       );
     });
 
+    it("does not resolve member completions from unimported test-only receiver types", () => {
+      const currentUri = "file:///w/src/UsesGhost.sol";
+      const current = `pragma solidity ^0.8.24;
+contract UsesGhost {
+    Ghost internal ghost;
+
+    function f() external view {
+        ghost.ping();
+    }
+}`;
+      const { doc, provider } = setupFiles(currentUri, {
+        "file:///w/test/Ghost.sol": `pragma solidity ^0.8.24;
+interface Ghost {
+    function ping() external view returns (uint256);
+}
+`,
+        [currentUri]: current,
+      });
+
+      const lines = current.split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("ghost.ping"));
+      const character = lines[line].indexOf("ghost.") + "ghost.".length;
+      const ls = labels(provider.provideCompletions(doc, { line, character }));
+
+      assert.equal(ls.has("ping"), false, "unimported test-only receiver must not complete");
+    });
+
     it("resolves using-for completions through imported library aliases", () => {
       const libUri = "file:///w/src/DataLib.sol";
       const currentUri = "file:///w/src/UsesUsingAlias.sol";

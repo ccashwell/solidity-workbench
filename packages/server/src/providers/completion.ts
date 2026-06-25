@@ -381,6 +381,22 @@ export class CompletionProvider {
     contractName: string,
     fromUri?: string,
   ): { uri: string; contract: ContractDefinition } | undefined {
+    if (this.resolver && fromUri) {
+      const imported = this.resolver.resolveImportedSymbol(contractName, fromUri);
+      if (imported) return this.resolver.resolveContract(contractName, fromUri);
+
+      const symbols = this.resolver.filterVisibleSymbols(
+        fromUri,
+        this.symbolIndex
+          .findSymbols(contractName)
+          .filter(
+            (sym) => sym.kind === "contract" || sym.kind === "interface" || sym.kind === "library",
+          ),
+      );
+      const sym = symbols.find((candidate) => candidate.filePath === fromUri) ?? symbols[0];
+      return sym ? this.resolver.resolveContract(sym.name, sym.filePath) : undefined;
+    }
+
     const resolved = this.resolver?.resolveContract(contractName, fromUri);
     if (resolved) return resolved;
     return this.symbolIndex.getContract(contractName);
