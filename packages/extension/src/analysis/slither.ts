@@ -24,6 +24,82 @@ interface SlitherDetector {
   elements?: SlitherElement[];
 }
 
+export interface SlitherDiagnosticsResult {
+  diagnosticsByFile: Map<string, vscode.Diagnostic[]>;
+  totalFindings: number;
+}
+
+export function buildSlitherDiagnostics(
+  jsonOutput: string,
+  workspaceUri: vscode.Uri,
+): SlitherDiagnosticsResult {
+  const data = JSON.parse(jsonOutput) as { results?: { detectors?: SlitherDetector[] } };
+  const diagnosticMap = new Map<string, vscode.Diagnostic[]>();
+  const detectors = data.results?.detectors ?? [];
+
+  for (const detector of detectors) {
+    const severity = slitherDiagnosticSeverity(detector.impact ?? "");
+    const message = `[${detector.check}] ${detector.description}`;
+    const elements = detector.elements ?? [];
+
+    for (const element of elements) {
+      if (!element.source_mapping?.filename_relative) continue;
+
+      const fileUri = vscode.Uri.joinPath(workspaceUri, element.source_mapping.filename_relative);
+      const filePath = fileUri.toString();
+
+      const startLine = Math.max(0, (element.source_mapping.lines?.[0] ?? 1) - 1);
+      const endLine = Math.max(
+        startLine,
+        (element.source_mapping.lines?.at(-1) ?? startLine + 1) - 1,
+      );
+
+      const diagnostic = new vscode.Diagnostic(
+        new vscode.Range(startLine, 0, endLine, 1000),
+        message,
+        severity,
+      );
+      diagnostic.source = "slither";
+      diagnostic.code = detector.check;
+
+      if (elements.length > 1) {
+        diagnostic.relatedInformation = elements
+          .filter((e) => e !== element && e.source_mapping?.filename_relative)
+          .slice(0, 5)
+          .map((e) => {
+            const relUri = vscode.Uri.joinPath(workspaceUri, e.source_mapping!.filename_relative!);
+            const relLine = Math.max(0, (e.source_mapping!.lines?.[0] ?? 1) - 1);
+            return new vscode.DiagnosticRelatedInformation(
+              new vscode.Location(relUri, new vscode.Range(relLine, 0, relLine, 1000)),
+              e.name ?? "related",
+            );
+          });
+      }
+
+      const existing = diagnosticMap.get(filePath) ?? [];
+      existing.push(diagnostic);
+      diagnosticMap.set(filePath, existing);
+    }
+  }
+
+  return { diagnosticsByFile: diagnosticMap, totalFindings: detectors.length };
+}
+
+export function slitherDiagnosticSeverity(impact: string): vscode.DiagnosticSeverity {
+  switch (impact?.toLowerCase()) {
+    case "high":
+    case "medium":
+      return vscode.DiagnosticSeverity.Error;
+    case "low":
+      return vscode.DiagnosticSeverity.Warning;
+    case "informational":
+    case "optimization":
+      return vscode.DiagnosticSeverity.Information;
+    default:
+      return vscode.DiagnosticSeverity.Warning;
+  }
+}
+
 /**
  * Slither static analysis integration.
  *
@@ -99,91 +175,21 @@ export class SlitherIntegration {
 
   private processResults(jsonOutput: string, workspaceUri: vscode.Uri): void {
     try {
-      const data = JSON.parse(jsonOutput) as { results?: { detectors?: SlitherDetector[] } };
-      if (!data.results?.detectors) {
+      const result = buildSlitherDiagnostics(jsonOutput, workspaceUri);
+      if (result.totalFindings === 0) {
         this.outputChannel.appendLine("No issues found.");
         return;
       }
 
-      const diagnosticMap = new Map<string, vscode.Diagnostic[]>();
-      let totalFindings = 0;
-
-      for (const detector of data.results.detectors) {
-        totalFindings++;
-
-        const severity = this.mapSeverity(detector.impact ?? "");
-        const message = `[${detector.check}] ${detector.description}`;
-
-        // Map source elements to file locations
-        for (const element of detector.elements ?? []) {
-          if (!element.source_mapping?.filename_relative) continue;
-
-          const fileUri = vscode.Uri.joinPath(
-            workspaceUri,
-            element.source_mapping.filename_relative,
-          );
-          const filePath = fileUri.toString();
-
-          const startLine = (element.source_mapping.lines?.[0] ?? 1) - 1;
-          const endLine = (element.source_mapping.lines?.at(-1) ?? startLine + 1) - 1;
-
-          const diagnostic = new vscode.Diagnostic(
-            new vscode.Range(startLine, 0, endLine, 1000),
-            message,
-            severity,
-          );
-          diagnostic.source = "slither";
-          diagnostic.code = detector.check;
-
-          // Add related information if there are multiple elements
-          if (detector.elements.length > 1) {
-            diagnostic.relatedInformation = detector.elements
-              .filter((e) => e !== element && e.source_mapping?.filename_relative)
-              .slice(0, 5)
-              .map((e) => {
-                const relUri = vscode.Uri.joinPath(
-                  workspaceUri,
-                  e.source_mapping.filename_relative,
-                );
-                const relLine = (e.source_mapping.lines?.[0] ?? 1) - 1;
-                return new vscode.DiagnosticRelatedInformation(
-                  new vscode.Location(relUri, new vscode.Range(relLine, 0, relLine, 1000)),
-                  e.name ?? "related",
-                );
-              });
-          }
-
-          const existing = diagnosticMap.get(filePath) ?? [];
-          existing.push(diagnostic);
-          diagnosticMap.set(filePath, existing);
-        }
-      }
-
-      // Set diagnostics
-      for (const [filePath, diagnostics] of diagnosticMap) {
+      for (const [filePath, diagnostics] of result.diagnosticsByFile) {
         this.diagnosticCollection.set(vscode.Uri.parse(filePath), diagnostics);
       }
 
       this.outputChannel.appendLine(
-        `Slither found ${totalFindings} findings across ${diagnosticMap.size} files.`,
+        `Slither found ${result.totalFindings} findings across ${result.diagnosticsByFile.size} files.`,
       );
     } catch (err) {
       this.outputChannel.appendLine(`Failed to parse Slither output: ${err}`);
-    }
-  }
-
-  private mapSeverity(impact: string): vscode.DiagnosticSeverity {
-    switch (impact?.toLowerCase()) {
-      case "high":
-      case "medium":
-        return vscode.DiagnosticSeverity.Error;
-      case "low":
-        return vscode.DiagnosticSeverity.Warning;
-      case "informational":
-      case "optimization":
-        return vscode.DiagnosticSeverity.Information;
-      default:
-        return vscode.DiagnosticSeverity.Warning;
     }
   }
 }

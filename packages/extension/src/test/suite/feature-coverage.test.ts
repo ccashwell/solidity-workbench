@@ -33,6 +33,7 @@ import {
 } from "../../views/project-graph";
 import { InheritanceGraphPanel } from "../../views/inheritance-graph";
 import { CoverageProvider } from "../../views/coverage";
+import { buildSlitherDiagnostics } from "../../analysis/slither";
 
 /**
  * End-to-end coverage of the feature surface that landed across the
@@ -319,6 +320,63 @@ describe("Feature coverage — coverage decorations", () => {
       internals.partialDecoration.dispose();
       internals.statusBarItem.dispose();
     }
+  });
+});
+
+describe("Feature coverage — static-analysis diagnostics", () => {
+  it("maps Slither JSON findings to VS Code diagnostics", () => {
+    const workspaceUri = vscode.Uri.file("/workspace");
+    const result = buildSlitherDiagnostics(
+      JSON.stringify({
+        results: {
+          detectors: [
+            {
+              impact: "High",
+              check: "arbitrary-send-eth",
+              description: "Unprotected ether transfer",
+              elements: [
+                {
+                  name: "withdraw",
+                  source_mapping: {
+                    filename_relative: "src/Vault.sol",
+                    lines: [42, 43],
+                  },
+                },
+                {
+                  name: "owner",
+                  source_mapping: {
+                    filename_relative: "src/Auth.sol",
+                    lines: [7],
+                  },
+                },
+              ],
+            },
+          ],
+        },
+      }),
+      workspaceUri,
+    );
+
+    const vaultDiagnostics = result.diagnosticsByFile.get(
+      vscode.Uri.joinPath(workspaceUri, "src/Vault.sol").toString(),
+    );
+    assert.equal(result.totalFindings, 1);
+    assert.equal(result.diagnosticsByFile.size, 2);
+    assert.equal(vaultDiagnostics?.length, 1);
+
+    const diagnostic = vaultDiagnostics![0];
+    assert.equal(diagnostic.source, "slither");
+    assert.equal(diagnostic.code, "arbitrary-send-eth");
+    assert.equal(diagnostic.severity, vscode.DiagnosticSeverity.Error);
+    assert.match(diagnostic.message, /\[arbitrary-send-eth\] Unprotected ether transfer/);
+    assert.equal(diagnostic.range.start.line, 41);
+    assert.equal(diagnostic.range.end.line, 42);
+    assert.equal(diagnostic.relatedInformation?.length, 1);
+    assert.equal(diagnostic.relatedInformation?.[0].message, "owner");
+    assert.equal(
+      diagnostic.relatedInformation?.[0].location.uri.toString(),
+      vscode.Uri.joinPath(workspaceUri, "src/Auth.sol").toString(),
+    );
   });
 });
 
