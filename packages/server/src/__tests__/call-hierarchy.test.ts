@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { URI } from "vscode-uri";
 import { SymbolKind } from "vscode-languageserver/node.js";
 import type { CallHierarchyItem } from "vscode-languageserver/node.js";
+import { TextDocument } from "vscode-languageserver-textdocument";
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
 import { GraphIndex } from "../analyzer/graph-index.js";
@@ -155,6 +156,77 @@ describe("CallHierarchyProvider", () => {
   });
 
   describe("getIncomingCalls", () => {
+    it("prepares call-site roots only from files visible to the current source", () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "call-hierarchy-prepare-test-"));
+      try {
+        const files = {
+          "src/Helpers.sol": `function helper() pure returns (uint256) {
+    return 1;
+}
+`,
+          "src/Use.sol": `import "./Helpers.sol";
+contract Use {
+    function run() external pure returns (uint256) {
+        return helper();
+    }
+}
+`,
+          "test/Helpers.sol": `function helper() pure returns (uint256) {
+    return 2;
+}
+`,
+        };
+        const uris: string[] = [];
+        for (const [name, contents] of Object.entries(files)) {
+          const filePath = path.join(tmpDir, name);
+          fs.mkdirSync(path.dirname(filePath), { recursive: true });
+          fs.writeFileSync(filePath, contents, "utf-8");
+          uris.push(URI.file(filePath).toString());
+        }
+
+        const workspace: Pick<WorkspaceManager, "getAllFileUris" | "uriToPath" | "resolveImport"> =
+          {
+            getAllFileUris: () => uris.slice(),
+            uriToPath: (uri: string) => URI.parse(uri).fsPath,
+            resolveImport: (importPath: string, fromFile: string) => {
+              if (!importPath.startsWith(".")) return null;
+              const target = path.resolve(path.dirname(fromFile), importPath);
+              return fs.existsSync(target) ? target : null;
+            },
+          };
+
+        const parser = new SolidityParser();
+        const symbolIndex = new SymbolIndex(parser, workspace as WorkspaceManager);
+        for (const uri of uris) {
+          const text = fs.readFileSync(URI.parse(uri).fsPath, "utf-8");
+          parser.parse(uri, text);
+          symbolIndex.updateFile(uri);
+        }
+        const resolver = new SemanticResolver(parser, workspace as WorkspaceManager, symbolIndex);
+        const provider = new CallHierarchyProvider(
+          symbolIndex,
+          workspace as WorkspaceManager,
+          parser,
+          resolver,
+        );
+        const useUri = URI.file(path.join(tmpDir, "src/Use.sol")).toString();
+        const useText = fs.readFileSync(URI.parse(useUri).fsPath, "utf-8");
+        const doc = TextDocument.create(useUri, "solidity", 1, useText);
+        const line = useText.split("\n").findIndex((candidate) => candidate.includes("helper()"));
+
+        const items = provider.prepareCallHierarchy(doc, {
+          line,
+          character: useText.split("\n")[line].indexOf("helper") + 1,
+        });
+
+        assert.equal(items.length, 1, `expected only source helper, got ${JSON.stringify(items)}`);
+        assert.equal(items[0].name, "helper");
+        assert.ok(items[0].uri.endsWith("/src/Helpers.sol"));
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     it("attributes `this.X()` and qualified `a.X()` calls to the right contract", async () => {
       const calls = await fixture.provider.getIncomingCalls(transferItem(fixture.aUri, "A"));
       const callerNames = calls.map((c) => c.from.name).sort();

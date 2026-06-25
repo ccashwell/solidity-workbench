@@ -124,7 +124,7 @@ export class CallHierarchyProvider {
     const word = getWordAtPosition(text, position)?.text ?? null;
     if (!word) return [];
 
-    const symbols = this.symbolIndex.findSymbols(word);
+    const symbols = this.filterVisibleSymbols(document.uri, this.symbolIndex.findSymbols(word));
     const funcSymbols = symbols.filter((s) => s.kind === "function" || s.kind === "modifier");
 
     if (funcSymbols.length === 0) return [];
@@ -787,6 +787,7 @@ export class CallHierarchyProvider {
     callerUri: string,
     symbols: T[],
   ): T[] {
+    if (this.resolver) return this.resolver.filterVisibleSymbols(callerUri, symbols);
     const resolveImport = (this.workspace as Partial<WorkspaceManager>).resolveImport;
     if (!resolveImport) return symbols;
     const reachable = this.collectReachableUris(callerUri);
