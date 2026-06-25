@@ -46,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   labels heuristic or unresolved edges directly in the graph details panel.
 - Project Graph edges now include normalized evidence with source/target labels,
   syntax ranges, resolver, and a short reason for why the edge exists.
+- Project Graph edge evidence in the details panel can now jump directly to the
+  source expression or target declaration when locations are available.
 
 ### Fixed
 

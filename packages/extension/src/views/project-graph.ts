@@ -956,6 +956,7 @@ export class ProjectGraphExporter {
     text-align: left;
     padding: 4px 0;
     cursor: pointer;
+    width: 100%;
   }
   .edge-row:hover { color: var(--accent); }
   .edge-kind {
@@ -979,11 +980,35 @@ export class ProjectGraphExporter {
   }
   .edge-evidence {
     grid-column: 2 / 4;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 6px;
+    align-items: center;
+    min-width: 0;
+    color: var(--muted);
+    font-size: 11px;
+  }
+  .edge-evidence-text {
     color: var(--muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 11px;
+  }
+  .edge-evidence-actions {
+    display: flex;
+    gap: 4px;
+  }
+  .edge-evidence-actions button {
+    border: 1px solid var(--border);
+    background: var(--button);
+    color: var(--button-fg);
+    font-size: 10px;
+    line-height: 1;
+    padding: 2px 5px;
+  }
+  .edge-evidence-actions button:hover {
+    background: var(--vscode-button-secondaryHoverBackground);
   }
   .node-row {
     display: grid;
@@ -1452,13 +1477,21 @@ export class ProjectGraphExporter {
       const otherId = edge.source === node.id ? edge.target : edge.source;
       const other = nodesById.get(otherId);
       if (!other || !ids.has(other.id)) continue;
-      const row = document.createElement("button");
+      const row = document.createElement("div");
       row.className = "edge-row";
+      row.tabIndex = 0;
+      row.setAttribute("role", "button");
       row.title = edgeTitle(edge, other);
-      row.addEventListener("click", () => {
+      const focusOther = () => {
         activeId = other.id;
         saveUiState();
         render();
+      };
+      row.addEventListener("click", focusOther);
+      row.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        focusOther();
       });
       const kind = document.createElement("span");
       kind.className = "edge-kind";
@@ -1469,9 +1502,14 @@ export class ProjectGraphExporter {
       const confidence = document.createElement("span");
       confidence.className = "edge-quality";
       confidence.textContent = edgeQualityLabel(edge);
-      const evidence = document.createElement("span");
+      const evidence = document.createElement("div");
       evidence.className = "edge-evidence";
-      evidence.textContent = edgeEvidenceLabel(edge);
+      const evidenceText = document.createElement("span");
+      evidenceText.className = "edge-evidence-text";
+      evidenceText.textContent = edgeEvidenceLabel(edge);
+      evidence.append(evidenceText);
+      const evidenceActions = edgeEvidenceActions(edge);
+      if (evidenceActions) evidence.append(evidenceActions);
       row.append(kind, target, confidence, evidence);
       summary.append(row);
     }
@@ -1503,6 +1541,27 @@ export class ProjectGraphExporter {
       return edge.evidence.summary;
     }
     return edge.kind;
+  }
+
+  function edgeEvidenceActions(edge) {
+    if (!edge.evidence) return null;
+    const actions = document.createElement("span");
+    actions.className = "edge-evidence-actions";
+    addEvidenceAction(actions, "Source", edge.evidence.sourceUri, edge.evidence.sourceRange);
+    addEvidenceAction(actions, "Target", edge.evidence.targetUri, edge.evidence.targetRange);
+    return actions.childElementCount > 0 ? actions : null;
+  }
+
+  function addEvidenceAction(container, label, uri, range) {
+    if (typeof uri !== "string" || !uri) return;
+    const button = document.createElement("button");
+    button.textContent = label;
+    button.title = "Open " + label.toLowerCase() + " location";
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      navigateRange(uri, range);
+    });
+    container.append(button);
   }
 
   function render() {
@@ -1604,6 +1663,10 @@ export class ProjectGraphExporter {
 
   function navigate(node) {
     vscode.postMessage({ type: "navigate", uri: node.uri, selectionRange: node.selectionRange });
+  }
+
+  function navigateRange(uri, range) {
+    vscode.postMessage({ type: "navigate", uri, selectionRange: range });
   }
 
   function findPath(toId) {

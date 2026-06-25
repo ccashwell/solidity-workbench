@@ -5,6 +5,7 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 import type { ProjectGraphResult, ProjectGraphStatsResult } from "@solidity-workbench/common";
 import {
+  ProjectGraphExporter,
   serializeProjectGraphForExport,
   summarizeProjectGraphEdgeQuality,
   summarizeProjectGraphRelationshipStatus,
@@ -211,6 +212,10 @@ describe("Feature coverage — project graph export", () => {
           resolver: "parser",
           source: "Vault.deposit",
           target: "external:IERC20",
+          sourceUri: "file:///workspace/src/Vault.sol",
+          sourceRange: { start: { line: 4, character: 25 }, end: { line: 4, character: 31 } },
+          targetUri: "file:///workspace/src/IERC20.sol",
+          targetRange: { start: { line: 2, character: 10 }, end: { line: 2, character: 16 } },
         },
         metadata: { resolutionConfidence: "parser" },
       },
@@ -225,6 +230,8 @@ describe("Feature coverage — project graph export", () => {
           resolver: "heuristic",
           source: "Vault.deposit",
           target: "external:unknown-call",
+          sourceUri: "file:///workspace/src/Vault.sol",
+          sourceRange: { start: { line: 5, character: 12 }, end: { line: 5, character: 23 } },
         },
         metadata: { resolutionConfidence: "heuristic", unresolvedTarget: true },
       },
@@ -308,6 +315,28 @@ describe("Feature coverage — project graph export", () => {
       ),
       "expected missing edge endpoints to be exported as synthetic external nodes",
     );
+  });
+
+  it("renders project graph edge evidence navigation controls", () => {
+    type ProjectGraphExporterInternals = {
+      buildHtml(
+        graph: ProjectGraphResult,
+        focusId?: string,
+        graphStats?: ProjectGraphStatsResult,
+      ): string;
+    };
+    const exporter = new ProjectGraphExporter(
+      {} as ConstructorParameters<typeof ProjectGraphExporter>[0],
+    ) as unknown as ProjectGraphExporterInternals;
+
+    const html = exporter.buildHtml(sampleGraph, sampleGraph.focusId);
+
+    assert.match(html, /function edgeEvidenceActions/);
+    assert.match(html, /addEvidenceAction\(actions, "Source"/);
+    assert.match(html, /addEvidenceAction\(actions, "Target"/);
+    assert.match(html, /function navigateRange\(uri, range\)/);
+    assert.match(html, /"sourceUri":"file:\/\/\/workspace\/src\/Vault\.sol"/);
+    assert.match(html, /"targetUri":"file:\/\/\/workspace\/src\/IERC20\.sol"/);
   });
 
   it("summarizes project graph edge quality", () => {
