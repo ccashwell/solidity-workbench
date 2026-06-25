@@ -793,6 +793,9 @@ export class GraphIndex {
     const direction = params.direction ?? "both";
     const allowedKinds = params.edgeKinds?.length ? new Set(params.edgeKinds) : null;
     const includeContainers = params.includeContainers ?? true;
+    if (direction !== "outgoing") {
+      this.ensureRelationshipIndexComplete();
+    }
 
     const included = new Set<string>([root.id]);
     let frontier = new Set<string>([root.id]);
@@ -801,6 +804,10 @@ export class GraphIndex {
     for (let hop = 0; hop < depth && frontier.size > 0; hop++) {
       const next = new Set<string>();
       for (const nodeId of frontier) {
+        const node = this.nodes.get(nodeId);
+        if (node && direction === "outgoing") {
+          this.ensureFileRelationships(node.uri);
+        }
         const edges = this.connectedEdges(nodeId, direction, allowedKinds);
         for (const edge of edges) {
           const other = edge.source === nodeId ? edge.target : edge.source;
