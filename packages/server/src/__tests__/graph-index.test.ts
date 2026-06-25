@@ -2096,9 +2096,14 @@ contract Caller {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-getter-call-test-"));
     try {
       const source = `pragma solidity ^0.8.24;
+interface IERC4626 {}
+
 contract Vault {
     uint256 public totalAssets;
     mapping(address => uint256) public balanceOf;
+    uint256[] public sharePrices;
+    mapping(uint256 => mapping(address => IERC4626)) public vaults;
+    mapping(address => uint256[]) public assetsByOwner;
     uint256 internal internalAssets;
 }
 
@@ -2113,6 +2118,17 @@ contract Caller {
     function ignored() external view returns (uint256) {
         return vault.internalAssets();
     }
+
+    function choose(address account) external view {
+        pick(vault.totalAssets());
+        pick(vault.balanceOf(account));
+        pick(vault.sharePrices(0));
+        pick(vault.assetsByOwner(account, 0));
+        pick(vault.vaults(1, account));
+    }
+
+    function pick(uint256 value) internal pure {}
+    function pick(IERC4626 vault_) internal pure {}
 }
 `;
       const filePath = path.join(tmpDir, "src/GetterCall.sol");
@@ -2135,19 +2151,43 @@ contract Caller {
       const ignored = graph
         .getNodes()
         .find((node) => node.name === "ignored" && node.containerName === "Caller");
+      const choose = graph
+        .getNodes()
+        .find((node) => node.name === "choose" && node.containerName === "Caller");
+      const pickUint = graph
+        .getNodes()
+        .find((node) => node.detail === "pick(uint256 value)" && node.containerName === "Caller");
+      const pickVault = graph
+        .getNodes()
+        .find((node) => node.detail === "pick(IERC4626 vault_)" && node.containerName === "Caller");
       const totalAssets = graph
         .getNodes()
         .find((node) => node.name === "totalAssets" && node.containerName === "Vault");
       const balanceOf = graph
         .getNodes()
         .find((node) => node.name === "balanceOf" && node.containerName === "Vault");
+      const sharePrices = graph
+        .getNodes()
+        .find((node) => node.name === "sharePrices" && node.containerName === "Vault");
+      const vaults = graph
+        .getNodes()
+        .find((node) => node.name === "vaults" && node.containerName === "Vault");
+      const assetsByOwner = graph
+        .getNodes()
+        .find((node) => node.name === "assetsByOwner" && node.containerName === "Vault");
       const internalAssets = graph
         .getNodes()
         .find((node) => node.name === "internalAssets" && node.containerName === "Vault");
       assert.ok(read, "expected Caller.read node");
       assert.ok(ignored, "expected Caller.ignored node");
+      assert.ok(choose, "expected Caller.choose node");
+      assert.ok(pickUint, "expected Caller.pick(uint256) node");
+      assert.ok(pickVault, "expected Caller.pick(IERC4626) node");
       assert.ok(totalAssets, "expected Vault.totalAssets node");
       assert.ok(balanceOf, "expected Vault.balanceOf node");
+      assert.ok(sharePrices, "expected Vault.sharePrices node");
+      assert.ok(vaults, "expected Vault.vaults node");
+      assert.ok(assetsByOwner, "expected Vault.assetsByOwner node");
       assert.ok(internalAssets, "expected Vault.internalAssets node");
       assert.equal(totalAssets.metadata?.visibility, "public");
       assert.equal(totalAssets.metadata?.publicGetter, true);
@@ -2155,6 +2195,9 @@ contract Caller {
       assert.equal(balanceOf.metadata?.visibility, "public");
       assert.equal(balanceOf.metadata?.publicGetter, true);
       assert.equal(balanceOf.metadata?.getterArgumentCount, 1);
+      assert.equal(sharePrices.metadata?.getterArgumentCount, 1);
+      assert.equal(vaults.metadata?.getterArgumentCount, 2);
+      assert.equal(assetsByOwner.metadata?.getterArgumentCount, 2);
       assert.equal(internalAssets.metadata?.visibility, "internal");
       assert.equal(internalAssets.metadata?.publicGetter, false);
 
@@ -2166,6 +2209,38 @@ contract Caller {
       assert.ok(
         calls.some((edge) => edge.target === balanceOf.id),
         "expected vault.balanceOf(account) to resolve to the public mapping getter",
+      );
+
+      const chooseCalls = graph.getOutgoingEdges(choose.id, "calls");
+      assert.ok(
+        chooseCalls.some((edge) => edge.target === totalAssets.id),
+        "expected nested scalar getter call to resolve to the public getter",
+      );
+      assert.ok(
+        chooseCalls.some((edge) => edge.target === balanceOf.id),
+        "expected nested mapping getter call to resolve to the public getter",
+      );
+      assert.ok(
+        chooseCalls.some((edge) => edge.target === sharePrices.id),
+        "expected nested array getter call to resolve to the public getter",
+      );
+      assert.ok(
+        chooseCalls.some((edge) => edge.target === assetsByOwner.id),
+        "expected nested mapping-to-array getter call to resolve to the public getter",
+      );
+      assert.ok(
+        chooseCalls.some((edge) => edge.target === vaults.id),
+        "expected nested mapping-to-mapping getter call to resolve to the public getter",
+      );
+      assert.equal(
+        chooseCalls.filter((edge) => edge.target === pickUint.id).length,
+        4,
+        "expected scalar, mapping, array, and mapping-to-array getters to return uint256 for overload selection",
+      );
+      assert.equal(
+        chooseCalls.filter((edge) => edge.target === pickVault.id).length,
+        1,
+        "expected nested mapping getter to return IERC4626 for overload selection",
       );
 
       const externalCalls = graph.getOutgoingEdges(read.id, "externalCall");

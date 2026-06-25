@@ -3737,7 +3737,10 @@ export class GraphIndex {
     }
 
     if (target.kind === "stateVariable") {
-      return this.findStateVariableDeclarationForNode(target)?.typeName;
+      const stateVariable = this.findStateVariableDeclarationForNode(target);
+      return stateVariable
+        ? this.publicStateVariableGetterReturnType(stateVariable, call.arguments?.length ?? 0)
+        : undefined;
     }
 
     return undefined;
@@ -3899,6 +3902,25 @@ export class GraphIndex {
     const mappingCount = typeName.match(/\bmapping\s*\(/g)?.length ?? 0;
     const arrayCount = typeName.match(/\[[^\]]*\]/g)?.length ?? 0;
     return mappingCount + arrayCount;
+  }
+
+  private publicStateVariableGetterReturnType(
+    variable: StateVariableDeclaration,
+    argumentCount: number,
+  ): string | undefined {
+    let typeName = normalizeTypeName(variable.typeName);
+    for (let i = 0; i < argumentCount; i++) {
+      typeName = this.publicGetterIndexedValueType(typeName) ?? "";
+      if (!typeName) return undefined;
+    }
+    return typeName || undefined;
+  }
+
+  private publicGetterIndexedValueType(typeName: string): string | undefined {
+    const normalized = normalizeTypeName(typeName);
+    const arrayElement = this.arrayElementType(normalized);
+    if (arrayElement) return arrayElement;
+    return this.mappingValueType(normalized);
   }
 
   private resolveContractMemberGraphNode(
