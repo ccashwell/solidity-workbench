@@ -316,11 +316,7 @@ contract C {
       );
     });
 
-    it("emits no hints when the receiver is a variable whose type can't be inferred", () => {
-      // `token.transfer(alice, 100)` — `token` is a local whose type
-      // isn't resolvable at the inlay-hint layer. Rather than
-      // guessing from a workspace-global same-name lookup (which is
-      // what produced the wrong hints), emit nothing.
+    it("resolves receiver variable hints through the variable's declared type", () => {
       const text = `pragma solidity ^0.8.0;
 interface IERC20 {
     function transfer(address to, uint256 amount) external returns (bool);
@@ -337,8 +333,57 @@ contract C {
       });
       const labels = hints.map((h) => h.label);
       assert.ok(
-        !labels.includes("to:") && !labels.includes("amount:"),
-        `expected no hints for unresolved variable receiver; got ${JSON.stringify(labels)}`,
+        labels.includes("to:"),
+        `expected "to:" from IERC20.transfer; got ${JSON.stringify(labels)}`,
+      );
+      assert.ok(
+        labels.includes("amount:"),
+        `expected "amount:" from IERC20.transfer; got ${JSON.stringify(labels)}`,
+      );
+    });
+
+    it("scopes static receiver hints to the imported library, not an unreachable test duplicate", () => {
+      const helperUri = "file:///w/src/Helper.sol";
+      const currentUri = "file:///w/src/User.sol";
+      const current = `pragma solidity ^0.8.24;
+import {Helper} from "./Helper.sol";
+
+contract User {
+    function f() external pure returns (uint256) {
+        return Helper.encode(1);
+    }
+}`;
+      const { doc, provider } = setupFiles(currentUri, {
+        [helperUri]: `pragma solidity ^0.8.24;
+library Helper {
+    function encode(uint256 amount) internal pure returns (uint256) {
+        return amount;
+    }
+}
+`,
+        "file:///w/test/Helper.sol": `pragma solidity ^0.8.24;
+library Helper {
+    function encode(address account) internal pure returns (uint256) {
+        account;
+        return 0;
+    }
+}
+`,
+        [currentUri]: current,
+      });
+
+      const hints = provider.provideInlayHints(doc, {
+        start: { line: 0, character: 0 },
+        end: { line: current.split("\n").length, character: 0 },
+      });
+      const labels = hints.map((h) => h.label);
+      assert.ok(
+        labels.includes("amount:"),
+        `expected "amount:" from imported Helper.encode; got ${JSON.stringify(labels)}`,
+      );
+      assert.ok(
+        !labels.includes("account:"),
+        `must not leak params from test/Helper.sol; got ${JSON.stringify(labels)}`,
       );
     });
 

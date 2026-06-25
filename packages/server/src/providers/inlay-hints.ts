@@ -273,9 +273,10 @@ export class InlayHintsProvider {
    *     value type: the only legal members are the implicit
    *     `wrap` / `unwrap`, neither of which benefits from inlay
    *     hints. Return `[]`.
-   *   - `Receiver.funcName(...)` where `Receiver` resolves to a
-   *     contract / interface / library: walk its inheritance chain
-   *     and return the matching function's parameter names.
+   *   - `Receiver.funcName(...)` where `Receiver` or its declared
+   *     type resolves to a contract / interface / library: walk its
+   *     import-aware inheritance chain and return the matching
+   *     function's parameter names.
    *   - `receiver.funcName(...)` where `receiver` is a typed parameter
    *     or state variable covered by a `using Library for Type`
    *     directive: resolve the library function and skip its implicit
@@ -298,11 +299,36 @@ export class InlayHintsProvider {
   ): string[] {
     if (receiver !== null) {
       const receiverName = receiver.simpleName ?? receiver.explicitTypeName;
-      const receiverSymbols = receiverName ? this.symbolIndex.findSymbols(receiverName) : [];
-      if (receiverSymbols.some((s) => s.kind === "userDefinedValueType")) return [];
+      const receiverSymbols = receiverName ? this.findVisibleSymbols(uri, receiverName) : [];
+      const receiverTypeName = resolveReceiverTypeName(
+        this.parser,
+        this.symbolIndex,
+        uri,
+        {
+          line: lineNum,
+          character: lineChar,
+        },
+        receiver,
+      );
+      if (
+        receiverSymbols.some((s) => s.kind === "userDefinedValueType") ||
+        (receiverTypeName && this.isUserDefinedValueType(uri, receiverTypeName))
+      ) {
+        return [];
+      }
 
-      if (receiverName) {
-        const chain = this.symbolIndex.getInheritanceChain(receiverName);
+      const memberContainerName =
+        receiver.explicitTypeName ??
+        (receiverName && receiverSymbols.some((s) => this.isContractLike(s.kind))
+          ? receiverName
+          : undefined) ??
+        receiverTypeName;
+      if (memberContainerName) {
+        const chain =
+          this.resolver
+            ?.getInheritanceChain(memberContainerName, uri)
+            .map((entry) => entry.contract) ??
+          this.symbolIndex.getInheritanceChain(memberContainerName);
         for (const c of chain) {
           const fn = c.functions.find((f) => f.name === funcName);
           if (fn) {
@@ -316,16 +342,7 @@ export class InlayHintsProvider {
         this.symbolIndex,
         uri,
         this.getEnclosingContract(uri, lineNum),
-        resolveReceiverTypeName(
-          this.parser,
-          this.symbolIndex,
-          uri,
-          {
-            line: lineNum,
-            character: lineChar,
-          },
-          receiver,
-        ) ?? "",
+        receiverTypeName ?? "",
         funcName,
         this.resolver,
       );
@@ -360,6 +377,19 @@ export class InlayHintsProvider {
     }
 
     return [];
+  }
+
+  private findVisibleSymbols(uri: string, name: string) {
+    const symbols = this.symbolIndex.findSymbols(name);
+    return this.resolver ? this.resolver.filterVisibleSymbols(uri, symbols) : symbols;
+  }
+
+  private isContractLike(kind: string): boolean {
+    return kind === "contract" || kind === "interface" || kind === "library";
+  }
+
+  private isUserDefinedValueType(uri: string, typeName: string): boolean {
+    return this.findVisibleSymbols(uri, typeName).some((s) => s.kind === "userDefinedValueType");
   }
 
   private findCallExpressionStart(line: string, closeParenIdx: number): number | null {
