@@ -403,6 +403,14 @@ contract Child is Base {
         "expected callers query to include the function that emits the event",
       );
 
+      const updatedSignatureCallers = graph.query({
+        kind: "callers",
+        query: "Child.Updated(uint256 value)",
+        targetKinds: ["event"],
+      });
+      assert.equal(updatedSignatureCallers.found, true);
+      assert.equal(updatedSignatureCallers.targetId, updated.id);
+
       const unauthorizedCallers = graph.query({
         kind: "callers",
         target: { nodeId: unauthorized.id },
@@ -416,6 +424,14 @@ contract Child is Base {
         ),
         "expected callers query to include the function that reverts with the custom error",
       );
+
+      const unauthorizedSignatureCallers = graph.query({
+        kind: "callers",
+        query: "Child.Unauthorized()",
+        targetKinds: ["error"],
+      });
+      assert.equal(unauthorizedSignatureCallers.found, true);
+      assert.equal(unauthorizedSignatureCallers.targetId, unauthorized.id);
 
       const nonCallableCallers = graph.query({
         kind: "callers",

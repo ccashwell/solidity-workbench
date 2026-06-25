@@ -1261,9 +1261,9 @@ export class GraphIndex {
     const query = params.query?.trim();
     if (!query) return { missReason: "targetNotFound" };
 
-    const signatureQuery = normalizeCallableSignature(query);
+    const signatureQuery = normalizeGraphDeclarationSignature(query);
     if (signatureQuery) {
-      const signatureMatches = this.findCallableSignatureMatches(signatureQuery);
+      const signatureMatches = this.findGraphDeclarationSignatureMatches(signatureQuery);
       const target = signatureMatches.find((node) =>
         excluded.has(node.id)
           ? false
@@ -1298,13 +1298,13 @@ export class GraphIndex {
       : { missReason: "targetNotFound" };
   }
 
-  private findCallableSignatureMatches(
-    signature: NormalizedCallableSignature,
+  private findGraphDeclarationSignatureMatches(
+    signature: NormalizedGraphDeclarationSignature,
   ): SolidityGraphNode[] {
     const matches: SolidityGraphNode[] = [];
     for (const node of this.nodes.values()) {
-      if (!this.isCallableNodeKind(node.kind)) continue;
-      const candidates = callableSignatureCandidates(node);
+      if (!this.hasGraphDeclarationSignature(node.kind)) continue;
+      const candidates = graphDeclarationSignatureCandidates(node);
       if (candidates.has(signature.normalized)) matches.push(node);
     }
     return this.prioritizeGraphNodes(matches);
@@ -1329,6 +1329,10 @@ export class GraphIndex {
       kind === "fallback" ||
       kind === "modifier"
     );
+  }
+
+  private hasGraphDeclarationSignature(kind: ProjectGraphNodeKind): boolean {
+    return this.isCallableNodeKind(kind) || kind === "event" || kind === "error";
   }
 
   private pathResult(
@@ -4669,24 +4673,27 @@ interface GraphSearchScore {
   matchedText: string;
 }
 
-interface NormalizedCallableSignature {
+interface NormalizedGraphDeclarationSignature {
   name: string;
   params: string[];
   normalized: string;
 }
 
-function callableSignatureCandidates(node: ProjectGraphNode): Set<string> {
-  const signature = normalizeCallableSignature(node.detail);
+function graphDeclarationSignatureCandidates(node: ProjectGraphNode): Set<string> {
+  const signature = normalizeGraphDeclarationSignature(node.detail);
   if (!signature) return new Set<string>();
 
-  const names = new Set<string>([signature.name, normalizeCallableSignatureName(node.name)]);
+  const names = new Set<string>([
+    signature.name,
+    normalizeGraphDeclarationSignatureName(node.name),
+  ]);
   if (node.containerName) {
-    names.add(`${normalizeCallableSignatureName(node.containerName)}.${signature.name}`);
+    names.add(`${normalizeGraphDeclarationSignatureName(node.containerName)}.${signature.name}`);
     names.add(
-      `${normalizeCallableSignatureName(node.containerName)}.${normalizeCallableSignatureName(node.name)}`,
+      `${normalizeGraphDeclarationSignatureName(node.containerName)}.${normalizeGraphDeclarationSignatureName(node.name)}`,
     );
   }
-  names.add(normalizeCallableSignatureName(node.qualifiedName));
+  names.add(normalizeGraphDeclarationSignatureName(node.qualifiedName));
 
   const params = signature.params.join(",");
   return new Set(
@@ -4696,7 +4703,9 @@ function callableSignatureCandidates(node: ProjectGraphNode): Set<string> {
   );
 }
 
-function normalizeCallableSignature(value: string | undefined): NormalizedCallableSignature | null {
+function normalizeGraphDeclarationSignature(
+  value: string | undefined,
+): NormalizedGraphDeclarationSignature | null {
   const text = value?.trim();
   if (!text) return null;
   const open = text.indexOf("(");
@@ -4704,10 +4713,10 @@ function normalizeCallableSignature(value: string | undefined): NormalizedCallab
   const close = findMatchingParen(text, open);
   if (close < 0) return null;
 
-  const name = normalizeCallableSignatureName(text.slice(0, open));
+  const name = normalizeGraphDeclarationSignatureName(text.slice(0, open));
   if (!name) return null;
   const params = splitTopLevel(text.slice(open + 1, close), ",")
-    .map((param) => normalizeCallableSignatureParam(param))
+    .map((param) => normalizeGraphDeclarationSignatureParam(param))
     .filter((param) => param.length > 0);
 
   return {
@@ -4717,11 +4726,11 @@ function normalizeCallableSignature(value: string | undefined): NormalizedCallab
   };
 }
 
-function normalizeCallableSignatureName(value: string | undefined): string {
+function normalizeGraphDeclarationSignatureName(value: string | undefined): string {
   return (value ?? "").trim().replace(/\s+/g, "").toLowerCase();
 }
 
-function normalizeCallableSignatureParam(value: string): string {
+function normalizeGraphDeclarationSignatureParam(value: string): string {
   const tokens = splitTopLevelWhitespace(value.trim());
   if (tokens.length === 0) return "";
 

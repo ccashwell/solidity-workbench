@@ -163,6 +163,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph callers/callees queries now include emitted events and
   custom-error reverts, so graph queries stay aligned with native Call
   Hierarchy navigation.
+- Project Graph callers queries now resolve exact event and custom-error
+  signatures, such as `Vault.Deposit(address,uint256)`, instead of limiting
+  signature lookup to functions.
 - Live Project Graph updates now refresh declarations and dependents
   immediately but queue relationship reindexing in the background, avoiding
   synchronous full edge rebuilds on every edit.
