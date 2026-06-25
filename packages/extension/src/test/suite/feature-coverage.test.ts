@@ -6,6 +6,7 @@ import * as vscode from "vscode";
 import type { ProjectGraphResult, ProjectGraphStatsResult } from "@solidity-workbench/common";
 import {
   serializeProjectGraphForExport,
+  summarizeProjectGraphEdgeQuality,
   summarizeProjectGraphRelationshipStatus,
 } from "../../views/project-graph";
 
@@ -207,17 +208,28 @@ describe("Feature coverage — project graph export", () => {
         resolutionConfidence: "parser",
         metadata: { resolutionConfidence: "parser" },
       },
+      {
+        source: "file:///workspace/src/Vault.sol#Vault:function:deposit:4:13",
+        target: "external:unknown-call",
+        kind: "externalCall",
+        resolutionConfidence: "heuristic",
+        unresolvedTarget: true,
+        metadata: { resolutionConfidence: "heuristic", unresolvedTarget: true },
+      },
     ],
   };
 
   it("serializes graph exports as JSON, DOT, GraphML, and CodeGraph JSON", () => {
     const stats: ProjectGraphStatsResult = {
       nodeCount: 2,
-      edgeCount: 1,
+      edgeCount: 2,
       nodesByKind: Object.assign(Object.create(null), { function: 1 }),
-      edgesByKind: Object.assign(Object.create(null), { usesType: 1 }),
-      edgesByResolutionConfidence: Object.assign(Object.create(null), { parser: 1 }),
-      unresolvedEdgeCount: 0,
+      edgesByKind: Object.assign(Object.create(null), { usesType: 1, externalCall: 1 }),
+      edgesByResolutionConfidence: Object.assign(Object.create(null), {
+        parser: 1,
+        heuristic: 1,
+      }),
+      unresolvedEdgeCount: 1,
       filesByTier: Object.assign(Object.create(null), { project: 1 }),
       lastRebuildDurationMs: 12,
       lastUpdateDurationMs: 3,
@@ -234,9 +246,11 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(parsedJson.stats.relationshipIndexComplete, false);
     assert.equal(parsedJson.stats.pendingRelationshipFiles, 3);
     assert.equal(parsedJson.stats.edgesByResolutionConfidence.parser, 1);
-    assert.equal(parsedJson.stats.unresolvedEdgeCount, 0);
+    assert.equal(parsedJson.stats.edgesByResolutionConfidence.heuristic, 1);
+    assert.equal(parsedJson.stats.unresolvedEdgeCount, 1);
     assert.equal(parsedJson.relationshipStatus.state, "partial");
     assert.equal(parsedJson.relationshipStatus.pending, 3);
+    assert.equal(parsedJson.edgeQuality.unresolved, 1);
     assert.ok(
       parsedJson.nodes.some(
         (node: { id?: string; kind?: string }) =>
@@ -266,9 +280,12 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(parsed.graph.relationshipIndexComplete, false);
     assert.equal(parsed.graph.relationshipFilesIndexed, 7);
     assert.equal(parsed.graph.relationshipStatus.state, "partial");
+    assert.equal(parsed.graph.edgeQuality.unresolved, 1);
     assert.match(parsed.graph.relationshipStatus.detail, /full-workspace edges may be partial/);
     assert.equal(parsed.edges[0].resolutionConfidence, "parser");
     assert.equal(parsed.edges[0].unresolvedTarget, undefined);
+    assert.equal(parsed.edges[1].resolutionConfidence, "heuristic");
+    assert.equal(parsed.edges[1].unresolvedTarget, true);
     assert.ok(
       parsed.nodes.some(
         (node: { id?: string; kind?: string }) =>
@@ -276,6 +293,27 @@ describe("Feature coverage — project graph export", () => {
       ),
       "expected missing edge endpoints to be exported as synthetic external nodes",
     );
+  });
+
+  it("summarizes project graph edge quality", () => {
+    const status = summarizeProjectGraphEdgeQuality({
+      nodeCount: 10,
+      edgeCount: 4,
+      nodesByKind: {},
+      edgesByKind: {},
+      edgesByResolutionConfidence: { solc: 1, parser: 2, heuristic: 1 },
+      unresolvedEdgeCount: 1,
+      filesByTier: {},
+      lastRebuildDurationMs: 4,
+      lastUpdateDurationMs: null,
+    });
+
+    assert.equal(status.counts.solc, 1);
+    assert.equal(status.counts.parser, 2);
+    assert.equal(status.counts.heuristic, 1);
+    assert.equal(status.unresolved, 1);
+    assert.match(status.label, /1\/4 solc/);
+    assert.match(status.detail, /unresolved=1/);
   });
 
   it("summarizes project graph relationship indexing status", () => {

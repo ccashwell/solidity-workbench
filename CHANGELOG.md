@@ -42,6 +42,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph edges now expose normalized `resolutionConfidence` and
   `unresolvedTarget` fields, and graph stats count solc-confirmed, parser,
   heuristic, unknown, and unresolved edges.
+- The Project Graph view can now filter visible edges by resolution quality and
+  labels heuristic or unresolved edges directly in the graph details panel.
 
 ### Fixed
 

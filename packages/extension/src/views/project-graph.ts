@@ -11,6 +11,7 @@ import {
   type ProjectGraphEdgeKind,
   type ProjectGraphNode,
   type ProjectGraphPathResult,
+  type ProjectGraphResolutionConfidence,
   type ProjectGraphResult,
   type ProjectGraphStatsResult,
 } from "@solidity-workbench/common";
@@ -36,6 +37,12 @@ const EDGE_KIND_ITEMS: { label: ProjectGraphEdgeKind; description: string }[] = 
 type ProjectGraphExportFormat = "json" | "dot" | "graphml" | "codegraph-json";
 
 const INTERACTIVE_GRAPH_NODE_LIMIT = 750;
+const RESOLUTION_CONFIDENCE_VALUES: ProjectGraphResolutionConfidence[] = [
+  "solc",
+  "parser",
+  "heuristic",
+  "unknown",
+];
 
 interface ExportGraphNode {
   id: string;
@@ -59,6 +66,13 @@ export interface ProjectGraphRelationshipStatus {
   indexed?: number;
   total?: number;
   pending?: number;
+}
+
+export interface ProjectGraphEdgeQualityStatus {
+  label: string;
+  detail: string;
+  counts: Partial<Record<ProjectGraphResolutionConfidence, number>>;
+  unresolved: number;
 }
 
 const EXPORT_FORMAT_ITEMS: {
@@ -136,12 +150,30 @@ export function summarizeProjectGraphRelationshipStatus(
   };
 }
 
+export function summarizeProjectGraphEdgeQuality(
+  stats?: ProjectGraphStatsResult,
+): ProjectGraphEdgeQualityStatus {
+  const counts = stats?.edgesByResolutionConfidence ?? {};
+  const unresolved = stats?.unresolvedEdgeCount ?? 0;
+  const solc = counts.solc ?? 0;
+  const parser = counts.parser ?? 0;
+  const heuristic = counts.heuristic ?? 0;
+  const unknown = counts.unknown ?? 0;
+  const known = solc + parser + heuristic + unknown;
+  const label = known > 0 ? `edge quality ${solc}/${known} solc` : "edge quality unknown";
+  const detail =
+    `solc=${solc}, parser=${parser}, heuristic=${heuristic}, unknown=${unknown}` +
+    (unresolved > 0 ? `, unresolved=${unresolved}` : ", unresolved=0");
+  return { label, detail, counts, unresolved };
+}
+
 function projectGraphToJson(graph: ProjectGraphResult, stats?: ProjectGraphStatsResult): unknown {
   const nodes = exportGraphNodes(graph);
   return {
     ...graph,
     stats,
     relationshipStatus: summarizeProjectGraphRelationshipStatus(stats),
+    edgeQuality: summarizeProjectGraphEdgeQuality(stats),
     nodes: nodes.map((node) => ({
       id: node.id,
       kind: node.kind,
@@ -251,6 +283,7 @@ function projectGraphToCodeGraphJson(
       relationshipFilesTotal: stats?.relationshipFilesTotal,
       pendingRelationshipFiles: stats?.pendingRelationshipFiles,
       relationshipStatus: summarizeProjectGraphRelationshipStatus(stats),
+      edgeQuality: summarizeProjectGraphEdgeQuality(stats),
     },
     nodes,
     edges,
@@ -742,6 +775,10 @@ export class ProjectGraphExporter {
       "\\u003c",
     );
     const edgeItemsJson = JSON.stringify(EDGE_KIND_ITEMS).replace(/</g, "\\u003c");
+    const confidenceItemsJson = JSON.stringify(RESOLUTION_CONFIDENCE_VALUES).replace(
+      /</g,
+      "\\u003c",
+    );
     const nonce = crypto.randomBytes(16).toString("base64");
 
     return `<!DOCTYPE html>
@@ -910,7 +947,7 @@ export class ProjectGraphExporter {
   }
   .edge-row {
     display: grid;
-    grid-template-columns: minmax(72px, 92px) 1fr;
+    grid-template-columns: minmax(72px, 92px) 1fr minmax(58px, 74px);
     gap: 6px;
     border: 0;
     background: transparent;
@@ -930,6 +967,14 @@ export class ProjectGraphExporter {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+  .edge-quality {
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+    font-size: 11px;
   }
   .node-row {
     display: grid;
@@ -999,6 +1044,10 @@ export class ProjectGraphExporter {
     stroke-width: 1.35;
     opacity: 0.42;
   }
+  .edge.solc { opacity: 0.58; }
+  .edge.parser { stroke-dasharray: 5 4; }
+  .edge.heuristic, .edge.unknown { stroke-dasharray: 2 5; opacity: 0.34; }
+  .edge.unresolved { stroke: var(--vscode-editorWarning-foreground, #d97706); opacity: 0.72; }
   .edge.active {
     stroke: var(--accent);
     opacity: 0.95;
@@ -1056,6 +1105,14 @@ export class ProjectGraphExporter {
       <option value="callables">Callables</option>
       <option value="state">State & Types</option>
     </select>
+    <select id="quality" title="Filter edges by resolution quality">
+      <option value="all">All Edge Quality</option>
+      <option value="solc">Solc-confirmed</option>
+      <option value="parser">Parser-resolved</option>
+      <option value="heuristic">Heuristic</option>
+      <option value="unresolved">Unresolved</option>
+      <option value="unknown">Unknown</option>
+    </select>
     <span class="spacer"></span>
     <button class="compact" id="zoomOut" title="Zoom out">−</button>
     <span class="zoom" id="zoomLabel"></span>
@@ -1083,8 +1140,10 @@ export class ProjectGraphExporter {
   const vscode = acquireVsCodeApi();
   const payload = ${graphJson};
   const edgeItems = ${edgeItemsJson};
+  const confidenceItems = ${confidenceItemsJson};
   const persisted = vscode.getState ? (vscode.getState() || {}) : {};
   const scopeValues = new Set(["neighbors", "all", "project", "contracts", "callables", "state"]);
+  const qualityValues = new Set(["all", "solc", "parser", "heuristic", "unresolved", "unknown"]);
   let graph = payload.graph;
   let graphStats = payload.stats || null;
   let activeId = persisted.activeId && graph.nodes.some((node) => node.id === persisted.activeId)
@@ -1092,6 +1151,7 @@ export class ProjectGraphExporter {
     : payload.focusId || "";
   let query = typeof persisted.query === "string" ? persisted.query : "";
   let scope = typeof persisted.scope === "string" && scopeValues.has(persisted.scope) ? persisted.scope : (activeId ? "neighbors" : "all");
+  let quality = typeof persisted.quality === "string" && qualityValues.has(persisted.quality) ? persisted.quality : "all";
   let zoom = typeof persisted.zoom === "number" ? Math.max(0.45, Math.min(1.8, persisted.zoom)) : 1;
   let pathMode = Boolean(persisted.pathMode);
   const maxRenderedNodes = 240;
@@ -1109,6 +1169,7 @@ export class ProjectGraphExporter {
   const details = document.getElementById("details");
   const search = document.getElementById("search");
   const scopeSelect = document.getElementById("scope");
+  const qualitySelect = document.getElementById("quality");
   const zoomLabel = document.getElementById("zoomLabel");
   const pathModeButton = document.getElementById("pathMode");
   const laneDefs = [
@@ -1180,6 +1241,33 @@ export class ProjectGraphExporter {
     return progress + ". Focused neighborhoods force-index the active file, but full-workspace relationship edges may be partial. Use Rebuild to finish indexing now.";
   }
 
+  function edgeQualityText() {
+    if (!graphStats || !graphStats.edgesByResolutionConfidence) return "";
+    const counts = graphStats.edgesByResolutionConfidence;
+    const solc = counts.solc ?? 0;
+    const parser = counts.parser ?? 0;
+    const heuristic = counts.heuristic ?? 0;
+    const unknown = counts.unknown ?? 0;
+    const total = solc + parser + heuristic + unknown;
+    const unresolved = graphStats.unresolvedEdgeCount ?? 0;
+    if (total <= 0) return "";
+    return "quality " + solc + "/" + total + " solc" + (unresolved > 0 ? " · unresolved " + unresolved : "");
+  }
+
+  function edgeConfidence(edge) {
+    return confidenceItems.includes(edge.resolutionConfidence) ? edge.resolutionConfidence : "unknown";
+  }
+
+  function edgeIsUnresolved(edge) {
+    return edge.unresolvedTarget === true || (edge.metadata && edge.metadata.unresolvedTarget === true);
+  }
+
+  function edgeMatchesQuality(edge) {
+    if (quality === "all") return true;
+    if (quality === "unresolved") return edgeIsUnresolved(edge);
+    return edgeConfidence(edge) === quality;
+  }
+
   function visibleNodeSet() {
     const q = query.trim().toLowerCase();
     const direct = new Set();
@@ -1190,6 +1278,7 @@ export class ProjectGraphExporter {
         const next = new Set();
         for (const edge of graph.edges) {
           if (!visibleEdges.has(edge.kind)) continue;
+          if (!edgeMatchesQuality(edge)) continue;
           if (frontier.has(edge.source)) next.add(edge.target);
           if (frontier.has(edge.target)) next.add(edge.source);
         }
@@ -1223,6 +1312,7 @@ export class ProjectGraphExporter {
     const connected = new Set(direct);
     for (const edge of graph.edges) {
       if (!visibleEdges.has(edge.kind)) continue;
+      if (!edgeMatchesQuality(edge)) continue;
       if (direct.has(edge.source)) connected.add(edge.target);
       if (direct.has(edge.target)) connected.add(edge.source);
     }
@@ -1367,7 +1457,10 @@ export class ProjectGraphExporter {
       const target = document.createElement("span");
       target.className = "edge-target";
       target.textContent = other.qualifiedName;
-      row.append(kind, target);
+      const confidence = document.createElement("span");
+      confidence.className = "edge-quality";
+      confidence.textContent = edgeQualityLabel(edge);
+      row.append(kind, target, confidence);
       summary.append(row);
     }
     if (!summary.childElementCount) {
@@ -1383,13 +1476,17 @@ export class ProjectGraphExporter {
     const metadata = edge.metadata && Object.keys(edge.metadata).length
       ? "\\n" + JSON.stringify(edge.metadata, null, 2)
       : "";
-    return edge.kind + " · " + other.qualifiedName + metadata;
+    return edge.kind + " · " + other.qualifiedName + "\\n" + edgeQualityLabel(edge) + metadata;
+  }
+
+  function edgeQualityLabel(edge) {
+    return (edgeIsUnresolved(edge) ? "unresolved/" : "") + edgeConfidence(edge);
   }
 
   function render() {
     const ids = visibleNodeSet();
     const positions = layoutNodes(ids);
-    const visibleGraphEdges = graph.edges.filter((edge) => visibleEdges.has(edge.kind) && positions.has(edge.source) && positions.has(edge.target));
+    const visibleGraphEdges = graph.edges.filter((edge) => visibleEdges.has(edge.kind) && edgeMatchesQuality(edge) && positions.has(edge.source) && positions.has(edge.target));
     const maxY = Math.max(360, ...Array.from(positions.values()).map((pos) => pos.y + 52));
     const width = 1040;
     svg.setAttribute("width", String(width * zoom));
@@ -1416,7 +1513,7 @@ export class ProjectGraphExporter {
       const target = positions.get(edge.target);
       const active = edge.source === activeId || edge.target === activeId;
       const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.setAttribute("class", "edge" + (active ? " active" : ""));
+      path.setAttribute("class", "edge " + edgeConfidence(edge) + (edgeIsUnresolved(edge) ? " unresolved" : "") + (active ? " active" : ""));
       const sx = source.x + 95;
       const sy = source.y + 26;
       const tx = target.x - 95;
@@ -1424,7 +1521,7 @@ export class ProjectGraphExporter {
       const cx = Math.max(40, Math.abs(tx - sx) * 0.45);
       path.setAttribute("d", "M" + sx + "," + sy + " C" + (sx + cx) + "," + sy + " " + (tx - cx) + "," + ty + " " + tx + "," + ty);
       path.setAttribute("marker-end", "url(#arrow)");
-      path.append(document.createElementNS("http://www.w3.org/2000/svg", "title")).textContent = edge.kind;
+      path.append(document.createElementNS("http://www.w3.org/2000/svg", "title")).textContent = edge.kind + " · " + edgeQualityLabel(edge);
       svg.append(path);
     }
 
@@ -1463,7 +1560,7 @@ export class ProjectGraphExporter {
       svg.append(group);
     }
 
-    stats.textContent = ids.size + "/" + graph.nodes.length + " nodes · " + visibleGraphEdges.length + "/" + graph.edges.length + " edges" + (graph.truncated ? " · truncated" : "");
+    stats.textContent = ids.size + "/" + graph.nodes.length + " nodes · " + visibleGraphEdges.length + "/" + graph.edges.length + " edges" + (graph.truncated ? " · truncated" : "") + (edgeQualityText() ? " · " + edgeQualityText() : "");
     readiness.textContent = relationshipStatusText();
     const partialRelationships = Boolean(graphStats && graphStats.relationshipIndexComplete === false);
     readiness.classList.toggle("partial", partialRelationships);
@@ -1512,7 +1609,13 @@ export class ProjectGraphExporter {
     saveUiState();
     render();
   });
+  qualitySelect.addEventListener("change", () => {
+    quality = qualitySelect.value;
+    saveUiState();
+    render();
+  });
   scopeSelect.value = scope;
+  qualitySelect.value = quality;
   search.value = query;
   document.getElementById("zoomOut").addEventListener("click", () => setZoom(zoom - 0.1));
   document.getElementById("zoomIn").addEventListener("click", () => setZoom(zoom + 0.1));
@@ -1576,6 +1679,7 @@ export class ProjectGraphExporter {
       activeId,
       query,
       scope,
+      quality,
       zoom,
       pathMode,
       visibleEdges: Array.from(visibleEdges),
