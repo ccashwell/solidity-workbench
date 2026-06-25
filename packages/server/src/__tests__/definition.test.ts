@@ -446,6 +446,96 @@ contract C {
     });
   });
 
+  describe("go-to-type-definition", () => {
+    it("jumps from a parameter reference to the parameter type declaration", () => {
+      const { docs, provider } = setup({
+        "file:///w/type-param.sol": `pragma solidity ^0.8.24;
+
+struct Box {
+    uint256 value;
+}
+
+contract C {
+    function read(Box memory p) external pure returns (uint256) {
+        return p.value;
+    }
+}`,
+      });
+
+      const document = docs["file:///w/type-param.sol"];
+      const lines = document.getText().split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("return p.value"));
+      const def = provider.provideTypeDefinition(document, {
+        line,
+        character: lines[line].indexOf("p.value"),
+      });
+
+      assert.ok(def, "expected type definition for parameter reference");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc);
+      assert.equal(loc.range.start.line, 2);
+    });
+
+    it("jumps from a named return reference to the return type declaration", () => {
+      const { docs, provider } = setup({
+        "file:///w/type-return.sol": `pragma solidity ^0.8.24;
+
+struct Box {
+    uint256 value;
+}
+
+contract C {
+    function make() external pure returns (Box memory out) {
+        out = Box({value: 1});
+    }
+}`,
+      });
+
+      const document = docs["file:///w/type-return.sol"];
+      const lines = document.getText().split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("out ="));
+      const def = provider.provideTypeDefinition(document, {
+        line,
+        character: lines[line].indexOf("out ="),
+      });
+
+      assert.ok(def, "expected type definition for named return reference");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc);
+      assert.equal(loc.range.start.line, 2);
+    });
+
+    it("jumps from a local variable reference to the local type declaration", () => {
+      const { docs, provider } = setup({
+        "file:///w/type-local.sol": `pragma solidity ^0.8.24;
+
+struct Box {
+    uint256 value;
+}
+
+contract C {
+    function read(Box memory p) external pure returns (uint256) {
+        Box memory local = p;
+        return local.value;
+    }
+}`,
+      });
+
+      const document = docs["file:///w/type-local.sol"];
+      const lines = document.getText().split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("return local.value"));
+      const def = provider.provideTypeDefinition(document, {
+        line,
+        character: lines[line].indexOf("local.value"),
+      });
+
+      assert.ok(def, "expected type definition for local variable reference");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc);
+      assert.equal(loc.range.start.line, 2);
+    });
+  });
+
   describe("robustness", () => {
     it("returns null when the cursor is on whitespace", () => {
       const { docs, provider } = setup({

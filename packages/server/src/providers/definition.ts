@@ -7,10 +7,17 @@ import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
 import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
+import type { SolSymbol, SourceRange } from "@solidity-workbench/common";
 import { resolveDottedReceiverTypeName } from "../utils/receiver-type.js";
-import { getWordAtPosition, extractDottedReceiver } from "../utils/text.js";
+import {
+  getWordAtPosition,
+  extractDottedReceiver,
+  findLocalVariableType,
+  getFunctionBodyTextPrefix,
+  stripTypeDecorations,
+} from "../utils/text.js";
 import { findUsingForFunction } from "../utils/using-for.js";
-import { getEnclosingContract } from "../utils/scope.js";
+import { getEnclosingContract, getEnclosingFunctionScope } from "../utils/scope.js";
 import { readFileSync } from "node:fs";
 
 /**
@@ -165,6 +172,12 @@ export class DefinitionProvider {
     const word = getWordAtPosition(text, position)?.text ?? null;
     if (!word) return null;
 
+    const scopedType = this.resolveScopedVariableType(document, position, word);
+    if (scopedType) {
+      const resolved = this.resolveTypeDefinition(scopedType, document.uri);
+      if (resolved) return resolved;
+    }
+
     // Look up the symbol to find its type
     const symbols = this.symbolIndex.findSymbols(word);
     for (const sym of symbols) {
@@ -175,19 +188,100 @@ export class DefinitionProvider {
       ) {
         // The detail field contains the type name for variables
         if (sym.detail) {
-          const typeName = sym.detail
-            .replace(/\[\]$/, "")
-            .replace(/\s+memory$/, "")
-            .replace(/\s+storage$/, "");
-          const typeSymbols = this.symbolIndex.findSymbols(typeName);
-          if (typeSymbols.length > 0) {
-            return typeSymbols.map((s) => Location.create(s.filePath, s.nameRange));
-          }
+          const resolved = this.resolveTypeDefinition(sym.detail, document.uri);
+          if (resolved) return resolved;
         }
       }
     }
 
     return null;
+  }
+
+  private resolveScopedVariableType(
+    document: TextDocument,
+    position: Position,
+    word: string,
+  ): string | undefined {
+    const sourceUnit = this.parser.get(document.uri)?.sourceUnit;
+    if (!sourceUnit) return undefined;
+    const scope = getEnclosingFunctionScope(sourceUnit, position);
+    if (!scope) return undefined;
+
+    const bodyPrefix = getFunctionBodyTextPrefix(
+      document.getText(),
+      scope.fn.range.start.line,
+      position.line,
+      position.character,
+    );
+    if (bodyPrefix) {
+      const localType = findLocalVariableType(bodyPrefix, word);
+      if (localType) return localType;
+    }
+
+    const params = [...scope.fn.parameters, ...scope.fn.returnParameters];
+    const declaredAtCursor = params.find(
+      (param) =>
+        param.name === word && param.nameRange && this.rangeContains(param.nameRange, position),
+    );
+    if (declaredAtCursor) return declaredAtCursor.typeName;
+
+    const inFunctionBody =
+      position.line > scope.fn.range.start.line ||
+      (position.line === scope.fn.range.start.line &&
+        position.character >= scope.fn.range.start.character);
+    if (!inFunctionBody) return undefined;
+
+    return params.find((param) => param.name === word)?.typeName;
+  }
+
+  private resolveTypeDefinition(typeName: string, fromUri: string): Definition | null {
+    const normalized = stripTypeDecorations(typeName);
+    if (!normalized) return null;
+
+    const names = normalized.includes(".")
+      ? [normalized, normalized.split(".").pop() ?? normalized]
+      : [normalized];
+    const candidates: SolSymbol[] = [];
+    const seen = new Set<string>();
+    for (const name of names) {
+      for (const sym of this.symbolIndex.findSymbols(name)) {
+        if (!this.isTypeSymbol(sym)) continue;
+        const key = `${sym.filePath}:${sym.kind}:${sym.name}:${sym.nameRange.start.line}:${sym.nameRange.start.character}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        candidates.push(sym);
+      }
+    }
+
+    const visible = this.resolver
+      ? this.resolver.filterVisibleSymbols(fromUri, candidates)
+      : candidates;
+    if (visible.length === 0) return null;
+    const sameFile = visible.filter((sym) => sym.filePath === fromUri);
+    const selected = sameFile.length > 0 ? sameFile : visible;
+    return selected.map((sym) => Location.create(sym.filePath, sym.nameRange));
+  }
+
+  private isTypeSymbol(sym: SolSymbol): boolean {
+    return (
+      sym.kind === "contract" ||
+      sym.kind === "interface" ||
+      sym.kind === "library" ||
+      sym.kind === "struct" ||
+      sym.kind === "enum" ||
+      sym.kind === "userDefinedValueType"
+    );
+  }
+
+  private rangeContains(range: SourceRange, position: Position): boolean {
+    if (position.line < range.start.line || position.line > range.end.line) return false;
+    if (position.line === range.start.line && position.character < range.start.character) {
+      return false;
+    }
+    if (position.line === range.end.line && position.character > range.end.character) {
+      return false;
+    }
+    return true;
   }
 
   private resolveImportSymbolAtPosition(
