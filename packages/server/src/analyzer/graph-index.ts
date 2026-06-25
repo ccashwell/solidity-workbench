@@ -95,6 +95,8 @@ interface RawAstNode {
   operator?: string;
   isPrefix?: boolean;
   range?: [number, number];
+  number?: string;
+  value?: string;
   loc?: {
     start?: { line?: number; column?: number };
     end?: { line?: number; column?: number };
@@ -125,6 +127,12 @@ interface StateVariableTarget {
   name: string;
   filePath: string;
   containerName: string | undefined;
+  nameRange: SourceRange;
+}
+
+interface CallableDeclarationForSelection {
+  name: string | null;
+  parameters: { typeName: string }[];
   nameRange: SourceRange;
 }
 
@@ -2521,7 +2529,12 @@ export class GraphIndex {
         ? this.resolver.resolveContract(receiverType, uri)
         : undefined;
       const memberTarget = contractTarget
-        ? this.resolveMemberNode(contractTarget, callee.name, call.arguments?.length ?? 0)
+        ? this.resolveMemberNode(
+            contractTarget,
+            callee.name,
+            call.arguments?.length ?? 0,
+            this.inferRawArgumentTypes(uri, contract, call.arguments, callee.range.start),
+          )
         : undefined;
       if (!memberTarget) {
         this.indexRawLowLevelExternalCall(uri, sourceId, callee, receiverType, receiverInfo);
@@ -2539,6 +2552,7 @@ export class GraphIndex {
       callee.name,
       callee.range.start,
       call.arguments?.length ?? 0,
+      this.inferRawArgumentTypes(uri, contract, call.arguments, callee.range.start),
     );
     if (!target) return;
     const resolved = this.resolveGraphTargetWithSolc(
@@ -2783,12 +2797,24 @@ export class GraphIndex {
           eventName,
           "event",
           emitNode.eventCall?.arguments?.length,
+          this.inferRawArgumentTypes(
+            uri,
+            contract,
+            emitNode.eventCall?.arguments,
+            event.range.start,
+          ),
         ))
       : this.resolveFileLevelGraphNode(
           uri,
           eventName,
           "event",
           emitNode.eventCall?.arguments?.length,
+          this.inferRawArgumentTypes(
+            uri,
+            contract,
+            emitNode.eventCall?.arguments,
+            event.range.start,
+          ),
         );
     if (!target) return;
     const resolved = this.resolveGraphTargetWithSolc(
@@ -2822,12 +2848,24 @@ export class GraphIndex {
           errorName,
           "error",
           revertNode.revertCall?.arguments?.length,
+          this.inferRawArgumentTypes(
+            uri,
+            contract,
+            revertNode.revertCall?.arguments,
+            error.range.start,
+          ),
         ))
       : this.resolveFileLevelGraphNode(
           uri,
           errorName,
           "error",
           revertNode.revertCall?.arguments?.length,
+          this.inferRawArgumentTypes(
+            uri,
+            contract,
+            revertNode.revertCall?.arguments,
+            error.range.start,
+          ),
         );
     if (!target) return;
     const resolved = this.resolveGraphTargetWithSolc(
@@ -2998,6 +3036,7 @@ export class GraphIndex {
     calleeName: string,
     position: SourceRange["start"],
     argumentCount: number | undefined,
+    argumentTypes?: (string | undefined)[],
   ): SolidityGraphNode | undefined {
     if (qualifier && qualifier !== "this" && qualifier !== "super") {
       const receiverType = this.resolveReceiverType(uri, contract, receiver ?? qualifier, position);
@@ -3013,17 +3052,26 @@ export class GraphIndex {
       if (usingForTarget) return usingForTarget;
 
       const contractTarget = this.resolver.resolveContract(receiverType, uri);
-      if (contractTarget) return this.resolveMemberNode(contractTarget, calleeName, argumentCount);
+      if (contractTarget) {
+        return this.resolveMemberNode(contractTarget, calleeName, argumentCount, argumentTypes);
+      }
       return this.resolveFileLevelGraphNode(
         uri,
         `${qualifier}.${calleeName}`,
         "function",
         argumentCount,
+        argumentTypes,
       );
     }
 
     if (!contract) {
-      return this.resolveFileLevelGraphNode(uri, calleeName, "function", argumentCount);
+      return this.resolveFileLevelGraphNode(
+        uri,
+        calleeName,
+        "function",
+        argumentCount,
+        argumentTypes,
+      );
     }
 
     const targetContract =
@@ -3033,8 +3081,8 @@ export class GraphIndex {
     if (!targetContract) return undefined;
 
     return (
-      this.resolveMemberNode(targetContract, calleeName, argumentCount) ??
-      this.resolveFileLevelGraphNode(uri, calleeName, "function", argumentCount)
+      this.resolveMemberNode(targetContract, calleeName, argumentCount, argumentTypes) ??
+      this.resolveFileLevelGraphNode(uri, calleeName, "function", argumentCount, argumentTypes)
     );
   }
 
@@ -3121,8 +3169,15 @@ export class GraphIndex {
     name: string,
     kind: "function" | "event" | "error",
     argumentCount?: number,
+    argumentTypes?: (string | undefined)[],
   ): SolidityGraphNode | undefined {
-    const declaration = this.findVisibleFileLevelDeclaration(uri, name, kind, argumentCount);
+    const declaration = this.findVisibleFileLevelDeclaration(
+      uri,
+      name,
+      kind,
+      argumentCount,
+      argumentTypes,
+    );
     if (!declaration) return undefined;
     return this.nodes.get(
       this.memberNodeId(declaration.uri, undefined, kind, declaration.name, declaration.nameRange),
@@ -3134,6 +3189,7 @@ export class GraphIndex {
     name: string,
     kind: "function" | "event" | "error",
     argumentCount?: number,
+    argumentTypes?: (string | undefined)[],
   ): { uri: string; name: string; nameRange: SourceRange } | undefined {
     const imported = this.resolver.resolveImportedSymbol(name, uri);
     if (imported) {
@@ -3142,11 +3198,18 @@ export class GraphIndex {
         imported.name,
         kind,
         argumentCount,
+        argumentTypes,
       );
       if (importedDeclaration) return importedDeclaration;
     }
 
-    const local = this.findFileLevelDeclarationInSourceUnit(uri, name, kind, argumentCount);
+    const local = this.findFileLevelDeclarationInSourceUnit(
+      uri,
+      name,
+      kind,
+      argumentCount,
+      argumentTypes,
+    );
     if (local) return local;
     if (!this.symbolIndex) return undefined;
 
@@ -3160,6 +3223,7 @@ export class GraphIndex {
         symbol.name,
         kind,
         argumentCount,
+        argumentTypes,
       );
       if (declaration) return declaration;
     }
@@ -3171,6 +3235,7 @@ export class GraphIndex {
     name: string,
     kind: "function" | "event" | "error",
     argumentCount?: number,
+    argumentTypes?: (string | undefined)[],
   ): { uri: string; name: string; nameRange: SourceRange } | undefined {
     const sourceUnit = this.parser.get(uri)?.sourceUnit;
     if (!sourceUnit) return undefined;
@@ -3180,17 +3245,21 @@ export class GraphIndex {
         : kind === "event"
           ? sourceUnit.events
           : sourceUnit.errors;
-    for (const declaration of declarations) {
-      if (declaration.name !== name) continue;
-      const parameterCount = declaration.parameters.length;
-      if (argumentCount !== undefined && parameterCount !== argumentCount) continue;
-      return {
-        uri,
-        name: declaration.name,
-        nameRange: declaration.nameRange,
-      };
-    }
-    return undefined;
+    const arityMatches = declarations.filter((declaration) => {
+      if (declaration.name !== name) return false;
+      return argumentCount === undefined || declaration.parameters.length === argumentCount;
+    });
+    const declaration =
+      argumentCount === undefined
+        ? arityMatches[0]
+        : this.selectCallableByArguments(arityMatches, name, argumentCount, argumentTypes);
+    return declaration
+      ? {
+          uri,
+          name,
+          nameRange: declaration.nameRange,
+        }
+      : undefined;
   }
 
   private findRawContractNode(uri: string, contractName: string): RawAstNode | undefined {
@@ -3410,8 +3479,9 @@ export class GraphIndex {
     contract: ResolvedContract,
     memberName: string,
     argumentCount?: number,
+    argumentTypes?: (string | undefined)[],
   ): SolidityGraphNode | undefined {
-    const cacheKey = `${contract.id}\0${memberName}\0${argumentCount ?? "*"}`;
+    const cacheKey = `${contract.id}\0${memberName}\0${argumentCount ?? "*"}\0${(argumentTypes ?? []).join(",")}`;
     if (this.memberNodeIdCache.has(cacheKey)) {
       const cachedId = this.memberNodeIdCache.get(cacheKey);
       return cachedId ? this.nodes.get(cachedId) : undefined;
@@ -3419,9 +3489,11 @@ export class GraphIndex {
 
     if (argumentCount !== undefined) {
       for (const entry of this.resolver.getInheritanceChain(contract.contract.name, contract.uri)) {
-        const fn = entry.contract.functions.find(
-          (candidate) =>
-            candidate.name === memberName && candidate.parameters.length === argumentCount,
+        const fn = this.selectCallableByArguments(
+          entry.contract.functions,
+          memberName,
+          argumentCount,
+          argumentTypes,
         );
         if (fn?.name) {
           const nodeId = this.memberNodeId(
@@ -3435,9 +3507,11 @@ export class GraphIndex {
           return this.nodes.get(nodeId);
         }
 
-        const modifier = entry.contract.modifiers.find(
-          (candidate) =>
-            candidate.name === memberName && candidate.parameters.length === argumentCount,
+        const modifier = this.selectCallableByArguments(
+          entry.contract.modifiers,
+          memberName,
+          argumentCount,
+          argumentTypes,
         );
         if (modifier) {
           const nodeId = this.memberNodeId(
@@ -3481,6 +3555,121 @@ export class GraphIndex {
     );
     this.memberNodeIdCache.set(cacheKey, nodeId);
     return this.nodes.get(nodeId);
+  }
+
+  private selectCallableByArguments<T extends CallableDeclarationForSelection>(
+    candidates: T[],
+    memberName: string,
+    argumentCount: number,
+    argumentTypes: (string | undefined)[] | undefined,
+  ): T | undefined {
+    const arityMatches = candidates.filter(
+      (candidate) => candidate.name === memberName && candidate.parameters.length === argumentCount,
+    );
+    if (arityMatches.length <= 1) return arityMatches[0];
+    const typedMatches = this.filterCallablesByArgumentTypes(arityMatches, argumentTypes);
+    if (typedMatches.length === 1) return typedMatches[0];
+    if (typedMatches.length > 1) return undefined;
+    return argumentTypes?.some(Boolean) ? undefined : arityMatches[0];
+  }
+
+  private filterCallablesByArgumentTypes<T extends CallableDeclarationForSelection>(
+    candidates: T[],
+    argumentTypes: (string | undefined)[] | undefined,
+  ): T[] {
+    if (!argumentTypes?.some(Boolean)) return [];
+    return candidates.filter((candidate) =>
+      candidate.parameters.every((param, index) =>
+        this.parameterMatchesArgumentType(param.typeName, argumentTypes[index]),
+      ),
+    );
+  }
+
+  private parameterMatchesArgumentType(
+    parameterType: string,
+    argumentType: string | undefined,
+  ): boolean {
+    if (!argumentType) return true;
+    const parameter = this.canonicalArgumentType(parameterType);
+    if (argumentType === "integerLiteral") return /^u?int(?:\d+)?$/.test(parameter);
+    if (argumentType === "bytesLiteral") return /^bytes(?:\d+)?$/.test(parameter);
+    return parameter === this.canonicalArgumentType(argumentType);
+  }
+
+  private canonicalArgumentType(typeName: string): string {
+    return normalizeTypeName(typeName)
+      .replace(/\buint\b/g, "uint256")
+      .replace(/\bint\b/g, "int256")
+      .trim();
+  }
+
+  private inferRawArgumentTypes(
+    uri: string,
+    contract: ContractDefinition | undefined,
+    args: RawAstNode[] | undefined,
+    position: SourceRange["start"],
+  ): (string | undefined)[] | undefined {
+    if (!args) return undefined;
+    return args.map((arg) => this.inferRawArgumentType(uri, contract, arg, position));
+  }
+
+  private inferRawArgumentType(
+    uri: string,
+    contract: ContractDefinition | undefined,
+    arg: RawAstNode,
+    position: SourceRange["start"],
+  ): string | undefined {
+    switch (arg.type) {
+      case "NumberLiteral":
+        return "integerLiteral";
+      case "BooleanLiteral":
+        return "bool";
+      case "StringLiteral":
+        return "string";
+      case "HexLiteral":
+        return "bytesLiteral";
+      case "Identifier":
+        return arg.name
+          ? this.resolveReceiverInfo(
+              uri,
+              contract,
+              arg.name,
+              this.rawNodeStartPosition(arg, position),
+            )?.typeName
+          : undefined;
+      case "MemberAccess": {
+        const receiver = this.rawExpressionToString(arg);
+        return receiver
+          ? this.resolveReceiverInfo(
+              uri,
+              contract,
+              receiver,
+              this.rawNodeStartPosition(arg, position),
+            )?.typeName
+          : undefined;
+      }
+      case "FunctionCall": {
+        const castType = this.rawTypeNameToString(arg.expression);
+        return castType &&
+          (isSolidityBuiltinType(castType) || this.resolveTypeNodeId(castType, uri))
+          ? castType
+          : undefined;
+      }
+      default:
+        return undefined;
+    }
+  }
+
+  private rawNodeStartPosition(
+    node: RawAstNode,
+    fallback: SourceRange["start"],
+  ): SourceRange["start"] {
+    const start = node.loc?.start;
+    if (!start) return fallback;
+    return {
+      line: (start.line ?? 1) - 1,
+      character: start.column ?? 0,
+    };
   }
 
   private resolvePublicStateVariableGetterNode(

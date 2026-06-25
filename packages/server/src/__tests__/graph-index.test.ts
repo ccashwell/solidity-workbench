@@ -714,19 +714,24 @@ struct Receipt {
     address account;
 }
 
+function helper(address account) pure returns (address) {
+    return account;
+}
+
 function helper(uint256 amount) pure returns (uint256) {
     return amount + 1;
 }
 
-function redeemClaims(Receipt memory receipt, uint256 amount) {
+function redeemClaims(Receipt memory receipt, uint256 amount, address account) {
     helper(amount);
+    helper(account);
     emit Claimed(receipt.account, amount);
     if (amount == 0) revert ClaimDenied();
 }
 
 contract Consumer {
     function run(Receipt memory receipt) external {
-        redeemClaims(receipt, 1);
+        redeemClaims(receipt, 1, address(this));
         emit Claimed(receipt.account, 1);
         revert ClaimDenied();
     }
@@ -745,9 +750,18 @@ contract Consumer {
 
       graph.rebuildWorkspace();
 
-      const helper = graph
+      const helperUint = graph
         .getNodes()
-        .find((node) => node.kind === "function" && node.name === "helper");
+        .find(
+          (node) =>
+            node.kind === "function" && node.detail === "helper(uint256 amount) returns (uint256)",
+        );
+      const helperAddress = graph
+        .getNodes()
+        .find(
+          (node) =>
+            node.kind === "function" && node.detail === "helper(address account) returns (address)",
+        );
       const redeemClaims = graph
         .getNodes()
         .find((node) => node.kind === "function" && node.name === "redeemClaims");
@@ -766,7 +780,8 @@ contract Consumer {
           (node) =>
             node.kind === "function" && node.name === "run" && node.containerName === "Consumer",
         );
-      assert.ok(helper, "expected file-level helper function node");
+      assert.ok(helperUint, "expected file-level uint256 helper function node");
+      assert.ok(helperAddress, "expected file-level address helper function node");
       assert.ok(redeemClaims, "expected file-level redeemClaims function node");
       assert.ok(claimed, "expected file-level Claimed event node");
       assert.ok(denied, "expected file-level ClaimDenied error node");
@@ -774,8 +789,23 @@ contract Consumer {
       assert.ok(run, "expected Consumer.run graph node");
 
       assert.ok(
-        graph.getOutgoingEdges(redeemClaims.id, "calls").some((edge) => edge.target === helper.id),
-        "expected file-level function body to call another file-level function",
+        graph
+          .getOutgoingEdges(redeemClaims.id, "calls")
+          .some((edge) => edge.target === helperUint.id),
+        "expected file-level function body to call uint256 helper overload",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(redeemClaims.id, "calls")
+          .some((edge) => edge.target === helperAddress.id),
+        "expected file-level function body to call address helper overload",
+      );
+      assert.equal(
+        graph
+          .getOutgoingEdges(redeemClaims.id, "calls")
+          .filter((edge) => edge.target === helperAddress.id).length,
+        1,
+        "expected exactly one address helper call edge",
       );
       assert.ok(
         graph.getOutgoingEdges(redeemClaims.id, "emits").some((edge) => edge.target === claimed.id),
@@ -1860,23 +1890,27 @@ contract Later {
       const source = `pragma solidity ^0.8.24;
 contract OverloadedTarget {
     function ping() external {}
+    function ping(address account) external {}
     function ping(uint256 value) external {}
 }
 
 contract Caller {
     OverloadedTarget public target;
 
-    function local() external {
+    function local(address account) external {
         one();
         one(1);
+        one(account);
     }
 
-    function receiver() external {
+    function receiver(address account) external {
         target.ping();
         target.ping(1);
+        target.ping(account);
     }
 
     function one() internal {}
+    function one(address account) internal {}
     function one(uint256 value) internal {}
 }
 `;
@@ -1906,6 +1940,9 @@ contract Caller {
       const oneUint = graph
         .getNodes()
         .find((node) => node.detail === "one(uint256 value)" && node.containerName === "Caller");
+      const oneAddress = graph
+        .getNodes()
+        .find((node) => node.detail === "one(address account)" && node.containerName === "Caller");
       const pingNoArgs = graph
         .getNodes()
         .find((node) => node.detail === "ping()" && node.containerName === "OverloadedTarget");
@@ -1915,12 +1952,20 @@ contract Caller {
           (node) =>
             node.detail === "ping(uint256 value)" && node.containerName === "OverloadedTarget",
         );
+      const pingAddress = graph
+        .getNodes()
+        .find(
+          (node) =>
+            node.detail === "ping(address account)" && node.containerName === "OverloadedTarget",
+        );
       assert.ok(local, "expected Caller.local node");
       assert.ok(receiver, "expected Caller.receiver node");
       assert.ok(oneNoArgs, "expected zero-arg one overload");
       assert.ok(oneUint, "expected uint256 one overload");
+      assert.ok(oneAddress, "expected address one overload");
       assert.ok(pingNoArgs, "expected zero-arg ping overload");
       assert.ok(pingUint, "expected uint256 ping overload");
+      assert.ok(pingAddress, "expected address ping overload");
 
       assert.ok(
         graph.getOutgoingEdges(local.id, "calls").some((edge) => edge.target === oneNoArgs.id),
@@ -1931,12 +1976,33 @@ contract Caller {
         "expected one(1) to target the uint256 overload",
       );
       assert.ok(
+        graph.getOutgoingEdges(local.id, "calls").some((edge) => edge.target === oneAddress.id),
+        "expected one(account) to target the address overload",
+      );
+      assert.equal(
+        graph.getOutgoingEdges(local.id, "calls").filter((edge) => edge.target === oneAddress.id)
+          .length,
+        1,
+        "expected exactly one local address-overload edge",
+      );
+      assert.ok(
         graph.getOutgoingEdges(receiver.id, "calls").some((edge) => edge.target === pingNoArgs.id),
         "expected target.ping() to target the zero-arg overload",
       );
       assert.ok(
         graph.getOutgoingEdges(receiver.id, "calls").some((edge) => edge.target === pingUint.id),
         "expected target.ping(1) to target the uint256 overload",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(receiver.id, "calls").some((edge) => edge.target === pingAddress.id),
+        "expected target.ping(account) to target the address overload",
+      );
+      assert.equal(
+        graph
+          .getOutgoingEdges(receiver.id, "calls")
+          .filter((edge) => edge.target === pingAddress.id).length,
+        1,
+        "expected exactly one receiver address-overload edge",
       );
 
       const pingUintCallers = graph.query({
@@ -1969,9 +2035,17 @@ contract Caller {
       assert.equal(oneUintCallers.found, true);
       assert.equal(oneUintCallers.targetId, oneUint.id);
 
-      const missingOverload = graph.query({
+      const pingAddressCallers = graph.query({
         kind: "callers",
         query: "OverloadedTarget.ping(address)",
+        targetKinds: ["function"],
+      });
+      assert.equal(pingAddressCallers.found, true);
+      assert.equal(pingAddressCallers.targetId, pingAddress.id);
+
+      const missingOverload = graph.query({
+        kind: "callers",
+        query: "OverloadedTarget.ping(bool)",
         targetKinds: ["function"],
       });
       assert.equal(missingOverload.found, false);
