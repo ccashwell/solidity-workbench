@@ -760,6 +760,19 @@ export class HoverProvider {
     candidates = candidates.filter((candidate) => this.isNatspecReferenceTarget(candidate));
     if (candidates.length === 0) return undefined;
 
+    const resolvedContainer =
+      containerName && this.resolver && fromSymbol
+        ? this.resolver.resolveContract(containerName, fromSymbol.filePath)
+        : undefined;
+    if (resolvedContainer) {
+      const importedContainer = candidates.find(
+        (candidate) =>
+          candidate.containerName === resolvedContainer.contract.name &&
+          candidate.filePath === resolvedContainer.uri,
+      );
+      if (importedContainer) return importedContainer;
+    }
+
     const sameContainer = containerName
       ? (candidates.find(
           (candidate) =>

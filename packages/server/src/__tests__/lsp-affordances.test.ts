@@ -197,6 +197,39 @@ library InventoryLib {
     );
   });
 
+  it("links explicit braced NatSpec members through the imported container", () => {
+    const files = {
+      "test/IFoo.sol": `pragma solidity ^0.8.24;
+
+interface IFoo {
+    function foo() external;
+}
+`,
+      "src/IFoo.sol": `pragma solidity ^0.8.24;
+
+interface IFoo {
+    /// @notice Source interface member.
+    function foo() external;
+}
+`,
+      "src/InventoryLib.sol": `pragma solidity ^0.8.24;
+import "./IFoo.sol";
+
+/// @notice See {IFoo.foo}.
+library InventoryLib {}
+`,
+    };
+    const { docs, parser, idx, resolver, workspace } = setupFiles(files);
+
+    const links = new DocumentLinksProvider(parser, workspace, idx, resolver).provideDocumentLinks(
+      docs["src/InventoryLib.sol"],
+    );
+    const foo = links.find((link) => link.tooltip === "Open IFoo.foo");
+    assert.ok(foo, "expected explicit IFoo.foo NatSpec document link");
+    assert.equal(foo.target, "file:///w/src/IFoo.sol#L5,14");
+    assert.notEqual(foo.target, "file:///w/test/IFoo.sol#L4,14");
+  });
+
   it("turns braced references in block NatSpec into document links", () => {
     const text = `pragma solidity ^0.8.24;
 

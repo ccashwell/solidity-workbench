@@ -224,6 +224,46 @@ library InventoryLib {
       assert.doesNotMatch(value, /\{redeemClaims\}/);
     });
 
+    it("links explicit braced NatSpec members through the imported container", () => {
+      const currentUri = "file:///w/src/InventoryLib.sol";
+      const files = {
+        "file:///w/test/IFoo.sol": `pragma solidity ^0.8.24;
+
+interface IFoo {
+    function foo() external;
+}
+`,
+        "file:///w/src/IFoo.sol": `pragma solidity ^0.8.24;
+
+interface IFoo {
+    /// @notice Source interface member.
+    function foo() external;
+}
+`,
+        [currentUri]: `pragma solidity ^0.8.24;
+import "./IFoo.sol";
+
+/// @notice See {IFoo.foo}.
+library InventoryLib {}
+`,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, fromPath: string) =>
+          importPath === "./IFoo.sol" && fromPath.endsWith("/src/InventoryLib.sol")
+            ? "/w/src/IFoo.sol"
+            : null,
+      } as unknown as WorkspaceManager;
+      const { doc, provider } = setupFiles(currentUri, files, workspace);
+
+      const h = provider.provideHover(doc, { line: 4, character: 9 });
+      assert.ok(h, "expected hover on library declaration");
+      const value = hoverValue(h);
+      assert.match(value, /\[IFoo\.foo\]\(file:\/\/\/w\/src\/IFoo\.sol#L5,14\)/);
+      assert.doesNotMatch(value, /file:\/\/\/w\/test\/IFoo\.sol#L4,14/);
+    });
+
     it("shows `contract C` for a contract-name hover", () => {
       const { doc, provider } = setup(
         "file:///w/D.sol",
