@@ -63,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph dependent refresh now uses an incoming-import map instead of
   repeatedly scanning all edges, keeping shared-base incremental updates within
   the interactive budget for larger Foundry-shaped workspaces.
+- Project Graph now maintains reverse edge indexes for source, target, kind,
+  and import dependents, so graph navigation and restored-cache refreshes do
+  not fall back to full edge-array scans.
 - Symbol indexing now preserves the remaining same-name contract entry when a
   duplicate contract file is removed or re-indexed.
 - Project Graph rebuilds now index declarations before function bodies, so

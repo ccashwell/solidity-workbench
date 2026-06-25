@@ -343,6 +343,25 @@ contract Child is Base {
         /calls: inherited/,
         "expected cached graph to restore edge evidence",
       );
+      const updatedBaseForRestore = files["src/Base.sol"].replace(
+        "function inherited() internal {}",
+        "function cachedInherited() internal {}",
+      );
+      parser.parse(baseUri, updatedBaseForRestore);
+      symbolIndex.updateFile(baseUri);
+      assert.deepEqual(
+        restoredGraph.updateFileAndDependents(baseUri, false).sort(),
+        [baseUri, childUri].sort(),
+        "expected restored graph to use rebuilt import reverse index for dependent refresh",
+      );
+      assert.equal(
+        restoredGraph.getOutgoingEdges(childId, "inherits")[0]?.target,
+        baseId,
+        "expected restored graph refresh to preserve inherited base edge",
+      );
+      parser.parse(baseUri, files["src/Base.sol"]);
+      symbolIndex.updateFile(baseUri);
+      restoredGraph.updateFileAndDependents(baseUri, false);
 
       const cacheFiles = fs.readdirSync(cacheDir).filter((name) => name.endsWith(".json"));
       assert.equal(cacheFiles.length, 1);

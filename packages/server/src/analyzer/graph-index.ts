@@ -219,6 +219,10 @@ export class GraphIndex {
   private nodes = new Map<string, SolidityGraphNode>();
   private edges: SolidityGraphEdge[] = [];
   private edgeKeys = new Set<string>();
+  private edgesBySource = new Map<string, SolidityGraphEdge[]>();
+  private edgesByTarget = new Map<string, SolidityGraphEdge[]>();
+  private edgesByKind = new Map<SolidityGraphEdgeKind, SolidityGraphEdge[]>();
+  private importSourcesByTarget = new Map<string, string[]>();
   private nodeIdsByFile = new Map<string, Set<string>>();
   private relationshipIndexedUris = new Set<string>();
   private relationshipQueue: string[] = [];
@@ -307,7 +311,7 @@ export class GraphIndex {
 
       this.nodes = new Map(nodes.map((node) => [node.id, node]));
       this.edges = edges;
-      this.rebuildEdgeKeys();
+      this.rebuildEdgeIndexes();
       this.rebuildNodeIdsByFile();
       this.relationshipIndexedUris = relationshipIndexedUris;
       this.relationshipQueue = [];
@@ -540,7 +544,7 @@ export class GraphIndex {
     this.edges = this.edges.filter(
       (edge) => !removed.has(edge.source) && !removed.has(edge.target),
     );
-    this.rebuildEdgeKeys();
+    this.rebuildEdgeIndexes();
     this.relationshipIndexedUris.delete(uri);
     this.relationshipQueuedUris.delete(uri);
     this.relationshipQueue = this.relationshipQueue.filter((queuedUri) => queuedUri !== uri);
@@ -567,7 +571,7 @@ export class GraphIndex {
     this.edges = this.edges.filter(
       (edge) => !removed.has(edge.source) && !removed.has(edge.target),
     );
-    this.rebuildEdgeKeys();
+    this.rebuildEdgeIndexes();
     this.relationshipIndexedUris.delete(uri);
     this.relationshipQueuedUris.delete(uri);
     this.relationshipQueue = this.relationshipQueue.filter((queuedUri) => queuedUri !== uri);
@@ -583,7 +587,7 @@ export class GraphIndex {
   }
 
   getEdges(kind?: SolidityGraphEdgeKind): SolidityGraphEdge[] {
-    return kind ? this.edges.filter((edge) => edge.kind === kind) : this.edges.slice();
+    return kind ? (this.edgesByKind.get(kind) ?? []).slice() : this.edges.slice();
   }
 
   getContractNodes(): SolidityGraphNode[] {
@@ -593,11 +597,13 @@ export class GraphIndex {
   }
 
   getOutgoingEdges(source: string, kind?: SolidityGraphEdgeKind): SolidityGraphEdge[] {
-    return this.edges.filter((edge) => edge.source === source && (!kind || edge.kind === kind));
+    const edges = this.edgesBySource.get(source) ?? [];
+    return kind ? edges.filter((edge) => edge.kind === kind) : edges.slice();
   }
 
   getIncomingEdges(target: string, kind?: SolidityGraphEdgeKind): SolidityGraphEdge[] {
-    return this.edges.filter((edge) => edge.target === target && (!kind || edge.kind === kind));
+    const edges = this.edgesByTarget.get(target) ?? [];
+    return kind ? edges.filter((edge) => edge.kind === kind) : edges.slice();
   }
 
   toProjectGraph(edgeKinds?: ProjectGraphEdgeKind[], maxNodes?: number): ProjectGraphResult {
@@ -785,7 +791,7 @@ export class GraphIndex {
   private resetWorkspaceGraph(): string[] {
     this.nodes.clear();
     this.edges = [];
-    this.edgeKeys.clear();
+    this.clearEdgeIndexes();
     this.clearResolutionCaches();
     this.nodeIdsByFile.clear();
     this.relationshipIndexedUris.clear();
@@ -940,12 +946,15 @@ export class GraphIndex {
     direction: "incoming" | "outgoing" | "both",
     allowedKinds: Set<ProjectGraphEdgeKind> | null,
   ): SolidityGraphEdge[] {
-    return this.edges.filter((edge) => {
-      if (allowedKinds && !allowedKinds.has(edge.kind)) return false;
-      if (direction === "incoming") return edge.target === nodeId;
-      if (direction === "outgoing") return edge.source === nodeId;
-      return edge.source === nodeId || edge.target === nodeId;
-    });
+    const sourceEdges = direction !== "incoming" ? (this.edgesBySource.get(nodeId) ?? []) : [];
+    const targetEdges = direction !== "outgoing" ? (this.edgesByTarget.get(nodeId) ?? []) : [];
+    const combined =
+      direction === "both"
+        ? this.dedupeEdges([...sourceEdges, ...targetEdges])
+        : direction === "incoming"
+          ? targetEdges
+          : sourceEdges;
+    return allowedKinds ? combined.filter((edge) => allowedKinds.has(edge.kind)) : combined.slice();
   }
 
   private solcDeclarationMetadata(
@@ -1030,19 +1039,11 @@ export class GraphIndex {
     const dependents: string[] = [];
     const seen = new Set<string>([uri]);
     const queue = [uri];
-    const importSourcesByTarget = new Map<string, string[]>();
-
-    for (const edge of this.edges) {
-      if (edge.kind !== "imports" || !edge.source.startsWith("file:")) continue;
-      const sources = importSourcesByTarget.get(edge.target) ?? [];
-      sources.push(edge.source.slice("file:".length));
-      importSourcesByTarget.set(edge.target, sources);
-    }
 
     while (queue.length > 0) {
       const currentUri = queue.shift()!;
       const currentFileId = this.fileNodeId(currentUri);
-      for (const dependentUri of importSourcesByTarget.get(currentFileId) ?? []) {
+      for (const dependentUri of this.importSourcesByTarget.get(currentFileId) ?? []) {
         if (seen.has(dependentUri)) continue;
         seen.add(dependentUri);
         dependents.push(dependentUri);
@@ -2925,6 +2926,7 @@ export class GraphIndex {
     if (this.edgeKeys.has(key)) return;
     this.edgeKeys.add(key);
     this.edges.push(normalized);
+    this.indexEdge(normalized);
   }
 
   private normalizeEdge(edge: SolidityGraphEdge): SolidityGraphEdge {
@@ -3038,8 +3040,54 @@ export class GraphIndex {
     return `${edge.source}->${edge.kind}->${edge.target}@${line}:${character}`;
   }
 
-  private rebuildEdgeKeys(): void {
+  private dedupeEdges(edges: SolidityGraphEdge[]): SolidityGraphEdge[] {
+    const seen = new Set<string>();
+    const deduped: SolidityGraphEdge[] = [];
+    for (const edge of edges) {
+      const key = this.edgeKey(edge);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(edge);
+    }
+    return deduped;
+  }
+
+  private indexEdge(edge: SolidityGraphEdge): void {
+    this.pushIndexedEdge(this.edgesBySource, edge.source, edge);
+    this.pushIndexedEdge(this.edgesByTarget, edge.target, edge);
+    this.pushIndexedEdge(this.edgesByKind, edge.kind, edge);
+    if (edge.kind === "imports" && edge.source.startsWith("file:")) {
+      const sources = this.importSourcesByTarget.get(edge.target) ?? [];
+      sources.push(edge.source.slice("file:".length));
+      this.importSourcesByTarget.set(edge.target, sources);
+    }
+  }
+
+  private pushIndexedEdge<K>(
+    index: Map<K, SolidityGraphEdge[]>,
+    key: K,
+    edge: SolidityGraphEdge,
+  ): void {
+    const edges = index.get(key) ?? [];
+    edges.push(edge);
+    index.set(key, edges);
+  }
+
+  private rebuildEdgeIndexes(): void {
     this.edgeKeys = new Set(this.edges.map((edge) => this.edgeKey(edge)));
+    this.edgesBySource.clear();
+    this.edgesByTarget.clear();
+    this.edgesByKind.clear();
+    this.importSourcesByTarget.clear();
+    for (const edge of this.edges) this.indexEdge(edge);
+  }
+
+  private clearEdgeIndexes(): void {
+    this.edgeKeys.clear();
+    this.edgesBySource.clear();
+    this.edgesByTarget.clear();
+    this.edgesByKind.clear();
+    this.importSourcesByTarget.clear();
   }
 
   private clearResolutionCaches(): void {
