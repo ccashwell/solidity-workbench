@@ -89,6 +89,10 @@ export class DocumentHighlightProvider {
       push(ref.offset, ref.length);
     }
 
+    if (refs.declaration && URI.file(refs.declaration.filePath).toString() === document.uri) {
+      push(refs.declaration.offset, refs.declaration.length);
+    }
+
     return out.length > 0 ? out : null;
   }
 }

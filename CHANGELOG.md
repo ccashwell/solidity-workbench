@@ -174,6 +174,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Concurrent workspace symbol scans now keep independent pending queues, so
   background dependency indexing cannot lose work when a foreground project
   or test scan starts during a reload or explicit graph rebuild.
+- Warm SolcBridge-backed document highlights now include the resolved
+  declaration in the current document while still excluding unrelated shadowed
+  locals.
 - Project Graph snapshots and search edge previews now drop edges whose source
   or target node is hidden by the current scope or absent because dependency
   declarations were not indexed.

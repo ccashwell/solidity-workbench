@@ -210,4 +210,46 @@ describe("DocumentHighlightProvider", () => {
     assert.equal(hits.length, 1);
     assert.equal(hits[0].range.start.line, 3);
   });
+
+  it("includes the SolcBridge declaration highlight without leaking to shadowed locals", () => {
+    const text = `contract C {
+    uint256 public count;
+    function f() external {
+        count = count + 1;
+    }
+    function g() external {
+        uint256 count = 0;
+        count;
+    }
+}`;
+    const { doc, provider } = setup("file:///C.sol", text);
+    const declaration = text.indexOf("count;");
+    const firstUse = text.indexOf("count = count + 1");
+    provider.setSolcBridge({
+      findReferencesAt: () => ({
+        declaration: { filePath: "/C.sol", offset: declaration, length: "count".length },
+        references: [
+          { filePath: "/C.sol", offset: firstUse, length: "count".length },
+          {
+            filePath: "/C.sol",
+            offset: firstUse + "count = ".length,
+            length: "count".length,
+          },
+        ],
+      }),
+    } as unknown as DocumentHighlightSolcBridge);
+
+    const hits = provider.provideDocumentHighlights(doc, {
+      line: 1,
+      character: text.split("\n")[1].indexOf("count"),
+    });
+    const lines = hits.map((hit) => hit.range.start.line).sort((a, b) => a - b);
+
+    assert.deepEqual(lines, [1, 3, 3]);
+    assert.equal(
+      hits.some((hit) => hit.range.start.line === 6 || hit.range.start.line === 7),
+      false,
+      "semantic highlights must not leak to shadowed local count",
+    );
+  });
 });
