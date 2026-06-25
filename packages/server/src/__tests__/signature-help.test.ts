@@ -207,5 +207,34 @@ contract D { function f() external {} }`;
       const sig = provider.provideSignatureHelp(doc, { line: 1, character: 0 });
       assert.equal(sig, null);
     });
+
+    it("does not use unimported test-only receiver types for signature help", () => {
+      const files = {
+        "src/UsesGhost.sol": `pragma solidity ^0.8.24;
+contract UsesGhost {
+    Ghost internal ghost;
+
+    function f() external view {
+        ghost.ping();
+    }
+}`,
+        "test/Ghost.sol": `pragma solidity ^0.8.24;
+interface Ghost {
+    function ping(uint256 value) external view returns (uint256);
+}`,
+      };
+      const { docs, provider } = setupFiles(files);
+      const text = files["src/UsesGhost.sol"];
+      const lines = text.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("ghost.ping"));
+      const col = lines[callLine].indexOf("ping(") + "ping(".length;
+
+      const sig = provider.provideSignatureHelp(docs["src/UsesGhost.sol"], {
+        line: callLine,
+        character: col,
+      });
+
+      assert.equal(sig, null);
+    });
   });
 });

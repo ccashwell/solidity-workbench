@@ -157,8 +157,8 @@ export class SignatureHelpProvider {
         return signatures;
       }
 
-      const resolvedChain = this.resolver?.getInheritanceChain(receiverTypeName, documentUri) ?? [];
-      if (resolvedChain.length > 0) {
+      const resolvedChain = this.resolveVisibleInheritanceChain(receiverTypeName, documentUri);
+      if (resolvedChain) {
         for (const entry of resolvedChain) {
           this.addContractSignatures(signatures, entry, funcName);
         }
@@ -242,6 +242,27 @@ export class SignatureHelpProvider {
     }
 
     return signatures;
+  }
+
+  private resolveVisibleInheritanceChain(
+    typeName: string,
+    documentUri: string,
+  ): ResolvedContract[] | null {
+    if (!this.resolver) return null;
+
+    const imported = this.resolver.resolveImportedSymbol(typeName, documentUri);
+    if (imported) return this.resolver.getInheritanceChain(typeName, documentUri);
+
+    const symbols = this.resolver.filterVisibleSymbols(
+      documentUri,
+      this.symbolIndex
+        .findSymbols(typeName)
+        .filter(
+          (sym) => sym.kind === "contract" || sym.kind === "interface" || sym.kind === "library",
+        ),
+    );
+    const sym = symbols.find((candidate) => candidate.filePath === documentUri) ?? symbols[0];
+    return sym ? this.resolver.getInheritanceChain(sym.name, sym.filePath) : [];
   }
 
   private addContractSignatures(
