@@ -72,9 +72,13 @@ export class InheritanceGraphProvider {
     const nodes = new Map<string, InheritanceGraphResult["nodes"][number]>();
     const allNodes = new Map<string, SolidityGraphNode>();
 
-    for (const node of this.graphIndex!.getContractNodes()) {
+    const contractNodes = this.graphIndex!.getContractNodes();
+    for (const node of contractNodes) {
       allNodes.set(node.id, node);
-      if (!this.includeTier(node.tier, params)) continue;
+    }
+
+    for (const node of contractNodes) {
+      if (!this.includeGraphNode(node, params, allNodes)) continue;
       nodes.set(node.id, this.graphNodeToResultNode(node));
     }
 
@@ -89,7 +93,7 @@ export class InheritanceGraphProvider {
       if (resolvedTarget && !this.includeResolvedContract(resolvedTarget, params)) continue;
       const targetId = resolvedTarget?.id ?? edge.target;
       const targetNode = allNodes.get(targetId);
-      if (targetNode && !this.includeTier(targetNode.tier, params)) continue;
+      if (targetNode && !this.includeGraphNode(targetNode, params, allNodes)) continue;
       if (resolvedTarget && !nodes.has(targetId)) {
         nodes.set(targetId, this.resolvedContractToResultNode(resolvedTarget));
       } else if (!nodes.has(targetId)) {
@@ -138,7 +142,11 @@ export class InheritanceGraphProvider {
     entry: ResolvedContract,
     params: GetInheritanceGraphParams,
   ): boolean {
-    return this.includeTier(entry.tier, params);
+    if (!this.includeTier(entry.tier, params)) return false;
+    if (params.includeTests !== true && this.resolvedContractExtendsFoundryTest(entry)) {
+      return false;
+    }
+    return true;
   }
 
   private includeTier(
@@ -148,5 +156,55 @@ export class InheritanceGraphProvider {
     if (tier === "tests" && params.includeTests !== true) return false;
     if (tier === "deps" && params.includeDependencies !== true) return false;
     return true;
+  }
+
+  private includeGraphNode(
+    node: SolidityGraphNode,
+    params: GetInheritanceGraphParams,
+    allNodes: Map<string, SolidityGraphNode>,
+  ): boolean {
+    if (!this.includeTier(node.tier, params)) return false;
+    if (params.includeTests !== true && this.graphNodeExtendsFoundryTest(node.id, allNodes)) {
+      return false;
+    }
+    return true;
+  }
+
+  private graphNodeExtendsFoundryTest(
+    nodeId: string,
+    allNodes: Map<string, SolidityGraphNode>,
+    visited: Set<string> = new Set(),
+  ): boolean {
+    if (visited.has(nodeId)) return false;
+    visited.add(nodeId);
+
+    for (const edge of this.graphIndex?.getOutgoingEdges(nodeId, "inherits") ?? []) {
+      const baseName = typeof edge.metadata?.baseName === "string" ? edge.metadata.baseName : "";
+      if (this.isFoundryTestBaseName(baseName)) return true;
+      const target = allNodes.get(edge.target);
+      if (target?.name === "Test") return true;
+      if (target && this.graphNodeExtendsFoundryTest(target.id, allNodes, visited)) return true;
+    }
+    return false;
+  }
+
+  private resolvedContractExtendsFoundryTest(
+    entry: ResolvedContract,
+    visited: Set<string> = new Set(),
+  ): boolean {
+    if (visited.has(entry.id)) return false;
+    visited.add(entry.id);
+
+    for (const base of entry.contract.baseContracts) {
+      if (this.isFoundryTestBaseName(base.baseName)) return true;
+      const resolved = this.resolver.resolveBaseContract(entry.uri, base.baseName);
+      if (resolved?.contract.name === "Test") return true;
+      if (resolved && this.resolvedContractExtendsFoundryTest(resolved, visited)) return true;
+    }
+    return false;
+  }
+
+  private isFoundryTestBaseName(baseName: string): boolean {
+    return baseName.split(".").pop() === "Test";
   }
 }

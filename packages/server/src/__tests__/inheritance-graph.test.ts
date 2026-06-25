@@ -27,8 +27,19 @@ contract Child is Base {}
 import "../lib/Dep.sol";
 contract UsesDep is Dep {}
 `,
+        "src/HarnessBase.sol": `pragma solidity ^0.8.24;
+import "../lib/forge-std/Test.sol";
+contract HarnessBase is Test {}
+`,
+        "src/SourceHarness.sol": `pragma solidity ^0.8.24;
+import "./HarnessBase.sol";
+contract SourceHarness is HarnessBase {}
+`,
         "lib/Dep.sol": `pragma solidity ^0.8.24;
 contract Dep {}
+`,
+        "lib/forge-std/Test.sol": `pragma solidity ^0.8.24;
+contract Test {}
 `,
         "test/Base.sol": `pragma solidity ^0.8.24;
 contract Base {}
@@ -104,6 +115,18 @@ contract Base {}
         (n) => n.name === "Base" && n.filePath.endsWith("test/Base.sol"),
       );
       assert.equal(testBase, undefined, "test contracts should be excluded by default");
+      const sourceHarness = graph.nodes.find((n) => n.name === "SourceHarness");
+      assert.equal(
+        sourceHarness,
+        undefined,
+        "src contracts extending Foundry Test should be excluded by default",
+      );
+      const harnessBase = graph.nodes.find((n) => n.name === "HarnessBase");
+      assert.equal(
+        harnessBase,
+        undefined,
+        "indirect Foundry Test bases in src should be excluded by default",
+      );
       const depBase = graph.nodes.find((n) => n.name === "Dep");
       assert.equal(depBase, undefined, "dependency contracts should be excluded by default");
 
@@ -116,12 +139,22 @@ contract Base {}
         (n) => n.name === "Base" && n.filePath.endsWith("test/Base.sol"),
       );
       assert.equal(includedTestBase?.tier, "tests");
+      const includedSourceHarness = graphWithTests.nodes.find((n) => n.name === "SourceHarness");
+      assert.equal(includedSourceHarness?.tier, "project");
+      const includedHarnessBase = graphWithTests.nodes.find((n) => n.name === "HarnessBase");
+      assert.equal(includedHarnessBase?.tier, "project");
 
       const testFocusGraph = provider.provideInheritanceGraph({
         contractPath: path.join(tmpDir, "test/Base.sol"),
         contractName: "Base",
       });
       assert.equal(testFocusGraph.focusId, undefined);
+
+      const sourceHarnessFocusGraph = provider.provideInheritanceGraph({
+        contractPath: path.join(tmpDir, "src/SourceHarness.sol"),
+        contractName: "SourceHarness",
+      });
+      assert.equal(sourceHarnessFocusGraph.focusId, undefined);
 
       const includedTestFocusGraph = provider.provideInheritanceGraph({
         contractPath: path.join(tmpDir, "test/Base.sol"),
