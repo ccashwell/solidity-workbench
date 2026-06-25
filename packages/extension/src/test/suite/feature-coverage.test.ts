@@ -48,6 +48,7 @@ import { buildSlitherDiagnostics } from "../../analysis/slither";
 import { buildAderynDiagnostics } from "../../analysis/aderyn";
 import { buildWakeDiagnostics } from "../../analysis/wake";
 import { buildMythrilDiagnostics } from "../../analysis/mythril";
+import { shouldFormatSolidityOnSave } from "../../format-on-save";
 
 /**
  * End-to-end coverage of the feature surface that landed across the
@@ -177,6 +178,17 @@ describe("Feature coverage — webview commands", () => {
     const ext = vscode.extensions.getExtension(EXTENSION_ID);
     assert.ok(ext);
     await ext!.activate();
+  });
+
+  it("honors the extension format-on-save setting only for Solidity documents", () => {
+    const enabledConfig = { get: () => true };
+    const disabledConfig = { get: () => false };
+    const solidityDocument = { languageId: "solidity" };
+    const typescriptDocument = { languageId: "typescript" };
+
+    assert.equal(shouldFormatSolidityOnSave(solidityDocument, enabledConfig), true);
+    assert.equal(shouldFormatSolidityOnSave(solidityDocument, disabledConfig), false);
+    assert.equal(shouldFormatSolidityOnSave(typescriptDocument, enabledConfig), false);
   });
 
   /**

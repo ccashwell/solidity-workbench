@@ -31,6 +31,7 @@ import { GasDiffProvider } from "./views/gas-diff.js";
 import { RemoteChainPanel } from "./views/remote-chain.js";
 import { IrViewerPanel } from "./views/ir-viewer.js";
 import { ProjectGraphExporter } from "./views/project-graph.js";
+import { registerFormatOnSave } from "./format-on-save.js";
 
 let client: LanguageClient;
 
@@ -100,6 +101,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   registerScriptCommands(context);
   registerDeployCommands(context);
   registerIndexerCommands(context);
+  registerFormatOnSave(context);
 
   context.subscriptions.push(
     vscode.commands.registerCommand("solidity-workbench.restartServer", async () => {
