@@ -170,6 +170,61 @@ describe("SemanticTokensProvider", () => {
         "expected read() body owner to remain a state-variable property",
       );
     });
+
+    it("tokenizes file-level declaration references inside free functions and contracts", () => {
+      const code = `type Bucket is bytes32;
+struct FileState { uint256 total; }
+enum Mode { A, B }
+error FileError(uint256 code);
+event FileClaimed(address indexed account);
+uint256 constant FILE_LIMIT = 10;
+
+function fileHelper(FileState memory state, Bucket bucket) pure returns (uint256) {
+    if (Mode.A == Mode.B) revert FileError(FILE_LIMIT);
+    return state.total + Bucket.unwrap(bucket);
+}
+
+contract C {
+    function run(FileState memory state, Bucket bucket) external {
+        emit FileClaimed(msg.sender);
+        fileHelper(state, bucket);
+    }
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+
+      const countTokens = (type: string, text: string) =>
+        tokens.filter((t) => t.type === type && t.length === text.length).length;
+
+      assert.ok(
+        countTokens("event", "FileClaimed") >= 2,
+        `expected file-level event declaration and reference tokens; got ${JSON.stringify(tokens)}`,
+      );
+      assert.ok(
+        countTokens("function", "fileHelper") >= 2,
+        `expected free-function declaration and call tokens; got ${JSON.stringify(tokens)}`,
+      );
+      assert.ok(
+        countTokens("function", "FileError") >= 2,
+        `expected file-level error declaration and revert-site tokens; got ${JSON.stringify(tokens)}`,
+      );
+      assert.ok(
+        countTokens("property", "FILE_LIMIT") >= 2,
+        `expected file-level constant declaration and reference tokens; got ${JSON.stringify(tokens)}`,
+      );
+      assert.ok(
+        countTokens("struct", "FileState") >= 1,
+        `expected file-level struct declaration token; got ${JSON.stringify(tokens)}`,
+      );
+      assert.ok(
+        countTokens("enum", "Mode") >= 2,
+        `expected file-level enum declaration and body reference tokens; got ${JSON.stringify(tokens)}`,
+      );
+      assert.ok(
+        countTokens("type", "Bucket") >= 3,
+        `expected UDVT declaration and reference tokens; got ${JSON.stringify(tokens)}`,
+      );
+    });
   });
 
   describe("struct members", () => {

@@ -100,6 +100,12 @@ export class SemanticTokensProvider {
         case "FunctionDefinition":
           this.emitFunction(node, lines, tokens);
           break;
+        case "StructDefinition":
+          this.emitStruct(node, lines, tokens);
+          break;
+        case "EnumDefinition":
+          this.emitEnum(node, lines, tokens);
+          break;
         case "EventDefinition":
           this.emitEvent(node, lines, tokens);
           break;
@@ -109,6 +115,9 @@ export class SemanticTokensProvider {
           break;
         case "TypeDefinition":
           this.emitUdvt(node, lines, tokens);
+          break;
+        case "FileLevelConstant":
+          this.emitFileConstant(node, lines, tokens);
           break;
         case "UsingForDeclaration":
           this.emitUsingForDirective(node, lines, tokens);
@@ -365,6 +374,23 @@ export class SemanticTokensProvider {
     }
   }
 
+  private emitFileConstant(node: RawNode, lines: string[], tokens: TokenInfo[]): void {
+    this.emitTypeRef(node.typeName, tokens);
+    if (!node.name || !node.loc) return;
+    const pos =
+      node.identifier?.loc !== undefined
+        ? { line: node.identifier.loc.start.line - 1, char: node.identifier.loc.start.column }
+        : findNameAfter(lines, node.loc.start.line - 1, node.loc.start.column, node.name);
+    if (!pos) return;
+    tokens.push({
+      line: pos.line,
+      char: pos.char,
+      length: node.name.length,
+      type: "property",
+      modifiers: ["declaration", "readonly"],
+    });
+  }
+
   /**
    * Emit tokens for a single parameter / struct member — the type
    * reference (if user-defined) and then the name. Shared between
@@ -451,6 +477,12 @@ export class SemanticTokensProvider {
     for (const constant of su.fileConstants ?? []) {
       if (constant.name) kinds.set(constant.name, "property");
     }
+    for (const event of su.events ?? []) {
+      if (event.name) kinds.set(event.name, "event");
+    }
+    for (const func of su.freeFunctions ?? []) {
+      if (func.name) kinds.set(func.name, "function");
+    }
     for (const contract of su.contracts) {
       if (contract.name) {
         kinds.set(contract.name, contract.kind === "interface" ? "interface" : "class");
@@ -504,48 +536,62 @@ export class SemanticTokensProvider {
     // Map(nameKinds)` was O(file_symbols) and ran once per function.
     const overrides: { name: string; prior: string | undefined; existed: boolean }[] = [];
 
+    const scanFunction = (func: {
+      body: boolean;
+      range: { start: { line: number } };
+      parameters: { name?: string }[];
+      returnParameters: { name?: string }[];
+    }): void => {
+      if (!func.body) return;
+      const bounds = getFunctionBodyBounds(lines, func.range.start.line);
+      if (!bounds) return;
+
+      overrides.length = 0;
+      const applyParam = (name: string | undefined): void => {
+        if (!name) return;
+        const existed = nameKinds.has(name);
+        overrides.push({ name, prior: nameKinds.get(name), existed });
+        nameKinds.set(name, "parameter");
+      };
+      for (const param of func.parameters) applyParam(param.name);
+      for (const param of func.returnParameters) applyParam(param.name);
+
+      const idents = scanIdentifiersInRange(lines, bounds);
+      for (const id of idents) {
+        const kind = nameKinds.get(id.text);
+        if (!kind) continue;
+        tokens.push({
+          line: id.line,
+          char: id.char,
+          length: id.length,
+          type: kind,
+          modifiers: [],
+        });
+      }
+
+      // Walk overrides in reverse so that if the same name was
+      // overridden twice (parameter + named return) the original
+      // value is restored, not an intermediate one.
+      for (let i = overrides.length - 1; i >= 0; i--) {
+        const o = overrides[i];
+        if (o.existed) {
+          nameKinds.set(o.name, o.prior as string);
+        } else {
+          nameKinds.delete(o.name);
+        }
+      }
+    };
+
+    for (const func of result.sourceUnit.freeFunctions) {
+      if (token?.isCancellationRequested) return;
+      scanFunction(func);
+    }
+
     for (const contract of result.sourceUnit.contracts) {
       if (token?.isCancellationRequested) return;
       for (const func of contract.functions) {
         if (token?.isCancellationRequested) return;
-        if (!func.body) continue;
-        const bounds = getFunctionBodyBounds(lines, func.range.start.line);
-        if (!bounds) continue;
-
-        overrides.length = 0;
-        const applyParam = (name: string | undefined): void => {
-          if (!name) return;
-          const existed = nameKinds.has(name);
-          overrides.push({ name, prior: nameKinds.get(name), existed });
-          nameKinds.set(name, "parameter");
-        };
-        for (const param of func.parameters) applyParam(param.name);
-        for (const param of func.returnParameters) applyParam(param.name);
-
-        const idents = scanIdentifiersInRange(lines, bounds);
-        for (const id of idents) {
-          const kind = nameKinds.get(id.text);
-          if (!kind) continue;
-          tokens.push({
-            line: id.line,
-            char: id.char,
-            length: id.length,
-            type: kind,
-            modifiers: [],
-          });
-        }
-
-        // Walk overrides in reverse so that if the same name was
-        // overridden twice (parameter + named return) the original
-        // value is restored, not an intermediate one.
-        for (let i = overrides.length - 1; i >= 0; i--) {
-          const o = overrides[i];
-          if (o.existed) {
-            nameKinds.set(o.name, o.prior as string);
-          } else {
-            nameKinds.delete(o.name);
-          }
-        }
+        scanFunction(func);
       }
     }
   }
