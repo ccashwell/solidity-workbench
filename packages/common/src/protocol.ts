@@ -389,6 +389,7 @@ export interface ProjectGraphEdgeQuality {
 export const QueryProjectGraph = "solidity-workbench/queryProjectGraph";
 
 export type ProjectGraphQueryKind = "callers" | "callees" | "impact";
+export type ProjectGraphQueryMissReason = "targetNotFound" | "targetKindMismatch";
 
 export interface QueryProjectGraphParams {
   kind: ProjectGraphQueryKind;
@@ -413,6 +414,7 @@ export interface ProjectGraphQueryResult extends ProjectGraphResult {
   query?: string;
   targetId?: string;
   found: boolean;
+  missReason?: ProjectGraphQueryMissReason;
   indexStatus?: ProjectGraphIndexStatus;
   edgeQuality?: ProjectGraphEdgeQuality;
 }

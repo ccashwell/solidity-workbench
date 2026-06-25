@@ -402,6 +402,10 @@ describe("Feature coverage — project graph export", () => {
       projectGraphQueryMissLabel("callers"),
       "No callable project graph query target found.",
     );
+    assert.equal(
+      projectGraphQueryMissLabel("callers", "targetKindMismatch"),
+      "Selected graph node is not callable; choose a function, constructor, receive/fallback, or modifier.",
+    );
     assert.equal(projectGraphQueryMissLabel("impact"), "No project graph query target found.");
   });
 

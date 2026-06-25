@@ -60,6 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cursor and selected-node Project Graph callers/callees queries now apply the
   same callable-target constraint, so state variables and type nodes do not
   produce misleading call-hierarchy-style results.
+- Project Graph query misses now include a normalized `missReason`, allowing
+  the graph UI to distinguish missing targets from non-callable selected nodes.
 
 ### Fixed
 

@@ -17,6 +17,7 @@ import {
   type ProjectGraphNodeKind,
   type ProjectGraphPathResult,
   type ProjectGraphQueryKind,
+  type ProjectGraphQueryMissReason,
   type ProjectGraphQueryResult,
   type ProjectGraphResolutionConfidence,
   type ProjectGraphResult,
@@ -67,7 +68,15 @@ export function projectGraphQueryTargetKinds(
   return kind === "impact" ? undefined : PROJECT_GRAPH_CALLABLE_NODE_KINDS;
 }
 
-export function projectGraphQueryMissLabel(kind: ProjectGraphQueryKind): string {
+export function projectGraphQueryMissLabel(
+  kind: ProjectGraphQueryKind,
+  reason?: ProjectGraphQueryMissReason,
+): string {
+  if (reason === "targetKindMismatch") {
+    return kind === "impact"
+      ? "No project graph query target found."
+      : "Selected graph node is not callable; choose a function, constructor, receive/fallback, or modifier.";
+  }
   return kind === "impact"
     ? "No project graph query target found."
     : "No callable project graph query target found.";
@@ -596,7 +605,7 @@ export class ProjectGraphExporter {
             maxNodes: 240,
           });
           if (!result.found) {
-            await this.postProjectGraphStatus(projectGraphQueryMissLabel(kind));
+            await this.postProjectGraphStatus(projectGraphQueryMissLabel(kind, result.missReason));
             return;
           }
           const stats = await this.getProjectGraphStats();
@@ -803,7 +812,9 @@ export class ProjectGraphExporter {
     });
 
     if (!result.found) {
-      vscode.window.showInformationMessage(projectGraphQueryMissLabel(pickedKind.queryKind));
+      vscode.window.showInformationMessage(
+        projectGraphQueryMissLabel(pickedKind.queryKind, result.missReason),
+      );
       return;
     }
 

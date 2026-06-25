@@ -16,6 +16,7 @@ import type {
   ProjectGraphPathResult,
   ProjectGraphResolutionConfidence,
   ProjectGraphResult,
+  ProjectGraphQueryMissReason,
   ProjectGraphStatsResult,
   SourceRange,
   GetProjectGraphNeighborhoodParams,
@@ -704,7 +705,8 @@ export class GraphIndex {
   }
 
   query(params: QueryProjectGraphParams): ProjectGraphQueryResult {
-    const target = this.resolveGraphQueryTarget(params);
+    const resolvedTarget = this.resolveGraphQueryTarget(params);
+    const target = resolvedTarget.target;
     if (!target) {
       return {
         nodes: [],
@@ -712,6 +714,7 @@ export class GraphIndex {
         kind: params.kind,
         query: params.query,
         found: false,
+        missReason: resolvedTarget.missReason,
         indexStatus: this.graphIndexStatus(),
         edgeQuality: this.summarizeEdgeQuality([]),
       };
@@ -1012,22 +1015,28 @@ export class GraphIndex {
     return this.findInnermostNodeAtPosition(endpoint.uri, endpoint.position);
   }
 
-  private resolveGraphQueryTarget(params: QueryProjectGraphParams): SolidityGraphNode | undefined {
+  private resolveGraphQueryTarget(params: QueryProjectGraphParams): {
+    target?: SolidityGraphNode;
+    missReason: ProjectGraphQueryMissReason;
+  } {
     if (params.target) {
       const target = this.resolveGraphEndpoint(params.target);
-      if (!target) return undefined;
+      if (!target) return { missReason: "targetNotFound" };
       const allowedKinds = params.targetKinds?.length
         ? new Set<ProjectGraphNodeKind>(params.targetKinds)
         : null;
-      return !allowedKinds || allowedKinds.has(target.kind) ? target : undefined;
+      return !allowedKinds || allowedKinds.has(target.kind)
+        ? { target, missReason: "targetNotFound" }
+        : { missReason: "targetKindMismatch" };
     }
     const query = params.query?.trim();
-    if (!query) return undefined;
-    return this.search({
+    if (!query) return { missReason: "targetNotFound" };
+    const target = this.search({
       query,
       kinds: params.targetKinds,
       maxResults: 1,
     }).matches[0]?.node;
+    return target ? { target, missReason: "targetNotFound" } : { missReason: "targetNotFound" };
   }
 
   private pathResult(

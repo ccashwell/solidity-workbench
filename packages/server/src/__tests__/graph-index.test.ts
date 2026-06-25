@@ -394,6 +394,7 @@ contract Child is Base {
         false,
         "explicit callers targets must also respect callable target constraints",
       );
+      assert.equal(nonCallableCallers.missReason, "targetKindMismatch");
       assert.deepEqual(nonCallableCallers.nodes, []);
       assert.deepEqual(nonCallableCallers.edges, []);
 
