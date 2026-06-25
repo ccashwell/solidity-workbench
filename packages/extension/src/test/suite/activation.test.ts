@@ -1,5 +1,6 @@
 import * as assert from "node:assert";
 import * as vscode from "vscode";
+import { getConfig } from "../../config";
 
 /**
  * Smoke-level extension activation tests.
@@ -87,6 +88,11 @@ describe("Extension activation", () => {
     const dependency = properties["solidity-workbench.projectGraph.dependencyIndexing"];
     assert.ok(dependency, "expected project graph dependency-indexing setting");
     assert.deepEqual(dependency.enum, ["disabled", "declarations", "relationships"]);
+  });
+
+  it("does not expose undeclared inlay-hint settings through the typed config helper", () => {
+    const config = getConfig();
+    assert.deepEqual(Object.keys(config.inlayHints).sort(), ["parameterNames"]);
   });
 
   it("registers the Solidity language", async () => {

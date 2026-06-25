@@ -32,12 +32,15 @@ dist/**/*.map
 # pass left over from earlier builds — code that's already inlined into
 # the bundles. Keeping them around just gives the Marketplace scanner
 # more bytes to walk for zero runtime benefit.
+dist/*.js
+!dist/extension.js
+!dist/server.js
+!dist/parser-worker.js
 dist/analysis/**
 dist/commands/**
 dist/debugger/**
 dist/test-explorer/**
 dist/views/**
-dist/config.js
 # `package.json#icon` points at `resources/icon.png`, which is what
 # the Marketplace and VSCode actually load. The companion
 # `resources/icon.svg` is the source artwork the `build:icon`

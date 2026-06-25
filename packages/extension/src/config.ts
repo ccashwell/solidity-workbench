@@ -17,7 +17,6 @@ export interface WorkbenchConfig {
   };
   inlayHints: {
     parameterNames: boolean;
-    variableTypes: boolean;
   };
   gasEstimates: {
     enabled: boolean;
@@ -47,7 +46,6 @@ export function getConfig(): WorkbenchConfig {
     },
     inlayHints: {
       parameterNames: config.get<boolean>("inlayHints.parameterNames") ?? true,
-      variableTypes: config.get<boolean>("inlayHints.variableTypes") ?? false,
     },
     gasEstimates: {
       enabled: config.get<boolean>("gasEstimates.enabled") ?? true,
