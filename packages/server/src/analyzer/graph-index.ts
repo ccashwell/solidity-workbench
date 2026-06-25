@@ -9,6 +9,8 @@ import type {
   ProjectGraphEdge,
   ProjectGraphEdgeKind,
   ProjectGraphEdgeEvidence,
+  ProjectGraphEdgeQuality,
+  ProjectGraphIndexStatus,
   ProjectGraphNode,
   ProjectGraphNodeKind,
   ProjectGraphPathResult,
@@ -633,7 +635,14 @@ export class GraphIndex {
 
   search(params: SearchProjectGraphParams): ProjectGraphSearchResult {
     const rawQuery = params.query.trim();
-    if (!rawQuery) return { query: params.query, matches: [] };
+    if (!rawQuery) {
+      return {
+        query: params.query,
+        matches: [],
+        indexStatus: this.graphIndexStatus(),
+        edgeQuality: this.summarizeEdgeQuality([]),
+      };
+    }
 
     const query = normalizeSearchText(rawQuery);
     const allowedKinds = params.kinds?.length ? new Set<ProjectGraphNodeKind>(params.kinds) : null;
@@ -677,7 +686,14 @@ export class GraphIndex {
       }
     }
 
-    return { query: params.query, matches, truncated };
+    const includedEdges = matches.flatMap((match) => match.edges ?? []);
+    return {
+      query: params.query,
+      matches,
+      truncated,
+      indexStatus: this.graphIndexStatus(),
+      edgeQuality: this.summarizeEdgeQuality(includedEdges),
+    };
   }
 
   query(params: QueryProjectGraphParams): ProjectGraphQueryResult {
@@ -689,6 +705,8 @@ export class GraphIndex {
         kind: params.kind,
         query: params.query,
         found: false,
+        indexStatus: this.graphIndexStatus(),
+        edgeQuality: this.summarizeEdgeQuality([]),
       };
     }
 
@@ -710,6 +728,8 @@ export class GraphIndex {
       query: params.query,
       targetId: target.id,
       found: true,
+      indexStatus: this.graphIndexStatus(),
+      edgeQuality: this.summarizeEdgeQuality(graph.edges),
     };
   }
 
@@ -865,6 +885,40 @@ export class GraphIndex {
       relationshipFilesTotal: relationshipProgress.total,
       pendingRelationshipFiles: relationshipProgress.remaining,
       relationshipIndexComplete: this.isRelationshipIndexComplete(),
+    };
+  }
+
+  private graphIndexStatus(): ProjectGraphIndexStatus {
+    const relationshipProgress = this.relationshipProgress();
+    const complete = this.isRelationshipIndexComplete();
+    return {
+      relationshipFilesIndexed: relationshipProgress.indexed,
+      relationshipFilesTotal: relationshipProgress.total,
+      pendingRelationshipFiles: relationshipProgress.remaining,
+      relationshipIndexComplete: complete,
+      partial: !complete,
+    };
+  }
+
+  private summarizeEdgeQuality(edges: SolidityGraphEdge[]): ProjectGraphEdgeQuality {
+    const edgesByResolutionConfidence = Object.create(
+      null,
+    ) as ProjectGraphEdgeQuality["edgesByResolutionConfidence"];
+    let unresolvedEdgeCount = 0;
+    let lowConfidenceEdgeCount = 0;
+    for (const edge of edges) {
+      const confidence = this.edgeResolutionConfidence(edge);
+      edgesByResolutionConfidence[confidence] = (edgesByResolutionConfidence[confidence] ?? 0) + 1;
+      const unresolved = this.isUnresolvedEdge(edge);
+      if (unresolved) unresolvedEdgeCount++;
+      if (unresolved || confidence === "heuristic" || confidence === "unknown") {
+        lowConfidenceEdgeCount++;
+      }
+    }
+    return {
+      edgesByResolutionConfidence,
+      unresolvedEdgeCount,
+      lowConfidenceEdgeCount,
     };
   }
 

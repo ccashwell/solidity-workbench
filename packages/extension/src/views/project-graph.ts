@@ -10,7 +10,9 @@ import {
   RebuildProjectGraph,
   SearchProjectGraph,
   type ProjectGraphEdge,
+  type ProjectGraphEdgeQuality,
   type ProjectGraphEdgeKind,
+  type ProjectGraphIndexStatus,
   type ProjectGraphNode,
   type ProjectGraphPathResult,
   type ProjectGraphQueryKind,
@@ -640,11 +642,11 @@ export class ProjectGraphExporter {
     }
 
     const selected = await vscode.window.showQuickPick(
-      result.matches.map((match) => this.toGraphSearchQuickPick(match)),
+      result.matches.map((match) => this.toGraphSearchQuickPick(match, result)),
       {
         title: result.truncated
-          ? "Search Solidity Project Graph (first 80 matches)"
-          : "Search Solidity Project Graph",
+          ? `Search Solidity Project Graph (first 80 matches${this.graphResultTitleSuffix(result)})`
+          : `Search Solidity Project Graph${this.graphResultTitleSuffix(result)}`,
         placeHolder: "Select a declaration to open",
         matchOnDescription: true,
         matchOnDetail: true,
@@ -718,13 +720,13 @@ export class ProjectGraphExporter {
       selectableNodes.map((node) => ({
         label: node.qualifiedName,
         description: `${node.kind} · ${node.tier}`,
-        detail: node.filePath,
+        detail: [node.filePath, this.graphResultDetail(result)].filter(Boolean).join(" · "),
         node,
       })),
       {
         title: result.truncated
-          ? `${pickedKind.label} (truncated)`
-          : `${pickedKind.label} for project graph target`,
+          ? `${pickedKind.label} (truncated${this.graphResultTitleSuffix(result)})`
+          : `${pickedKind.label} for project graph target${this.graphResultTitleSuffix(result)}`,
         placeHolder: "Select a declaration to open",
         matchOnDescription: true,
         matchOnDetail: true,
@@ -747,15 +749,50 @@ export class ProjectGraphExporter {
 
   private toGraphSearchQuickPick(
     match: ProjectGraphSearchMatch,
+    result: ProjectGraphSearchResult,
   ): vscode.QuickPickItem & { match: ProjectGraphSearchMatch } {
     const edgeCount = match.edges?.length ?? 0;
     const edgeLabel = match.edgesTruncated ? `${edgeCount}+ edges` : `${edgeCount} edges`;
     return {
       label: match.node.qualifiedName,
       description: `${match.node.kind} · ${match.node.tier}`,
-      detail: `${match.node.filePath}${edgeCount > 0 ? ` · ${edgeLabel}` : ""}`,
+      detail: [match.node.filePath, edgeCount > 0 ? edgeLabel : "", this.graphResultDetail(result)]
+        .filter(Boolean)
+        .join(" · "),
       match,
     };
+  }
+
+  private graphResultTitleSuffix(result: {
+    indexStatus?: ProjectGraphIndexStatus;
+    edgeQuality?: ProjectGraphEdgeQuality;
+  }): string {
+    const detail = this.graphResultDetail(result);
+    return detail ? ` · ${detail}` : "";
+  }
+
+  private graphResultDetail(result: {
+    indexStatus?: ProjectGraphIndexStatus;
+    edgeQuality?: ProjectGraphEdgeQuality;
+  }): string {
+    const parts: string[] = [];
+    const status = result.indexStatus;
+    if (status?.partial) {
+      const indexed = status.relationshipFilesIndexed ?? 0;
+      const total = status.relationshipFilesTotal ?? 0;
+      parts.push(total > 0 ? `partial index ${indexed}/${total}` : "partial index");
+    }
+
+    const lowConfidence = result.edgeQuality?.lowConfidenceEdgeCount ?? 0;
+    const unresolved = result.edgeQuality?.unresolvedEdgeCount ?? 0;
+    if (lowConfidence > 0) {
+      parts.push(
+        unresolved > 0
+          ? `${lowConfidence} low-confidence edges, ${unresolved} unresolved`
+          : `${lowConfidence} low-confidence edges`,
+      );
+    }
+    return parts.join(" · ");
   }
 
   private queryResultNodes(result: ProjectGraphQueryResult): ProjectGraphNode[] {

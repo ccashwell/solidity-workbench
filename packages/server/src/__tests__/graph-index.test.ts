@@ -302,6 +302,15 @@ contract Child is Base {
         [helper.id, inherited.id].sort(),
         "expected search to include filtered adjacent call edges",
       );
+      assert.equal(entrySearch.indexStatus?.partial, false);
+      assert.ok(
+        (entrySearch.edgeQuality?.edgesByResolutionConfidence.parser ?? 0) >= 1,
+        "expected search result edge-quality metadata to count parser-resolved edges",
+      );
+      assert.ok(
+        (entrySearch.edgeQuality?.edgesByResolutionConfidence.solc ?? 0) >= 1,
+        "expected search result edge-quality metadata to count solc-resolved edges",
+      );
 
       const functionSearch = graph.search({
         query: "hel",
@@ -334,6 +343,12 @@ contract Child is Base {
       assert.ok(
         helperCallers.edges.some((edge) => edge.source === entry.id && edge.target === helper.id),
         "expected callers query to include the incoming call edge",
+      );
+      assert.equal(helperCallers.indexStatus?.partial, false);
+      assert.equal(
+        helperCallers.edgeQuality?.lowConfidenceEdgeCount,
+        0,
+        "expected parser-resolved caller edges to avoid low-confidence warnings",
       );
 
       const entryCallees = graph.query({
@@ -2775,6 +2790,11 @@ contract B {
       assert.equal(stats.relationshipIndexComplete, false);
       assert.equal(stats.relationshipFilesIndexed, 0);
       assert.equal(stats.pendingRelationshipFiles, 2);
+      assert.equal(
+        graph.search({ query: "run" }).indexStatus?.partial,
+        true,
+        "expected search metadata to flag partial relationship indexing",
+      );
 
       const partialCacheDir = path.join(tmpDir, ".cache", "partial");
       graph.writeCache(partialCacheDir);

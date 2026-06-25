@@ -365,6 +365,22 @@ export interface ProjectGraphSearchResult {
   query: string;
   matches: ProjectGraphSearchMatch[];
   truncated?: boolean;
+  indexStatus?: ProjectGraphIndexStatus;
+  edgeQuality?: ProjectGraphEdgeQuality;
+}
+
+export interface ProjectGraphIndexStatus {
+  relationshipIndexComplete?: boolean;
+  relationshipFilesIndexed?: number;
+  relationshipFilesTotal?: number;
+  pendingRelationshipFiles?: number;
+  partial: boolean;
+}
+
+export interface ProjectGraphEdgeQuality {
+  edgesByResolutionConfidence: Partial<Record<ProjectGraphResolutionConfidence, number>>;
+  unresolvedEdgeCount: number;
+  lowConfidenceEdgeCount: number;
 }
 
 /** Request a focused graph query over callers, callees, or impact radius. */
@@ -395,6 +411,8 @@ export interface ProjectGraphQueryResult extends ProjectGraphResult {
   query?: string;
   targetId?: string;
   found: boolean;
+  indexStatus?: ProjectGraphIndexStatus;
+  edgeQuality?: ProjectGraphEdgeQuality;
 }
 
 /** Request lightweight project graph size and timing stats. */
