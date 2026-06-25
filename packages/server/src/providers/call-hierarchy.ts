@@ -167,7 +167,7 @@ export class CallHierarchyProvider {
     if (token?.isCancellationRequested) return [];
 
     const sites = this.incomingCalls.get(item.name) ?? [];
-    const allowedQualifiers = this.computeAllowedQualifiers(item.detail);
+    const allowedQualifiers = this.computeAllowedQualifiers(item.detail, item.uri);
 
     const callerMap = new Map<string, { item: CallHierarchyItem; ranges: Range[] }>();
 
@@ -513,14 +513,18 @@ export class CallHierarchyProvider {
    * qualifier `IERC20` is still attributed to `MyToken.transfer` when
    * `MyToken is IERC20`.
    */
-  private computeAllowedQualifiers(containerName: string | undefined): Set<string> {
-    if (containerName && this.qualifierCache.has(containerName)) {
-      return this.qualifierCache.get(containerName)!;
+  private computeAllowedQualifiers(
+    containerName: string | undefined,
+    fromUri: string,
+  ): Set<string> {
+    const cacheKey = containerName ? `${fromUri}\0${containerName}` : "";
+    if (containerName && this.qualifierCache.has(cacheKey)) {
+      return this.qualifierCache.get(cacheKey)!;
     }
     const allowed = new Set<string>();
     if (!containerName) return allowed;
     allowed.add(containerName);
-    const chain = this.resolver?.getInheritanceChain(containerName) ?? [];
+    const chain = this.resolver?.getInheritanceChain(containerName, fromUri) ?? [];
     if (chain.length > 0) {
       for (const base of chain) {
         if (base.contract.name) allowed.add(base.contract.name);
@@ -530,7 +534,7 @@ export class CallHierarchyProvider {
         if (base.name) allowed.add(base.name);
       }
     }
-    this.qualifierCache.set(containerName, allowed);
+    this.qualifierCache.set(cacheKey, allowed);
     return allowed;
   }
 
@@ -754,7 +758,7 @@ export class CallHierarchyProvider {
         return this.symbolToTarget(resolved);
       }
 
-      const allowed = this.computeAllowedQualifiers(site.qualifier);
+      const allowed = this.computeAllowedQualifiers(site.qualifier, site.callerUri);
       const qualified = pool.find((sym) => sym.containerName && allowed.has(sym.containerName));
       if (qualified) return this.symbolToTarget(qualified);
     }
