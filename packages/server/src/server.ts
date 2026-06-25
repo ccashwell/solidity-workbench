@@ -329,7 +329,13 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   signatureHelpProvider = new SignatureHelpProvider(symbolIndex, parser, semanticResolver);
   renameProvider = new RenameProvider(symbolIndex, workspaceManager, documents, semanticResolver);
   codeLensProvider = new CodeLensProvider(symbolIndex, parser, workspaceManager, semanticResolver);
-  referencesProvider = new ReferencesProvider(symbolIndex, workspaceManager, parser, documents);
+  referencesProvider = new ReferencesProvider(
+    symbolIndex,
+    workspaceManager,
+    parser,
+    documents,
+    semanticResolver,
+  );
   autoImportProvider = new AutoImportProvider(symbolIndex, workspaceManager, parser);
   callHierarchyProvider = new CallHierarchyProvider(
     symbolIndex,

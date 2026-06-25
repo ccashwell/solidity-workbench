@@ -5,13 +5,18 @@ import type { TextDocuments } from "vscode-languageserver/node.js";
 import { URI } from "vscode-uri";
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
+import { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { ReferencesProvider } from "../providers/references.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
-function makeFakeWorkspace() {
+function makeFakeWorkspace(
+  uris: string[] = [],
+  resolveImport: (importPath: string, from: string) => string | null = () => null,
+) {
   return {
-    getAllFileUris: () => [],
+    getAllFileUris: () => uris,
     uriToPath: (uri: string) => URI.parse(uri).fsPath,
+    resolveImport,
     root: "/w",
   } as unknown as WorkspaceManager;
 }
@@ -81,6 +86,69 @@ describe("ReferencesProvider", () => {
       refs.some((ref) => ref.range.start.line === 5),
       false,
       "must not include unrelated B.ping(uint256) declaration",
+    );
+  });
+
+  it("filters indexed references to files that can reach the selected declaration", () => {
+    const helperUri = "file:///w/src/Helpers.sol";
+    const useUri = "file:///w/src/Use.sol";
+    const testHelperUri = "file:///w/test/Helpers.sol";
+    const files = {
+      [helperUri]: `function helper() pure returns (uint256) {
+    return 1;
+}`,
+      [useUri]: `import "./Helpers.sol";
+contract Use {
+    function run() external pure returns (uint256) {
+        return helper();
+    }
+}`,
+      [testHelperUri]: `function helper() pure returns (uint256) {
+    return 2;
+}`,
+    };
+    const parser = new SolidityParser();
+    const workspace = makeFakeWorkspace(Object.keys(files), (importPath, from) =>
+      importPath === "./Helpers.sol" && from.endsWith("/src/Use.sol")
+        ? URI.parse(helperUri).fsPath
+        : null,
+    );
+    const index = new SymbolIndex(parser, workspace);
+    const docs: TextDocument[] = [];
+    for (const [uri, text] of Object.entries(files)) {
+      parser.parse(uri, text);
+      index.updateFile(uri);
+      docs.push(TextDocument.create(uri, "solidity", 1, text));
+    }
+    const resolver = new SemanticResolver(parser, workspace, index);
+    const doc = docs.find((candidate) => candidate.uri === helperUri);
+    assert.ok(doc);
+    const provider = new ReferencesProvider(
+      index,
+      workspace,
+      parser,
+      makeFakeDocuments(docs),
+      resolver,
+    );
+
+    const refs = provider.provideReferences(
+      doc,
+      { line: 0, character: "function ".length + 1 },
+      { includeDeclaration: true },
+    );
+
+    assert.ok(
+      refs.some((ref) => ref.uri === helperUri && ref.range.start.line === 0),
+      "expected source helper declaration",
+    );
+    assert.ok(
+      refs.some((ref) => ref.uri === useUri && ref.range.start.line === 3),
+      "expected source helper call site",
+    );
+    assert.equal(
+      refs.some((ref) => ref.uri === testHelperUri),
+      false,
+      "unrelated same-name test helper must not be returned",
     );
   });
 });

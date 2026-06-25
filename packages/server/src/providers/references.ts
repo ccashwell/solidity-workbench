@@ -10,9 +10,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { URI } from "vscode-uri";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
+import type { SolSymbol, SourceRange } from "@solidity-workbench/common";
 import { getWordAtPosition, isInsideString, findLineCommentStart } from "../utils/text.js";
 
 /**
@@ -41,6 +43,7 @@ export class ReferencesProvider {
     private workspace: WorkspaceManager,
     private parser: SolidityParser,
     private documents: TextDocuments<TextDocument>,
+    private resolver?: SemanticResolver,
   ) {}
 
   setSolcBridge(bridge: SolcBridge): void {
@@ -73,10 +76,13 @@ export class ReferencesProvider {
     const semantic = this.provideSemanticReferences(document, position, context);
     if (semantic) return semantic;
 
+    const scopeUris = this.referenceScopeUris(document.uri, position, word);
+
     // 1. Fast path: inverted index
     if (this.symbolIndex.hasReferences(word)) {
       for (const entry of this.symbolIndex.findReferences(word)) {
         if (token?.isCancellationRequested) return [];
+        if (scopeUris && !scopeUris.has(entry.uri)) continue;
         pushUnique(entry.uri, entry.range);
       }
     } else {
@@ -88,10 +94,12 @@ export class ReferencesProvider {
       );
       for (const doc of this.documents.all()) {
         if (token?.isCancellationRequested) return [];
+        if (scopeUris && !scopeUris.has(doc.uri)) continue;
         this.findInText(doc.getText(), word, doc.uri, results, seen);
       }
       for (const uri of this.workspace.getAllFileUris()) {
         if (token?.isCancellationRequested) return [];
+        if (scopeUris && !scopeUris.has(uri)) continue;
         if (this.documents.get(uri)) continue;
         try {
           const filePath = this.workspace.uriToPath(uri);
@@ -106,7 +114,9 @@ export class ReferencesProvider {
     if (token?.isCancellationRequested) return [];
 
     // 2. Handle the declaration flag.
-    const declarations = this.symbolIndex.findSymbols(word);
+    const declarations = this.visibleSymbols(word, document.uri).filter(
+      (sym) => !scopeUris || scopeUris.has(sym.filePath),
+    );
 
     if (context.includeDeclaration) {
       // Merge in declarations (using nameRange). Dedup against what the
@@ -132,6 +142,65 @@ export class ReferencesProvider {
     }
 
     return results;
+  }
+
+  private referenceScopeUris(
+    currentUri: string,
+    position: Position,
+    word: string,
+  ): Set<string> | null {
+    if (!this.resolver) return null;
+    const selected = this.selectReferenceSymbol(currentUri, position, word);
+    if (!selected) return null;
+
+    const uris = new Set<string>([selected.filePath, currentUri]);
+    for (const uri of this.workspace.getAllFileUris()) {
+      if (this.resolver.collectReachableUris(uri).has(selected.filePath)) {
+        uris.add(uri);
+      }
+    }
+    return uris;
+  }
+
+  private selectReferenceSymbol(
+    currentUri: string,
+    position: Position,
+    word: string,
+  ): SolSymbol | undefined {
+    const visible = this.visibleSymbols(word, currentUri);
+
+    const declarationAtCursor = visible.find(
+      (sym) => sym.filePath === currentUri && this.rangeContains(sym.nameRange, position),
+    );
+    if (declarationAtCursor) return declarationAtCursor;
+
+    if (visible.length === 1) return visible[0];
+
+    const sameFile = visible.filter((sym) => sym.filePath === currentUri);
+    if (sameFile.length === 1) return sameFile[0];
+
+    const imported = this.resolver?.resolveImportedSymbol(word, currentUri);
+    if (imported) {
+      return visible.find((sym) => sym.filePath === imported.uri && sym.name === imported.name);
+    }
+
+    return undefined;
+  }
+
+  private visibleSymbols(name: string, fromUri: string): SolSymbol[] {
+    const symbols = this.symbolIndex.findSymbols(name);
+    return this.resolver ? this.resolver.filterVisibleSymbols(fromUri, symbols) : symbols;
+  }
+
+  private rangeContains(range: SourceRange, position: Position): boolean {
+    if (position.line < range.start.line || position.line > range.end.line) return false;
+    if (position.line === range.start.line && position.character < range.start.character) {
+      return false;
+    }
+    if (position.line === range.end.line && position.character > range.end.character) {
+      return false;
+    }
+    return true;
   }
 
   private provideSemanticReferences(
