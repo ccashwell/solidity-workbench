@@ -31,6 +31,7 @@ import {
   summarizeProjectGraphCompilerStatus,
   projectGraphQueryMissLabel,
   projectGraphQueryTargetKinds,
+  projectGraphIncludeTestsFlag,
   projectGraphShowMoreControlState,
   PROJECT_GRAPH_CALLABLE_NODE_KINDS,
   serializeProjectGraphForExport,
@@ -1013,6 +1014,14 @@ describe("Feature coverage — project graph export", () => {
       "Project graph callees queries require a function, constructor, receive/fallback, or modifier target.",
     );
     assert.equal(projectGraphQueryMissLabel("impact"), "No project graph query target found.");
+  });
+
+  it("parses project graph include-tests command flags explicitly", () => {
+    assert.equal(projectGraphIncludeTestsFlag({ includeTests: true }), true);
+    assert.equal(projectGraphIncludeTestsFlag({ includeTests: false }), false);
+    assert.equal(projectGraphIncludeTestsFlag({ includeTests: "true" }), undefined);
+    assert.equal(projectGraphIncludeTestsFlag({}), undefined);
+    assert.equal(projectGraphIncludeTestsFlag(undefined), undefined);
   });
 
   it("computes project graph node-kind filters", () => {

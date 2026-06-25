@@ -47,6 +47,9 @@ const EDGE_KIND_ITEMS: { label: ProjectGraphEdgeKind; description: string }[] = 
 ];
 
 type ProjectGraphExportFormat = "json" | "dot" | "graphml" | "codegraph-json";
+export interface ProjectGraphCommandOptions {
+  includeTests?: boolean;
+}
 
 const INTERACTIVE_GRAPH_NODE_LIMIT = 750;
 export const PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT = 240;
@@ -111,6 +114,12 @@ export function projectGraphQueryTargetKinds(
   return kind === "callers"
     ? PROJECT_GRAPH_CALLER_TARGET_NODE_KINDS
     : PROJECT_GRAPH_CALLABLE_NODE_KINDS;
+}
+
+export function projectGraphIncludeTestsFlag(options: unknown): boolean | undefined {
+  if (!options || typeof options !== "object") return undefined;
+  const includeTests = (options as { includeTests?: unknown }).includeTests;
+  return typeof includeTests === "boolean" ? includeTests : undefined;
 }
 
 export function projectGraphQueryMissLabel(
@@ -645,20 +654,26 @@ export class ProjectGraphExporter {
       this.client.onNotification(ServerStateNotification, (state: ServerStateParams) => {
         void this.applyServerStateToProjectGraph(state);
       }),
-      vscode.commands.registerCommand("solidity-workbench.projectGraph", () =>
-        this.showProjectGraph(),
+      vscode.commands.registerCommand(
+        "solidity-workbench.projectGraph",
+        (options?: ProjectGraphCommandOptions) => this.showProjectGraph(options),
       ),
-      vscode.commands.registerCommand("solidity-workbench.projectGraphCursor", () =>
-        this.showProjectGraph({ cursorNeighborhood: true }),
+      vscode.commands.registerCommand(
+        "solidity-workbench.projectGraphCursor",
+        (options?: ProjectGraphCommandOptions) =>
+          this.showProjectGraph({ ...options, cursorNeighborhood: true }),
       ),
-      vscode.commands.registerCommand("solidity-workbench.exportProjectGraph", () =>
-        this.exportProjectGraph(),
+      vscode.commands.registerCommand(
+        "solidity-workbench.exportProjectGraph",
+        (options?: ProjectGraphCommandOptions) => this.exportProjectGraph(options),
       ),
-      vscode.commands.registerCommand("solidity-workbench.searchProjectGraph", () =>
-        this.searchProjectGraph(),
+      vscode.commands.registerCommand(
+        "solidity-workbench.searchProjectGraph",
+        (options?: ProjectGraphCommandOptions) => this.searchProjectGraph(options),
       ),
-      vscode.commands.registerCommand("solidity-workbench.queryProjectGraph", () =>
-        this.queryProjectGraph(),
+      vscode.commands.registerCommand(
+        "solidity-workbench.queryProjectGraph",
+        (options?: ProjectGraphCommandOptions) => this.queryProjectGraph(options),
       ),
       vscode.commands.registerCommand("solidity-workbench.projectGraphStats", () =>
         this.showProjectGraphStats(),
@@ -687,11 +702,18 @@ export class ProjectGraphExporter {
   private projectGraphIndexingVisible = false;
   private includeProjectGraphTests = false;
 
-  private async showProjectGraph(options: { cursorNeighborhood?: boolean } = {}): Promise<void> {
+  private async showProjectGraph(
+    options: ProjectGraphCommandOptions & { cursorNeighborhood?: boolean } = {},
+  ): Promise<void> {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) {
       vscode.window.showWarningMessage("Open a workspace first.");
       return;
+    }
+
+    const includeTestsFlag = projectGraphIncludeTestsFlag(options);
+    if (includeTestsFlag !== undefined) {
+      this.includeProjectGraphTests = includeTestsFlag;
     }
 
     const focused = this.activeSolidityPosition();
@@ -930,12 +952,15 @@ export class ProjectGraphExporter {
     }
   }
 
-  private async exportProjectGraph(): Promise<void> {
+  private async exportProjectGraph(options?: ProjectGraphCommandOptions): Promise<void> {
     const format = await vscode.window.showQuickPick(EXPORT_FORMAT_ITEMS, {
       title: "Export Solidity Project Graph",
       placeHolder: "Choose an export format",
     });
     if (!format) return;
+
+    const includeTests = await this.promptProjectGraphIncludeTests(options);
+    if (includeTests === undefined) return;
 
     const selected = await vscode.window.showQuickPick(
       [{ label: "all", description: "all graph edges" }, ...EDGE_KIND_ITEMS],
@@ -957,7 +982,7 @@ export class ProjectGraphExporter {
     const [graph, stats] = await Promise.all([
       this.client.sendRequest<ProjectGraphResult>(GetProjectGraph, {
         edgeKinds,
-        includeTests: this.includeProjectGraphTests,
+        includeTests,
       }),
       this.getProjectGraphStats(),
     ]);
@@ -969,7 +994,7 @@ export class ProjectGraphExporter {
     await vscode.window.showTextDocument(doc, { preview: false });
   }
 
-  private async searchProjectGraph(): Promise<void> {
+  private async searchProjectGraph(options?: ProjectGraphCommandOptions): Promise<void> {
     const query = await vscode.window.showInputBox({
       title: "Search Solidity Project Graph",
       placeHolder: "Contract, function, event, error, file, or qualified name",
@@ -977,13 +1002,16 @@ export class ProjectGraphExporter {
     });
     if (!query?.trim()) return;
 
+    const includeTests = await this.promptProjectGraphIncludeTests(options);
+    if (includeTests === undefined) return;
+
     const result = await this.client.sendRequest<ProjectGraphSearchResult>(SearchProjectGraph, {
       query,
       includeEdges: true,
       edgeDirection: "both",
       maxResults: 80,
       maxEdgesPerNode: 12,
-      includeTests: this.includeProjectGraphTests,
+      includeTests,
     });
     if (result.matches.length === 0) {
       vscode.window.showInformationMessage(`No project graph matches for '${query}'.`);
@@ -1005,7 +1033,7 @@ export class ProjectGraphExporter {
     await this.openProjectGraphNode(selected.match.node);
   }
 
-  private async queryProjectGraph(): Promise<void> {
+  private async queryProjectGraph(options?: ProjectGraphCommandOptions): Promise<void> {
     const pickedKind = await vscode.window.showQuickPick(
       [
         { label: "Callers", description: "Incoming call-like edges", queryKind: "callers" },
@@ -1018,6 +1046,9 @@ export class ProjectGraphExporter {
       },
     );
     if (!pickedKind) return;
+
+    const includeTests = await this.promptProjectGraphIncludeTests(options);
+    if (includeTests === undefined) return;
 
     const focused = this.activeSolidityPosition();
     const useCursor = focused
@@ -1053,7 +1084,7 @@ export class ProjectGraphExporter {
       query: textQuery,
       targetKinds: projectGraphQueryTargetKinds(pickedKind.queryKind),
       maxNodes: 120,
-      includeTests: this.includeProjectGraphTests,
+      includeTests,
     });
 
     if (!result.found) {
@@ -1098,6 +1129,41 @@ export class ProjectGraphExporter {
       content: JSON.stringify({ ...stats, requestDurationMs }, null, 2),
     });
     await vscode.window.showTextDocument(doc, { preview: false });
+  }
+
+  private async promptProjectGraphIncludeTests(
+    options?: ProjectGraphCommandOptions,
+  ): Promise<boolean | undefined> {
+    const explicit = projectGraphIncludeTestsFlag(options);
+    if (explicit !== undefined) {
+      this.includeProjectGraphTests = explicit;
+      return explicit;
+    }
+
+    const items: (vscode.QuickPickItem & { includeTests: boolean })[] = [
+      {
+        label: "Project Sources Only",
+        description: this.includeProjectGraphTests ? "" : "current",
+        detail: "Exclude test/ files and contracts that extend Foundry's Test base.",
+        includeTests: false,
+      },
+      {
+        label: "Include Tests",
+        description: this.includeProjectGraphTests ? "current" : "",
+        detail: "Include test/ files and contracts that extend Foundry's Test base.",
+        includeTests: true,
+      },
+    ];
+    if (this.includeProjectGraphTests) items.reverse();
+
+    const picked = await vscode.window.showQuickPick(items, {
+      title: "Solidity Project Graph Scope",
+      placeHolder: "Choose whether to include test files",
+    });
+    if (!picked) return undefined;
+
+    this.includeProjectGraphTests = picked.includeTests;
+    return picked.includeTests;
   }
 
   private toGraphSearchQuickPick(
