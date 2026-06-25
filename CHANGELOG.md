@@ -84,6 +84,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph callers and impact queries now drain queued relationship
   indexing before traversal, and relationship progress no longer stalls on
   queued files without parser state.
+- Project Graph callers and impact queries now drain relationship indexing in
+  async batches with server-state progress notifications, so large queries do
+  not block without status feedback.
 
 ### Fixed
 

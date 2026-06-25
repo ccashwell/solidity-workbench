@@ -197,6 +197,54 @@ function scheduleGraphRelationshipIndex(): void {
   graphRelationshipIndexTimer = setTimeout(runBatch, 0);
 }
 
+async function drainGraphRelationshipIndexForQuery(token?: CancellationToken): Promise<void> {
+  if (graphIndex.isRelationshipIndexComplete()) return;
+  cancelGraphRelationshipIndex();
+
+  let batchesSinceCacheWrite = 0;
+  let batch = graphIndex.indexRelationshipBatch(50, 50);
+  batchesSinceCacheWrite++;
+  pushServerState({
+    phase: "indexing",
+    filesIndexed: batch.filesIndexed,
+    filesTotal: batch.filesTotal,
+  });
+
+  while (!batch.complete && !token?.isCancellationRequested) {
+    const previousFilesIndexed = batch.filesIndexed;
+    const previousFilesRemaining = batch.filesRemaining;
+    if (batchesSinceCacheWrite >= 10) {
+      batchesSinceCacheWrite = 0;
+      graphIndex.writeCache(graphCacheDir);
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    batch = graphIndex.indexRelationshipBatch(50, 50);
+    batchesSinceCacheWrite++;
+    pushServerState({
+      phase: "indexing",
+      filesIndexed: batch.filesIndexed,
+      filesTotal: batch.filesTotal,
+    });
+    if (
+      batch.filesIndexed === previousFilesIndexed &&
+      batch.filesRemaining === previousFilesRemaining
+    ) {
+      break;
+    }
+  }
+
+  graphIndex.writeCache(graphCacheDir);
+  pushServerState({
+    phase: "idle",
+    rootCount: workspaceManager.rootCount,
+    fileCount: workspaceManager.getAllFileUris().length,
+  });
+
+  if (!batch.complete && shouldRunBackgroundGraphRelationshipIndex()) {
+    scheduleGraphRelationshipIndex();
+  }
+}
+
 function graphRelationshipIndexingMode(): "auto" | "manual" | "disabled" {
   const mode = currentSettings.projectGraph?.relationshipIndexing;
   return mode === "manual" || mode === "disabled" ? mode : "auto";
@@ -847,9 +895,38 @@ connection.onRequest(
 
 connection.onRequest(
   QueryProjectGraph,
-  async (params: QueryProjectGraphParams): Promise<ProjectGraphQueryResult> => {
+  async (
+    params: QueryProjectGraphParams,
+    token?: CancellationToken,
+  ): Promise<ProjectGraphQueryResult> => {
     graphIndex.ensureWorkspaceDeclarations();
     if (params.target?.uri) graphIndex.ensureFileRelationships(params.target.uri);
+    if (params.kind === "callers" || params.kind === "impact") {
+      await drainGraphRelationshipIndexForQuery(token);
+      if (token?.isCancellationRequested) {
+        const stats = graphIndex.getStats();
+        return {
+          nodes: [],
+          edges: [],
+          kind: params.kind,
+          query: params.query,
+          found: false,
+          missReason: "targetNotFound",
+          indexStatus: {
+            relationshipIndexComplete: stats.relationshipIndexComplete,
+            relationshipFilesIndexed: stats.relationshipFilesIndexed,
+            relationshipFilesTotal: stats.relationshipFilesTotal,
+            pendingRelationshipFiles: stats.pendingRelationshipFiles,
+            partial: stats.relationshipIndexComplete !== true,
+          },
+          edgeQuality: {
+            edgesByResolutionConfidence: {},
+            unresolvedEdgeCount: 0,
+            lowConfidenceEdgeCount: 0,
+          },
+        };
+      }
+    }
     return graphIndex.query(params);
   },
 );
