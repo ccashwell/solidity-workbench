@@ -6,7 +6,7 @@ import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
-import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
+import type { ResolvedContract, SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { SolSymbol, SourceRange } from "@solidity-workbench/common";
 import { resolveDottedReceiverTypeName } from "../utils/receiver-type.js";
 import {
@@ -414,27 +414,32 @@ export class DefinitionProvider {
       }
     }
 
-    const resolved = this.resolver?.findMemberInInheritanceChain(typeName, memberName, fromUri);
-    if (resolved) return Location.create(resolved.filePath, resolved.nameRange);
-
-    const chain = this.symbolIndex.getInheritanceChain(typeName);
-    for (const contract of chain) {
-      const func = contract.functions.find((f) => f.name === memberName);
-      if (func) {
-        const entry = this.symbolIndex.getContract(contract.name);
-        if (entry) return Location.create(entry.uri, func.nameRange);
+    if (this.resolver && fromUri) {
+      const chain = this.resolveVisibleInheritanceChain(typeName, fromUri);
+      for (const entry of chain) {
+        const resolved = this.resolver.findMemberInContract(entry, memberName);
+        if (resolved) return Location.create(resolved.filePath, resolved.nameRange);
       }
+    } else {
+      const chain = this.symbolIndex.getInheritanceChain(typeName);
+      for (const contract of chain) {
+        const func = contract.functions.find((f) => f.name === memberName);
+        if (func) {
+          const entry = this.symbolIndex.getContract(contract.name);
+          if (entry) return Location.create(entry.uri, func.nameRange);
+        }
 
-      const svar = contract.stateVariables.find((v) => v.name === memberName);
-      if (svar) {
-        const entry = this.symbolIndex.getContract(contract.name);
-        if (entry) return Location.create(entry.uri, svar.nameRange);
-      }
+        const svar = contract.stateVariables.find((v) => v.name === memberName);
+        if (svar) {
+          const entry = this.symbolIndex.getContract(contract.name);
+          if (entry) return Location.create(entry.uri, svar.nameRange);
+        }
 
-      const event = contract.events.find((e) => e.name === memberName);
-      if (event) {
-        const entry = this.symbolIndex.getContract(contract.name);
-        if (entry) return Location.create(entry.uri, event.nameRange);
+        const event = contract.events.find((e) => e.name === memberName);
+        if (event) {
+          const entry = this.symbolIndex.getContract(contract.name);
+          if (entry) return Location.create(entry.uri, event.nameRange);
+        }
       }
     }
 
@@ -459,6 +464,25 @@ export class DefinitionProvider {
     }
 
     return null;
+  }
+
+  private resolveVisibleInheritanceChain(typeName: string, fromUri: string): ResolvedContract[] {
+    if (!this.resolver) return [];
+
+    const imported = this.resolver.resolveImportedSymbol(typeName, fromUri);
+    if (imported) return this.resolver.getInheritanceChain(typeName, fromUri);
+
+    const symbols = this.resolver.filterVisibleSymbols(
+      fromUri,
+      this.symbolIndex
+        .findSymbols(typeName)
+        .filter(
+          (sym) => sym.kind === "contract" || sym.kind === "interface" || sym.kind === "library",
+        ),
+    );
+    const sym = symbols.find((candidate) => candidate.filePath === fromUri) ?? symbols[0];
+    const resolved = sym ? this.resolver.resolveContract(sym.name, sym.filePath) : undefined;
+    return resolved ? this.resolver.getInheritanceChainFor(resolved) : [];
   }
 
   private getDottedAccess(

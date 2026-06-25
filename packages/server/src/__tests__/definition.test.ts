@@ -454,6 +454,49 @@ contract UsesAliases {
       assert.equal(previewLoc.range.start.line, 2);
     });
 
+    it("does not resolve dotted definitions through unimported test-only receiver types", () => {
+      const currentUri = "file:///w/src/UsesGhost.sol";
+      const files = {
+        "file:///w/test/Ghost.sol": `pragma solidity ^0.8.24;
+interface Ghost {
+    function ping() external view returns (uint256);
+}
+`,
+        [currentUri]: `pragma solidity ^0.8.24;
+contract UsesGhost {
+    Ghost internal ghost;
+
+    function f() external view {
+        ghost.ping();
+    }
+}`,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: () => null,
+      } as unknown as WorkspaceManager;
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, workspace);
+      const docs: Record<string, TextDocument> = {};
+      for (const [uri, text] of Object.entries(files)) {
+        parser.parse(uri, text);
+        idx.updateFile(uri);
+        docs[uri] = doc(uri, text);
+      }
+      const resolver = new SemanticResolver(parser, workspace, idx);
+      const provider = new DefinitionProvider(idx, parser, workspace, resolver);
+      const lines = files[currentUri].split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("ghost.ping"));
+
+      const def = provider.provideDefinition(docs[currentUri], {
+        line,
+        character: lines[line].indexOf("ping") + 1,
+      });
+
+      assert.equal(def, null);
+    });
+
     it("resolves using-for definitions through imported library aliases", () => {
       const libUri = "file:///w/src/DataLib.sol";
       const currentUri = "file:///w/src/UsesUsingAlias.sol";
