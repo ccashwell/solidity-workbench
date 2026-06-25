@@ -41,6 +41,16 @@ export class FoldingRangesProvider {
       }
     }
 
+    for (const declaration of [
+      ...result.sourceUnit.freeFunctions,
+      ...result.sourceUnit.structs,
+      ...result.sourceUnit.enums,
+      ...result.sourceUnit.events,
+      ...result.sourceUnit.errors,
+    ]) {
+      this.pushRange(ranges, declaration.range);
+    }
+
     this.addCommentFolds(document.getText(), ranges);
 
     return this.dedupe(ranges).sort((a, b) => a.startLine - b.startLine || a.endLine - b.endLine);

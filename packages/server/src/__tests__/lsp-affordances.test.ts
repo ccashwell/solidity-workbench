@@ -101,6 +101,42 @@ contract C {
     );
   });
 
+  it("returns folding ranges for file-level declarations", () => {
+    const text = `pragma solidity ^0.8.24;
+
+struct FileState {
+    uint256 total;
+}
+
+event FileClaimed(
+    address indexed account,
+    uint256 amount
+);
+
+function fileHelper(
+    uint256 amount
+) pure returns (uint256) {
+    return amount + 1;
+}
+
+contract C {}`;
+    const { doc, parser } = setup(text, "file:///w/FileLevel.sol");
+    const ranges = new FoldingRangesProvider(parser).provideFoldingRanges(doc);
+
+    assert.ok(
+      ranges.some((r) => r.startLine === 2 && r.endLine === 4),
+      "expected file-level struct fold",
+    );
+    assert.ok(
+      ranges.some((r) => r.startLine === 6 && r.endLine === 9),
+      "expected file-level event fold",
+    );
+    assert.ok(
+      ranges.some((r) => r.startLine === 11 && r.endLine === 15),
+      "expected file-level function fold",
+    );
+  });
+
   it("turns import strings into document links", () => {
     const text = `pragma solidity ^0.8.0;
 import { Token } from "./Token.sol";
