@@ -114,18 +114,34 @@ function selectVisibleFreeFunction(
   argumentCount: number | undefined,
   resolver?: SemanticResolver,
 ): { fn: FunctionDefinition; filePath: string } | undefined {
-  const local = parser.get(uri)?.sourceUnit.freeFunctions ?? [];
-  const localMatch = selectUsingForFunction(local, functionName, argumentCount);
-  if (localMatch) return { fn: localMatch, filePath: uri };
+  const imported = resolver?.resolveImportedSymbol(functionName, uri);
+  if (imported) {
+    const sourceUnit = parser.get(imported.uri)?.sourceUnit;
+    const importedMatch = selectUsingForFunction(
+      sourceUnit?.freeFunctions ?? [],
+      imported.name,
+      argumentCount,
+    );
+    if (importedMatch) return { fn: importedMatch, filePath: imported.uri };
+  }
+
+  const unqualifiedName = functionName.includes(".")
+    ? (functionName.split(".").at(-1) ?? functionName)
+    : functionName;
+  if (functionName === unqualifiedName) {
+    const local = parser.get(uri)?.sourceUnit.freeFunctions ?? [];
+    const localMatch = selectUsingForFunction(local, unqualifiedName, argumentCount);
+    if (localMatch) return { fn: localMatch, filePath: uri };
+  }
 
   const symbols = symbolIndex
-    .findSymbols(functionName)
+    .findSymbols(unqualifiedName)
     .filter((symbol) => symbol.kind === "function" && !symbol.containerName);
   const visible = resolver ? resolver.filterVisibleSymbols(uri, symbols) : symbols;
   for (const symbol of visible) {
     const sourceUnit = parser.get(symbol.filePath)?.sourceUnit;
     if (!sourceUnit) continue;
-    const fn = selectUsingForFunction(sourceUnit.freeFunctions, functionName, argumentCount);
+    const fn = selectUsingForFunction(sourceUnit.freeFunctions, unqualifiedName, argumentCount);
     if (fn) return { fn, filePath: symbol.filePath };
   }
   return undefined;

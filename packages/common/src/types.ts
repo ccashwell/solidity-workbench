@@ -193,7 +193,7 @@ export interface UsingForDirective {
   libraryName?: string;
   /** Bound member names exposed by `using {f, g as h} for T` */
   functionNames?: string[];
-  /** Mapping from exposed member names back to the declared free function. */
+  /** Mapping from exposed member names back to the written free-function reference. */
   functionAliases?: { functionName: string; memberName: string }[];
   typeName?: string; // undefined means "*"
   /** When true, applies to every contract in the file */

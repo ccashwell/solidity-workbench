@@ -349,10 +349,10 @@ export class SolidityParser {
       if (!entry) continue;
       const match = /^([A-Za-z_$][\w$.]*)(?:\s+as\s+(.+?))?$/.exec(entry);
       if (!match) continue;
-      const functionName = match[1].split(".").pop();
-      if (!functionName) continue;
-      const memberName = match[2]?.trim() || functionName;
-      aliases.push({ functionName, memberName });
+      const functionName = match[1];
+      const functionLeaf = functionName.split(".").pop();
+      if (!functionLeaf) continue;
+      aliases.push({ functionName, memberName: match[2]?.trim() || functionLeaf });
     }
     return aliases;
   }

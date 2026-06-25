@@ -473,6 +473,209 @@ function clear(uint256 self) pure returns (uint256) {
     }
   });
 
+  it("resolves namespace-qualified and import-aliased using-for free functions consistently", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "semantic-consistency-"));
+    try {
+      const files = {
+        "src/DataTypes.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+struct Data {
+    uint256 value;
+}
+`,
+        "src/TrapOps.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import { Data } from "./DataTypes.sol";
+
+function clear(Data storage self, uint256 replacement) returns (uint256 oldValue) {
+    oldValue = replacement;
+    self.value = oldValue;
+}
+`,
+        "src/FreeOps.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import { Data } from "./DataTypes.sol";
+
+/// @notice Clears through the namespace import.
+function clear(Data storage self, uint256 replacement) returns (uint256 oldValue) {
+    oldValue = self.value;
+    self.value = replacement;
+}
+
+/// @notice Resets through an import alias.
+function reset(Data storage self, uint256 replacement) returns (uint256 oldValue) {
+    oldValue = self.value;
+    self.value = replacement;
+}
+`,
+        "src/UsesQualifiedOps.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import { Data } from "./DataTypes.sol";
+import "./TrapOps.sol";
+import * as Ops from "./FreeOps.sol";
+import { reset as importedReset } from "./FreeOps.sol";
+
+using {Ops.clear as wipe} for Data;
+using {importedReset as zap} for Data;
+
+contract UsesQualifiedOps {
+    Data internal data;
+
+    function run(uint256 first, uint256 second) external returns (uint256) {
+        return data.wipe(first) + data.zap(second);
+    }
+}
+`,
+        "test/FreeOps.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+function reset(uint256 value) pure returns (uint256) {
+    return value;
+}
+`,
+      };
+
+      const uris: string[] = [];
+      const parser = new SolidityParser();
+      const docs: Record<string, TextDocument> = {};
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+        docs[name] = TextDocument.create(uri, "solidity", 1, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      graph.rebuildWorkspace();
+
+      const definitionProvider = new DefinitionProvider(symbolIndex, parser, workspace, resolver);
+      const hoverProvider = new HoverProvider(symbolIndex, parser, workspace, resolver);
+      const signatureProvider = new SignatureHelpProvider(symbolIndex, parser, resolver);
+      const completionProvider = new CompletionProvider(symbolIndex, parser, workspace, resolver);
+      const callHierarchyProvider = new CallHierarchyProvider(
+        symbolIndex,
+        workspace,
+        parser,
+        resolver,
+        graph,
+      );
+
+      const usesDoc = docs["src/UsesQualifiedOps.sol"];
+      const usesText = files["src/UsesQualifiedOps.sol"];
+      const wipeLine = usesText.split("\n").findIndex((line) => line.includes("data.wipe"));
+      const wipeColumn = usesText.split("\n")[wipeLine].indexOf("wipe");
+      const zapLine = usesText.split("\n").findIndex((line) => line.includes("data.zap"));
+      const zapColumn = usesText.split("\n")[zapLine].indexOf("zap");
+      const completionPosition = {
+        line: wipeLine,
+        character: usesText.split("\n")[wipeLine].indexOf("data.") + "data.".length,
+      };
+
+      const sourceClear = graph
+        .getNodes()
+        .find((node) => node.name === "clear" && node.filePath.endsWith("src/FreeOps.sol"));
+      const trapClear = graph
+        .getNodes()
+        .find((node) => node.name === "clear" && node.filePath.endsWith("src/TrapOps.sol"));
+      const sourceReset = graph
+        .getNodes()
+        .find((node) => node.name === "reset" && node.filePath.endsWith("src/FreeOps.sol"));
+      const testReset = graph
+        .getNodes()
+        .find((node) => node.name === "reset" && node.filePath.endsWith("test/FreeOps.sol"));
+      const runNode = graph
+        .getNodes()
+        .find((node) => node.name === "run" && node.containerName === "UsesQualifiedOps");
+      assert.ok(sourceClear, "expected namespace-imported clear graph node");
+      assert.ok(trapClear, "expected imported trap clear graph node");
+      assert.ok(sourceReset, "expected import-aliased reset graph node");
+      assert.ok(testReset, "expected same-name test reset graph node");
+      assert.ok(runNode, "expected UsesQualifiedOps.run graph node");
+
+      const graphCalls = graph.getOutgoingEdges(runNode.id, "calls");
+      assert.ok(
+        graphCalls.some((edge) => edge.target === sourceClear.id),
+        "Project Graph should target Ops.clear through data.wipe()",
+      );
+      assert.ok(
+        graphCalls.some((edge) => edge.target === sourceReset.id),
+        "Project Graph should target imported reset through data.zap()",
+      );
+      assert.ok(
+        graphCalls.every((edge) => edge.target !== trapClear.id && edge.target !== testReset.id),
+        "Project Graph must not target imported trap or test same-name trap functions",
+      );
+
+      const wipeDefinition = definitionProvider.provideDefinition(usesDoc, {
+        line: wipeLine,
+        character: wipeColumn + 1,
+      });
+      assert.ok(wipeDefinition, "expected definition for namespace-qualified using alias");
+      const wipeLocation = Array.isArray(wipeDefinition) ? wipeDefinition[0] : wipeDefinition;
+      assert.ok("uri" in wipeLocation, "expected Location definition");
+      assert.equal(wipeLocation.uri, URI.file(path.join(tmpDir, "src/FreeOps.sol")).toString());
+
+      const zapDefinition = definitionProvider.provideDefinition(usesDoc, {
+        line: zapLine,
+        character: zapColumn + 1,
+      });
+      assert.ok(zapDefinition, "expected definition for import-aliased using alias");
+      const zapLocation = Array.isArray(zapDefinition) ? zapDefinition[0] : zapDefinition;
+      assert.ok("uri" in zapLocation, "expected Location definition");
+      assert.equal(zapLocation.uri, URI.file(path.join(tmpDir, "src/FreeOps.sol")).toString());
+
+      const hover = hoverProvider.provideHover(usesDoc, {
+        line: wipeLine,
+        character: wipeColumn + 1,
+      });
+      assert.ok(hover && typeof hover.contents === "object" && "value" in hover.contents);
+      assert.match(hover.contents.value, /Clears through the namespace import/);
+      assert.doesNotMatch(hover.contents.value, /UsesQualifiedOps/);
+
+      const signature = signatureProvider.provideSignatureHelp(usesDoc, {
+        line: zapLine,
+        character: zapColumn + "zap(".length,
+      });
+      assert.ok(signature, "expected signature help for import-aliased using alias");
+      assert.equal(signature.signatures.length, 1);
+      assert.match(signature.signatures[0].label, /reset\(uint256 replacement\)/);
+      assert.doesNotMatch(signature.signatures[0].label, /Data storage self/);
+
+      const completionLabels = completionProvider
+        .provideCompletions(usesDoc, completionPosition)
+        .map((item) => item.label);
+      assert.ok(completionLabels.includes("wipe"), "expected completion for namespace alias");
+      assert.ok(completionLabels.includes("zap"), "expected completion for import alias");
+      assert.equal(completionLabels.includes("clear"), false, "did not expect raw clear name");
+      assert.equal(completionLabels.includes("reset"), false, "did not expect raw reset name");
+
+      const outgoing = await callHierarchyProvider.getOutgoingCalls({
+        name: "run",
+        kind: SymbolKind.Function,
+        uri: usesDoc.uri,
+        range: runNode.range,
+        selectionRange: runNode.selectionRange,
+        detail: "UsesQualifiedOps",
+      });
+      const targets = new Map(outgoing.map((call) => [call.to.name, call.to.uri]));
+      assert.equal(targets.get("clear"), URI.file(path.join(tmpDir, "src/FreeOps.sol")).toString());
+      assert.equal(targets.get("reset"), URI.file(path.join(tmpDir, "src/FreeOps.sol")).toString());
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("resolves imported global using-for operators in graph and call hierarchy", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "semantic-consistency-"));
     try {

@@ -115,6 +115,25 @@ using {add as +} for Wad global;
     ]);
   });
 
+  it("preserves namespace-qualified using function references", () => {
+    const parser = new SolidityParser();
+    const result = parser.parse(
+      "file:///w/Namespace.sol",
+      `pragma solidity 0.8.26;
+import * as Ops from "./Ops.sol";
+struct Data {
+    uint256 value;
+}
+using {Ops.clear as wipe} for Data;
+`,
+    );
+    assert.equal(result.sourceUnit.usingFor.length, 1);
+    assert.deepEqual(result.sourceUnit.usingFor[0].functionNames, ["wipe"]);
+    assert.deepEqual(result.sourceUnit.usingFor[0].functionAliases, [
+      { functionName: "Ops.clear", memberName: "wipe" },
+    ]);
+  });
+
   it("hovers on a globally bound free function call", () => {
     const uri = "file:///w/Owner.sol";
     const { doc, parser, idx } = setup(uri, OWNER_FIXTURE);

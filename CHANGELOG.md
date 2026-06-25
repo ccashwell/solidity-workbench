@@ -52,6 +52,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph and call hierarchy now resolve imported `global`
   `using {fn as +} for T` operator bindings as calls to the bound free
   function instead of dropping the operator edge.
+- Namespace-qualified and import-aliased `using {fn as alias} for T`
+  free-function bindings now preserve the written import reference, so hover,
+  definition, completion, signature help, Project Graph, and call hierarchy do
+  not drift to same-name functions from other reachable files.
 - Project Graph edges now include normalized evidence with source/target labels,
   syntax ranges, resolver, and a short reason for why the edge exists.
 - Project Graph edge evidence in the details panel can now jump directly to the
