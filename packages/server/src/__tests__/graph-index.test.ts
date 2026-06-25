@@ -3061,6 +3061,76 @@ contract TupleLocals {
     }
   });
 
+  it("forces endpoint relationship indexing for selected-node shortest paths", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-path-test-"));
+    try {
+      const files = {
+        "src/A.sol": `pragma solidity ^0.8.24;
+import "./B.sol";
+
+contract A {
+    B internal b;
+
+    function run() external {
+        b.ping();
+    }
+}
+`,
+        "src/B.sol": `pragma solidity ^0.8.24;
+
+contract B {
+    function ping() external {}
+}
+`,
+      };
+      const uris: string[] = [];
+      const parser = new SolidityParser();
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+
+      graph.rebuildWorkspaceDeclarations();
+
+      const run = graph
+        .getNodes()
+        .find((node) => node.name === "run" && node.containerName === "A");
+      const ping = graph
+        .getNodes()
+        .find((node) => node.name === "ping" && node.containerName === "B");
+      assert.ok(run, "expected A.run declaration node");
+      assert.ok(ping, "expected B.ping declaration node");
+      assert.equal(graph.getStats().relationshipFilesIndexed, 0);
+
+      const pathResult = graph.toShortestPath({
+        from: { nodeId: run.id },
+        to: { nodeId: ping.id },
+        direction: "outgoing",
+        edgeKinds: ["calls"],
+        maxDepth: 2,
+      });
+
+      assert.equal(pathResult.found, true);
+      assert.deepEqual(
+        pathResult.edges.map((edge) => [edge.source, edge.target, edge.kind]),
+        [[run.id, ping.id, "calls"]],
+      );
+      assert.equal(graph.getStats().relationshipFilesIndexed, 2);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("supports declaration-only rebuilds with chunked relationship indexing", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-test-"));
     try {

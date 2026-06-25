@@ -78,6 +78,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Selected-node Project Graph callees queries now force-index the selected
   declaration's file before traversing outgoing call edges, avoiding empty
   partial-index results when declarations are warm but relationships are queued.
+- Selected-node Project Graph path queries now force-index both endpoint files
+  before path traversal, so valid paths are not missed in declaration-only or
+  partially indexed graphs.
 
 ### Fixed
 

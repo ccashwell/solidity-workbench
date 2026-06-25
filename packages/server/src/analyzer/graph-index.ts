@@ -815,6 +815,8 @@ export class GraphIndex {
     const from = this.resolveGraphEndpoint(params.from);
     const to = this.resolveGraphEndpoint(params.to);
     if (!from || !to) return { nodes: [], edges: [], fromId: from?.id, toId: to?.id, found: false };
+    this.ensureFileRelationships(from.uri);
+    this.ensureFileRelationships(to.uri);
     if (from.id === to.id) {
       return {
         nodes: [from],
