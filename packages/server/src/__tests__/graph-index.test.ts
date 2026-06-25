@@ -84,6 +84,13 @@ contract Child is Base {
                 name: "inherited",
               }
             : null,
+        getCacheStatus: () => ({
+          available: true,
+          stale: false,
+          cachedFileCount: 3,
+          staleFileCount: 0,
+          lastBuildTimeMs: 123,
+        }),
       } as unknown as SolcBridge);
       graph.rebuildWorkspace();
 
@@ -434,6 +441,17 @@ contract Child is Base {
 
       graph.recordRequestDuration("query", 750);
       graph.recordRequestDuration("search", 25);
+      graph.setSolcBridge({
+        getDeclarationInfoAt: () => null,
+        getCacheStatus: () => ({
+          available: true,
+          stale: true,
+          cachedFileCount: 3,
+          staleFileCount: 1,
+          staleFiles: [path.join(tmpDir, "src/Child.sol")],
+          lastBuildTimeMs: 123,
+        }),
+      } as unknown as SolcBridge);
       const stats = graph.getStats();
       assert.equal(stats.nodesByKind.contract, 3);
       assert.equal(stats.edgesByKind.inherits, 1);
@@ -465,6 +483,9 @@ contract Child is Base {
         stats.performance?.warnings.join("\n") ?? "",
         /Slowest graph request \(query\) took 750ms/,
       );
+      assert.equal(stats.compilerStatus?.available, true);
+      assert.equal(stats.compilerStatus?.stale, true);
+      assert.equal(stats.compilerStatus?.staleFileCount, 1);
 
       const cacheDir = path.join(tmpDir, ".cache", "graph-index");
       graph.writeCache(cacheDir);

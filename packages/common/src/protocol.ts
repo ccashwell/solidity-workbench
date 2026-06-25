@@ -420,6 +420,21 @@ export interface ProjectGraphPerformanceSummary {
   slowestRequest?: ProjectGraphSlowRequest;
 }
 
+export interface ProjectGraphCompilerStatus {
+  /** Whether a successful solc/forge AST cache is currently available. */
+  available: boolean;
+  /** True when at least one cached AST source has changed since the last successful build. */
+  stale: boolean;
+  /** Number of files represented in the cached compiler AST. */
+  cachedFileCount: number;
+  /** Number of cached compiler AST files whose source fingerprint no longer matches disk. */
+  staleFileCount: number;
+  /** Stale file paths, capped by the server to keep stats payloads small. */
+  staleFiles?: string[];
+  /** Wall-clock timestamp from the last successful AST extraction. */
+  lastBuildTimeMs?: number | null;
+}
+
 /** Request a focused graph query over callers, callees, or impact radius. */
 export const QueryProjectGraph = "solidity-workbench/queryProjectGraph";
 
@@ -480,6 +495,7 @@ export interface ProjectGraphStatsResult {
   lastCacheWriteDurationMs?: number | null;
   lastRequestDurationsMs?: Partial<Record<ProjectGraphMeasuredRequestKind, number>>;
   performance?: ProjectGraphPerformanceSummary;
+  compilerStatus?: ProjectGraphCompilerStatus;
   relationshipFilesIndexed?: number;
   relationshipFilesTotal?: number;
   pendingRelationshipFiles?: number;

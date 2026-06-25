@@ -108,6 +108,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph stats now include recent graph request timings and a budgeted
   performance summary, making slow rebuild/query reports diagnosable from the
   stats JSON and CodeGraph-compatible exports.
+- Project Graph stats and the graph panel now report stale compiler AST caches,
+  so compiler-backed graph resolution is clearly marked when sources have
+  changed since the last successful build.
 - Project Graph callers/callees/impact queries now understand exact callable
   signatures such as `Vault.deposit(uint256)`, so overloaded functions resolve
   to the requested target instead of the highest-ranked same-name symbol.

@@ -187,6 +187,13 @@ export interface ProjectGraphRelationshipStatus {
   pending?: number;
 }
 
+export interface ProjectGraphCompilerStatusSummary {
+  state: "unknown" | "ready" | "stale" | "parserOnly";
+  label: string;
+  detail: string;
+  staleFileCount?: number;
+}
+
 export interface ProjectGraphEdgeQualityStatus {
   label: string;
   detail: string;
@@ -275,6 +282,43 @@ export function summarizeProjectGraphRelationshipStatus(
   };
 }
 
+export function summarizeProjectGraphCompilerStatus(
+  stats?: ProjectGraphStatsResult,
+): ProjectGraphCompilerStatusSummary {
+  const status = stats?.compilerStatus;
+  if (!status) {
+    return {
+      state: "unknown",
+      label: "compiler status unknown",
+      detail: "Compiler AST cache status was not included with this graph payload.",
+    };
+  }
+  if (!status.available) {
+    return {
+      state: "parserOnly",
+      label: "parser-only graph",
+      detail:
+        "No compiler AST cache is available yet. Save or build the project to enable compiler-backed resolution.",
+    };
+  }
+  if (status.stale) {
+    const count = status.staleFileCount ?? status.staleFiles?.length ?? 0;
+    return {
+      state: "stale",
+      label: count > 0 ? `compiler stale ${count}` : "compiler stale",
+      detail:
+        "Compiler AST cache is stale for one or more files. Save or rebuild to refresh compiler-backed graph resolution.",
+      staleFileCount: count,
+    };
+  }
+  return {
+    state: "ready",
+    label: "compiler ready",
+    detail: "Compiler AST cache matches the cached source fingerprints.",
+    staleFileCount: 0,
+  };
+}
+
 export function summarizeProjectGraphEdgeQuality(
   stats?: ProjectGraphStatsResult,
 ): ProjectGraphEdgeQualityStatus {
@@ -350,6 +394,7 @@ function projectGraphToJson(graph: ProjectGraphResult, stats?: ProjectGraphStats
     ...graph,
     stats,
     relationshipStatus: summarizeProjectGraphRelationshipStatus(stats),
+    compilerStatus: summarizeProjectGraphCompilerStatus(stats),
     edgeQuality: summarizeProjectGraphEdgeQuality(stats),
     nodes: nodes.map((node) => ({
       id: node.id,
@@ -465,6 +510,8 @@ function projectGraphToCodeGraphJson(
       relationshipFilesTotal: stats?.relationshipFilesTotal,
       pendingRelationshipFiles: stats?.pendingRelationshipFiles,
       relationshipStatus: summarizeProjectGraphRelationshipStatus(stats),
+      compilerStatus: stats?.compilerStatus,
+      compilerStatusSummary: summarizeProjectGraphCompilerStatus(stats),
       edgeQuality: summarizeProjectGraphEdgeQuality(stats),
       performance: stats?.performance,
     },
@@ -1925,24 +1972,58 @@ export class ProjectGraphExporter {
   }
 
   function relationshipStatusText() {
-    if (!graphStats || graphStats.relationshipIndexComplete === undefined) return "";
-    if (graphStats.relationshipIndexComplete) return "edges ready";
-    const indexed = graphStats.relationshipFilesIndexed ?? 0;
-    const total = graphStats.relationshipFilesTotal ?? 0;
-    const pending = graphStats.pendingRelationshipFiles ?? Math.max(0, total - indexed);
-    if (total <= 0) return "indexing edges";
-    return "indexing edges " + indexed + "/" + total + (pending > 0 ? " pending " + pending : "");
+    const parts = [];
+    if (graphStats && graphStats.relationshipIndexComplete !== undefined) {
+      if (graphStats.relationshipIndexComplete) {
+        parts.push("edges ready");
+      } else {
+        const indexed = graphStats.relationshipFilesIndexed ?? 0;
+        const total = graphStats.relationshipFilesTotal ?? 0;
+        const pending = graphStats.pendingRelationshipFiles ?? Math.max(0, total - indexed);
+        parts.push(total <= 0 ? "indexing edges" : "indexing edges " + indexed + "/" + total + (pending > 0 ? " pending " + pending : ""));
+      }
+    }
+    const compiler = compilerStatusText();
+    if (compiler) parts.push(compiler);
+    return parts.join(" · ");
   }
 
   function relationshipStatusDetail() {
-    if (!graphStats || graphStats.relationshipIndexComplete !== false) return "";
-    const indexed = graphStats.relationshipFilesIndexed ?? 0;
-    const total = graphStats.relationshipFilesTotal ?? 0;
-    const pending = graphStats.pendingRelationshipFiles ?? Math.max(0, total - indexed);
-    const progress = total > 0
-      ? indexed + "/" + total + " files indexed" + (pending > 0 ? ", " + pending + " pending" : "")
-      : "relationship indexing in progress";
-    return progress + ". Focused neighborhoods force-index the active file, but full-workspace relationship edges may be partial. Use Rebuild to finish indexing now.";
+    const details = [];
+    if (graphStats && graphStats.relationshipIndexComplete === false) {
+      const indexed = graphStats.relationshipFilesIndexed ?? 0;
+      const total = graphStats.relationshipFilesTotal ?? 0;
+      const pending = graphStats.pendingRelationshipFiles ?? Math.max(0, total - indexed);
+      const progress = total > 0
+        ? indexed + "/" + total + " files indexed" + (pending > 0 ? ", " + pending + " pending" : "")
+        : "relationship indexing in progress";
+      details.push(progress + ". Focused neighborhoods force-index the active file, but full-workspace relationship edges may be partial. Use Rebuild to finish indexing now.");
+    }
+    const compiler = compilerStatusDetail();
+    if (compiler) details.push(compiler);
+    return details.join(" ");
+  }
+
+  function compilerStatusText() {
+    const status = graphStats && graphStats.compilerStatus;
+    if (!status) return "";
+    if (!status.available) return "parser-only";
+    if (status.stale) return "compiler stale" + (status.staleFileCount ? " " + status.staleFileCount : "");
+    return "compiler ready";
+  }
+
+  function compilerStatusDetail() {
+    const status = graphStats && graphStats.compilerStatus;
+    if (!status) return "";
+    if (!status.available) {
+      return "No compiler AST cache is available yet; save or build to enable compiler-backed graph resolution.";
+    }
+    if (!status.stale) return "";
+    const count = status.staleFileCount ?? (Array.isArray(status.staleFiles) ? status.staleFiles.length : 0);
+    const files = Array.isArray(status.staleFiles) && status.staleFiles.length > 0
+      ? " Stale files: " + status.staleFiles.slice(0, 3).map((file) => file.split(/[\\/]/).slice(-2).join("/")).join(", ") + (status.staleFiles.length > 3 ? ", ..." : "") + "."
+      : "";
+    return "Compiler AST cache is stale" + (count > 0 ? " for " + count + " file" + (count === 1 ? "" : "s") : "") + "; save or rebuild to refresh compiler-backed resolution." + files;
   }
 
   function resultDiagnosticsText() {
@@ -2386,12 +2467,11 @@ export class ProjectGraphExporter {
     updateShowMoreButton(nodeState);
     readiness.textContent = relationshipStatusText();
     const partialRelationships = Boolean(graphStats && graphStats.relationshipIndexComplete === false);
-    readiness.classList.toggle("partial", partialRelationships);
-    readiness.title = partialRelationships
-      ? "Relationship edges are still indexing in the background. Focused neighborhoods are available; full-workspace edges may be partial."
-      : "Relationship edges are indexed.";
+    const staleCompiler = Boolean(graphStats && graphStats.compilerStatus && graphStats.compilerStatus.stale);
+    readiness.classList.toggle("partial", partialRelationships || staleCompiler);
+    readiness.title = relationshipStatusDetail() || "Relationship edges are indexed.";
     statusBanner.textContent = relationshipStatusDetail();
-    statusBanner.classList.toggle("visible", partialRelationships);
+    statusBanner.classList.toggle("visible", partialRelationships || staleCompiler);
     const diagnosticsText = resultDiagnosticsText();
     resultBanner.textContent = diagnosticsText;
     resultBanner.classList.toggle("visible", diagnosticsText.length > 0);

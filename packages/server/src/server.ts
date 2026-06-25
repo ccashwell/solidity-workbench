@@ -564,6 +564,7 @@ connection.onDidChangeWatchedFiles(async (params) => {
   }
 
   for (const uri of removedSolFiles) {
+    solcBridge.invalidateFile(URI.parse(uri).fsPath);
     parser.removeFile(uri);
     symbolIndex.removeFile(uri);
     for (const refreshedUri of graphIndex.removeFileAndDependents(uri, false)) {
@@ -573,6 +574,7 @@ connection.onDidChangeWatchedFiles(async (params) => {
   }
 
   for (const uri of touchedSolFiles) {
+    solcBridge.invalidateFile(URI.parse(uri).fsPath);
     await symbolIndex.indexFile(uri);
     semanticResolver.invalidate();
     for (const refreshedUri of graphIndex.updateFileAndDependents(uri, false)) {
@@ -596,6 +598,7 @@ documents.onDidChangeContent(async (change) => {
   const uri = change.document.uri;
   const text = change.document.getText();
 
+  solcBridge.invalidateFile(URI.parse(uri).fsPath);
   parser.parse(uri, text);
   symbolIndex.updateFile(uri);
   semanticResolver.invalidate();

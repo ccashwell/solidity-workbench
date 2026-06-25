@@ -937,6 +937,7 @@ export class GraphIndex {
       lastCacheWriteDurationMs: this.lastCacheWriteDurationMs,
       lastRequestDurationsMs,
       performance: this.performanceSummary(lastRequestDurationsMs),
+      compilerStatus: this.solcBridge?.getCacheStatus(),
       relationshipFilesIndexed: relationshipProgress.indexed,
       relationshipFilesTotal: relationshipProgress.total,
       pendingRelationshipFiles: relationshipProgress.remaining,

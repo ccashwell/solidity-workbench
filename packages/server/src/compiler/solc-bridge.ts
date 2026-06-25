@@ -1,8 +1,9 @@
 import { keccak256 } from "js-sha3";
+import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { LineIndex } from "@solidity-workbench/common";
+import { LineIndex, type ProjectGraphCompilerStatus } from "@solidity-workbench/common";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
 /**
@@ -29,6 +30,9 @@ export class SolcBridge {
   private declarationsById: Map<number, { filePath: string; node: unknown }> = new Map();
   private sourceTexts: Map<string, string | null> = new Map();
   private lineIndexes: Map<string, LineIndex | null> = new Map();
+  private sourceFingerprints: Map<string, string | null> = new Map();
+  private dirtyFiles: Set<string> = new Set();
+  private lastBuildTimeMs: number | null = null;
 
   /**
    * Canonical method identifiers keyed by bare contract name.
@@ -81,6 +85,7 @@ export class SolcBridge {
       this.extractAsts(output);
       this.extractSelectors(output);
       this.extractBuildInfoOutputs(buildInfoPath);
+      this.lastBuildTimeMs = Date.now();
     } catch {
       // Non-JSON output
     } finally {
@@ -111,6 +116,35 @@ export class SolcBridge {
    */
   getAst(filePath: string): SolcSourceUnit | undefined {
     return this.cachedAst.get(filePath);
+  }
+
+  invalidateFile(filePath: string): void {
+    const absolute = this.absolutePath(filePath);
+    this.sourceTexts.delete(absolute);
+    this.lineIndexes.delete(absolute);
+    if (this.cachedAst.has(absolute)) {
+      this.dirtyFiles.add(absolute);
+    }
+  }
+
+  getCacheStatus(): ProjectGraphCompilerStatus {
+    const staleFiles: string[] = [];
+    for (const filePath of this.cachedAst.keys()) {
+      const cachedFingerprint = this.sourceFingerprints.get(filePath) ?? null;
+      const currentFingerprint = this.fileFingerprint(filePath);
+      if (this.dirtyFiles.has(filePath) || currentFingerprint !== cachedFingerprint) {
+        staleFiles.push(filePath);
+      }
+    }
+
+    return {
+      available: this.cachedAst.size > 0,
+      stale: staleFiles.length > 0,
+      cachedFileCount: this.cachedAst.size,
+      staleFileCount: staleFiles.length,
+      staleFiles: staleFiles.slice(0, 25),
+      lastBuildTimeMs: this.lastBuildTimeMs,
+    };
   }
 
   /**
@@ -476,6 +510,8 @@ export class SolcBridge {
     this.declarationsById.clear();
     this.sourceTexts.clear();
     this.lineIndexes.clear();
+    this.sourceFingerprints.clear();
+    this.dirtyFiles.clear();
     this.addAsts(output);
   }
 
@@ -489,8 +525,18 @@ export class SolcBridge {
           filePath: absolute,
           ast: source.ast,
         });
+        this.sourceFingerprints.set(absolute, this.fileFingerprint(absolute));
+        this.dirtyFiles.delete(absolute);
         this.indexDeclarationsById(source.ast, absolute);
       }
+    }
+  }
+
+  private fileFingerprint(filePath: string): string | null {
+    try {
+      return createHash("sha256").update(readFileSync(filePath)).digest("hex");
+    } catch {
+      return null;
     }
   }
 

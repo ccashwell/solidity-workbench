@@ -13,6 +13,7 @@ import {
   expandProjectGraphRenderedNodeLimit,
   normalizeProjectGraphRenderedNodeLimit,
   projectGraphRenderedNodeState,
+  summarizeProjectGraphCompilerStatus,
   projectGraphQueryMissLabel,
   projectGraphQueryTargetKinds,
   projectGraphShowMoreControlState,
@@ -301,6 +302,14 @@ describe("Feature coverage — project graph export", () => {
           slowMs: 2_000,
         },
       },
+      compilerStatus: {
+        available: true,
+        stale: true,
+        cachedFileCount: 2,
+        staleFileCount: 1,
+        staleFiles: ["/workspace/src/Vault.sol"],
+        lastBuildTimeMs: 123,
+      },
       relationshipFilesIndexed: 7,
       relationshipFilesTotal: 10,
       pendingRelationshipFiles: 3,
@@ -318,6 +327,8 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(parsedJson.stats.unresolvedEdgeCount, 1);
     assert.equal(parsedJson.stats.performance.state, "warning");
     assert.equal(parsedJson.stats.performance.slowestRequest.kind, "query");
+    assert.equal(parsedJson.compilerStatus.state, "stale");
+    assert.equal(parsedJson.compilerStatus.staleFileCount, 1);
     assert.equal(parsedJson.relationshipStatus.state, "partial");
     assert.equal(parsedJson.relationshipStatus.pending, 3);
     assert.equal(parsedJson.edgeQuality.unresolved, 1);
@@ -362,6 +373,8 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(parsed.graph.edgeQuality.unresolved, 1);
     assert.equal(parsed.graph.performance.state, "warning");
     assert.equal(parsed.graph.performance.slowestRequest.durationMs, 750);
+    assert.equal(parsed.graph.compilerStatus.stale, true);
+    assert.equal(parsed.graph.compilerStatusSummary.state, "stale");
     assert.match(parsed.graph.relationshipStatus.detail, /full-workspace edges may be partial/);
     assert.equal(parsed.edges[0].resolutionConfidence, "parser");
     assert.equal(parsed.edges[0].unresolvedTarget, undefined);
@@ -721,6 +734,69 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(complete.label, "edges ready");
   });
 
+  it("summarizes project graph compiler cache status", () => {
+    assert.equal(summarizeProjectGraphCompilerStatus().state, "unknown");
+
+    const parserOnly = summarizeProjectGraphCompilerStatus({
+      nodeCount: 0,
+      edgeCount: 0,
+      nodesByKind: {},
+      edgesByKind: {},
+      filesByTier: {},
+      lastRebuildDurationMs: null,
+      lastUpdateDurationMs: null,
+      compilerStatus: {
+        available: false,
+        stale: false,
+        cachedFileCount: 0,
+        staleFileCount: 0,
+        lastBuildTimeMs: null,
+      },
+    });
+    assert.equal(parserOnly.state, "parserOnly");
+    assert.equal(parserOnly.label, "parser-only graph");
+
+    const stale = summarizeProjectGraphCompilerStatus({
+      nodeCount: 0,
+      edgeCount: 0,
+      nodesByKind: {},
+      edgesByKind: {},
+      filesByTier: {},
+      lastRebuildDurationMs: null,
+      lastUpdateDurationMs: null,
+      compilerStatus: {
+        available: true,
+        stale: true,
+        cachedFileCount: 2,
+        staleFileCount: 1,
+        staleFiles: ["/workspace/src/Vault.sol"],
+        lastBuildTimeMs: 123,
+      },
+    });
+    assert.equal(stale.state, "stale");
+    assert.equal(stale.label, "compiler stale 1");
+    assert.equal(stale.staleFileCount, 1);
+
+    const ready = summarizeProjectGraphCompilerStatus({
+      nodeCount: 0,
+      edgeCount: 0,
+      nodesByKind: {},
+      edgesByKind: {},
+      filesByTier: {},
+      lastRebuildDurationMs: null,
+      lastUpdateDurationMs: null,
+      compilerStatus: {
+        available: true,
+        stale: false,
+        cachedFileCount: 2,
+        staleFileCount: 0,
+        lastBuildTimeMs: 123,
+      },
+    });
+    assert.equal(ready.state, "ready");
+    assert.equal(ready.label, "compiler ready");
+  });
+
   it("serializes large graph exports without dropping nodes, edges, or truncation metadata", () => {
     const largeGraph = makeLargeProjectGraph(420);
 
@@ -792,6 +868,10 @@ describe("Feature coverage — live project graph", () => {
     assert.ok(
       stats.lastRequestDurationsMs && typeof stats.lastRequestDurationsMs.rebuild === "number",
       "expected live graph stats to include request timing metadata",
+    );
+    assert.ok(
+      stats.compilerStatus && typeof stats.compilerStatus.available === "boolean",
+      "expected live graph stats to include compiler cache status",
     );
     assert.ok(
       stats.performance &&

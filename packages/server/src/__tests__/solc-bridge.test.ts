@@ -103,6 +103,15 @@ describe("SolcBridge", () => {
       assert.ok(args.includes("--build-info-path"));
       assert.equal(asts.get(sourcePath)?.ast.nodes[0].name, "Use");
       assert.deepEqual(bridge.getCachedMethodIdentifiers("Use"), { "run()": "c0406226" });
+      assert.equal(bridge.getCacheStatus().available, true);
+      assert.equal(bridge.getCacheStatus().stale, false);
+      assert.equal(typeof bridge.getCacheStatus().lastBuildTimeMs, "number");
+      fs.writeFileSync(sourcePath, "contract Use { function changed() external {} }\n", "utf-8");
+      bridge.invalidateFile(sourcePath);
+      const staleStatus = bridge.getCacheStatus();
+      assert.equal(staleStatus.stale, true);
+      assert.equal(staleStatus.staleFileCount, 1);
+      assert.deepEqual(staleStatus.staleFiles, [sourcePath]);
       assert.equal(fs.existsSync(buildInfoPath), false);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
