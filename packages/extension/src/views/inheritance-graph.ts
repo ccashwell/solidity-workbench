@@ -33,10 +33,6 @@ export class InheritanceGraphPanel {
     }
 
     const graph = await this.loadGraph();
-    if (graph.nodes.length === 0) {
-      vscode.window.showInformationMessage("No contracts found in the workspace.");
-      return;
-    }
 
     if (this.panel) {
       this.panel.reveal();
@@ -49,6 +45,8 @@ export class InheritanceGraphPanel {
       );
       this.panel.onDidDispose(() => {
         this.panel = undefined;
+        this.includeTests = false;
+        this.includeDependencies = false;
       });
 
       this.panel.webview.onDidReceiveMessage(async (msg) => {
@@ -358,7 +356,7 @@ export class InheritanceGraphPanel {
       els.stats.textContent = visibleNodes.length + " nodes, " + visibleEdges.length + " edges";
 
       if (visibleNodes.length === 0) {
-        els.canvas.innerHTML = '<div class="empty">No matching contracts.</div>';
+        els.canvas.innerHTML = '<div class="empty">' + emptyMessage() + '</div>';
         return;
       }
 
@@ -506,6 +504,12 @@ export class InheritanceGraphPanel {
       if (level === 0) return "Base contracts";
       if (level === maxLevel) return "Most-derived contracts";
       return "Level " + level;
+    }
+    function emptyMessage() {
+      if (graph.nodes.length === 0) {
+        return "No contracts in the current scope. Include tests or dependencies if the workspace only contains those contracts.";
+      }
+      return "No matching contracts.";
     }
     function trimLabel(value, max) {
       return value.length <= max ? value : value.slice(0, max - 1) + "...";

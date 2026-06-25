@@ -286,6 +286,26 @@ describe("Feature coverage — webview commands", () => {
     assert.match(html, /includeTests: state\.tests/);
     assert.match(html, /includeDependencies: state\.deps/);
   });
+
+  it("keeps inheritance graph scope recoverable when default filters hide every node", () => {
+    type InheritanceGraphPanelInternals = {
+      buildHtml(graph: InheritanceGraphResult): string;
+    };
+    const panel = new InheritanceGraphPanel(
+      {} as ConstructorParameters<typeof InheritanceGraphPanel>[0],
+    ) as unknown as InheritanceGraphPanelInternals;
+
+    const runtime = runInheritanceGraphWebviewScript(panel.buildHtml({ nodes: [], edges: [] }));
+
+    assert.match(runtime.element("canvas").innerHTML, /No contracts in the current scope/);
+    runtime.change("tests", true);
+    assert.deepEqual(runtime.lastPostedMessage(), {
+      type: "reload",
+      includeTests: true,
+      includeDependencies: false,
+    });
+    assert.match(runtime.element("canvas").innerHTML, /Loading graph/);
+  });
 });
 
 describe("Feature coverage — coverage decorations", () => {
@@ -1814,6 +1834,47 @@ function runProjectGraphWebviewScript(html: string): ProjectGraphWebviewRuntime 
       document.getElementById(id).dispatch("click");
     },
     lastState: () => state,
+    lastPostedMessage: () => postedMessages.at(-1),
+  };
+}
+
+function runInheritanceGraphWebviewScript(html: string): ProjectGraphWebviewRuntime {
+  const match = /<script>([\s\S]*?)<\/script>/.exec(html);
+  assert.ok(match, "expected inheritance graph HTML to include an inline script");
+  const document = new FakeDocument(html);
+  const window = new FakeWindow();
+  const postedMessages: RuntimeMessage[] = [];
+
+  const context = vm.createContext({
+    acquireVsCodeApi: () => ({
+      postMessage: (message: RuntimeMessage) => {
+        postedMessages.push(message);
+      },
+    }),
+    document,
+    window,
+    console,
+  });
+
+  vm.runInContext(match[1], context, { timeout: 5_000 });
+
+  return {
+    element: (id) => document.getElementById(id),
+    input(id, value) {
+      const element = document.getElementById(id);
+      element.value = value;
+      element.dispatch("input");
+    },
+    change(id, value) {
+      const element = document.getElementById(id);
+      if (typeof value === "boolean") element.checked = value;
+      else element.value = value;
+      element.dispatch("change");
+    },
+    click(id) {
+      document.getElementById(id).dispatch("click");
+    },
+    lastState: () => undefined,
     lastPostedMessage: () => postedMessages.at(-1),
   };
 }
