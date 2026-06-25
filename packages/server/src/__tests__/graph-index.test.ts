@@ -2486,10 +2486,11 @@ contract UsesUsingOverloads {
     using DataLib for Data;
     Data internal data;
 
-    function run(address account) external {
+    function run(address account, bool flag) external {
         data.apply();
         data.apply(1);
         data.apply(account);
+        data.apply(flag);
     }
 }
 `;
@@ -2547,6 +2548,16 @@ contract UsesUsingOverloads {
         calls.filter((edge) => edge.target === applyAddress.id).length,
         1,
         "expected exactly one address using-for overload edge",
+      );
+      assert.equal(
+        calls.filter((edge) => edge.target === applyUint.id).length,
+        1,
+        "expected unmatched bool extension call not to fall back to the uint256 overload",
+      );
+      assert.equal(
+        calls.filter((edge) => edge.target === applyNoArgs.id).length,
+        1,
+        "expected unmatched bool extension call not to fall back to the receiver-only overload",
       );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });

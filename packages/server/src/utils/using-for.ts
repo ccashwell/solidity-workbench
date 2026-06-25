@@ -208,6 +208,7 @@ function selectUsingForFunction(
     : [];
   if (typedMatches.length === 1) return typedMatches[0];
   if (typedMatches.length > 1) return undefined;
+  if (argumentTypes?.some(Boolean)) return undefined;
   return arityMatches[0] ?? candidates[0];
 }
 
