@@ -1057,6 +1057,19 @@ export class GraphIndex {
     }
     const query = params.query?.trim();
     if (!query) return { missReason: "targetNotFound" };
+
+    const signatureQuery = normalizeCallableSignature(query);
+    if (signatureQuery) {
+      const signatureMatches = this.findCallableSignatureMatches(signatureQuery);
+      const target = signatureMatches.find((node) =>
+        this.isAllowedGraphQueryTarget(params.kind, node, allowedKinds),
+      );
+      if (target) return { target, missReason: "targetNotFound" };
+      return signatureMatches.length > 0
+        ? { missReason: "targetKindMismatch" }
+        : { missReason: "targetNotFound" };
+    }
+
     const target = this.search({
       query,
       kinds: params.targetKinds,
@@ -1073,6 +1086,18 @@ export class GraphIndex {
       : { missReason: "targetNotFound" };
   }
 
+  private findCallableSignatureMatches(
+    signature: NormalizedCallableSignature,
+  ): SolidityGraphNode[] {
+    const matches: SolidityGraphNode[] = [];
+    for (const node of this.nodes.values()) {
+      if (!this.isCallableNodeKind(node.kind)) continue;
+      const candidates = callableSignatureCandidates(node);
+      if (candidates.has(signature.normalized)) matches.push(node);
+    }
+    return this.prioritizeGraphNodes(matches);
+  }
+
   private isAllowedGraphQueryTarget(
     kind: ProjectGraphQueryKind,
     node: SolidityGraphNode,
@@ -1081,6 +1106,16 @@ export class GraphIndex {
     if (allowedKinds && !allowedKinds.has(node.kind)) return false;
     return (
       kind !== "callers" || node.kind !== "stateVariable" || node.metadata?.publicGetter === true
+    );
+  }
+
+  private isCallableNodeKind(kind: ProjectGraphNodeKind): boolean {
+    return (
+      kind === "function" ||
+      kind === "constructor" ||
+      kind === "receive" ||
+      kind === "fallback" ||
+      kind === "modifier"
     );
   }
 
@@ -3627,6 +3662,120 @@ function graphQueryDirection(
 interface GraphSearchScore {
   score: number;
   matchedText: string;
+}
+
+interface NormalizedCallableSignature {
+  name: string;
+  params: string[];
+  normalized: string;
+}
+
+function callableSignatureCandidates(node: ProjectGraphNode): Set<string> {
+  const signature = normalizeCallableSignature(node.detail);
+  if (!signature) return new Set<string>();
+
+  const names = new Set<string>([signature.name, normalizeCallableSignatureName(node.name)]);
+  if (node.containerName) {
+    names.add(`${normalizeCallableSignatureName(node.containerName)}.${signature.name}`);
+    names.add(
+      `${normalizeCallableSignatureName(node.containerName)}.${normalizeCallableSignatureName(node.name)}`,
+    );
+  }
+  names.add(normalizeCallableSignatureName(node.qualifiedName));
+
+  const params = signature.params.join(",");
+  return new Set(
+    Array.from(names)
+      .filter((name) => name.length > 0)
+      .map((name) => `${name}(${params})`),
+  );
+}
+
+function normalizeCallableSignature(value: string | undefined): NormalizedCallableSignature | null {
+  const text = value?.trim();
+  if (!text) return null;
+  const open = text.indexOf("(");
+  if (open < 0) return null;
+  const close = findMatchingParen(text, open);
+  if (close < 0) return null;
+
+  const name = normalizeCallableSignatureName(text.slice(0, open));
+  if (!name) return null;
+  const params = splitTopLevel(text.slice(open + 1, close), ",")
+    .map((param) => normalizeCallableSignatureParam(param))
+    .filter((param) => param.length > 0);
+
+  return {
+    name,
+    params,
+    normalized: `${name}(${params.join(",")})`,
+  };
+}
+
+function normalizeCallableSignatureName(value: string | undefined): string {
+  return (value ?? "").trim().replace(/\s+/g, "").toLowerCase();
+}
+
+function normalizeCallableSignatureParam(value: string): string {
+  const tokens = splitTopLevelWhitespace(value.trim());
+  if (tokens.length === 0) return "";
+
+  const withoutName =
+    tokens.length > 1 && /^[A-Za-z_$][\w$]*$/u.test(tokens[tokens.length - 1])
+      ? tokens.slice(0, -1)
+      : tokens;
+  return withoutName
+    .filter((token) => token !== "memory" && token !== "storage" && token !== "calldata")
+    .join("")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+function splitTopLevelWhitespace(value: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === "(" || ch === "[" || ch === "{") depth++;
+    else if (ch === ")" || ch === "]" || ch === "}") depth = Math.max(0, depth - 1);
+    else if (/\s/u.test(ch) && depth === 0) {
+      if (start < i) out.push(value.slice(start, i));
+      start = i + 1;
+    }
+  }
+  if (start < value.length) out.push(value.slice(start));
+  return out;
+}
+
+function splitTopLevel(value: string, delimiter: string): string[] {
+  const out: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === "(" || ch === "[" || ch === "{") depth++;
+    else if (ch === ")" || ch === "]" || ch === "}") depth = Math.max(0, depth - 1);
+    else if (ch === delimiter && depth === 0) {
+      out.push(value.slice(start, i));
+      start = i + 1;
+    }
+  }
+  out.push(value.slice(start));
+  return out;
+}
+
+function findMatchingParen(value: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
 }
 
 function scoreGraphNodeSearch(node: ProjectGraphNode, query: string): GraphSearchScore | null {

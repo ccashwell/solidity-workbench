@@ -1569,6 +1569,44 @@ contract Caller {
         graph.getOutgoingEdges(receiver.id, "calls").some((edge) => edge.target === pingUint.id),
         "expected target.ping(1) to target the uint256 overload",
       );
+
+      const pingUintCallers = graph.query({
+        kind: "callers",
+        query: "OverloadedTarget.ping(uint256)",
+        targetKinds: ["function"],
+      });
+      assert.equal(pingUintCallers.found, true);
+      assert.equal(pingUintCallers.targetId, pingUint.id);
+      assert.ok(
+        pingUintCallers.edges.some(
+          (edge) => edge.source === receiver.id && edge.target === pingUint.id,
+        ),
+        "expected signature query to target ping(uint256)",
+      );
+
+      const pingNoArgCallers = graph.query({
+        kind: "callers",
+        query: "OverloadedTarget.ping()",
+        targetKinds: ["function"],
+      });
+      assert.equal(pingNoArgCallers.found, true);
+      assert.equal(pingNoArgCallers.targetId, pingNoArgs.id);
+
+      const oneUintCallers = graph.query({
+        kind: "callers",
+        query: "Caller.one(uint256 value)",
+        targetKinds: ["function"],
+      });
+      assert.equal(oneUintCallers.found, true);
+      assert.equal(oneUintCallers.targetId, oneUint.id);
+
+      const missingOverload = graph.query({
+        kind: "callers",
+        query: "OverloadedTarget.ping(address)",
+        targetKinds: ["function"],
+      });
+      assert.equal(missingOverload.found, false);
+      assert.equal(missingOverload.missReason, "targetNotFound");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
