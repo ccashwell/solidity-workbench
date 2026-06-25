@@ -27,6 +27,10 @@ contract Child is Base {}
 import "../lib/Dep.sol";
 contract UsesDep is Dep {}
 `,
+        "src/UsesNonFoundryTest.sol": `pragma solidity ^0.8.24;
+import "../lib/other/Test.sol";
+contract UsesNonFoundryTest is Test {}
+`,
         "src/HarnessBase.sol": `pragma solidity ^0.8.24;
 import "../lib/forge-std/Test.sol";
 contract HarnessBase is Test {}
@@ -41,6 +45,9 @@ contract LegitSource is Test {}
 `,
         "lib/Dep.sol": `pragma solidity ^0.8.24;
 contract Dep {}
+`,
+        "lib/other/Test.sol": `pragma solidity ^0.8.24;
+contract Test {}
 `,
         "lib/forge-std/Test.sol": `pragma solidity ^0.8.24;
 contract Test {}
@@ -140,6 +147,11 @@ contract Base {}
       assert.ok(
         usesDepDefault,
         "project contracts extending hidden non-test dependencies should stay visible",
+      );
+      const usesNonFoundryTest = graph.nodes.find((n) => n.name === "UsesNonFoundryTest");
+      assert.ok(
+        usesNonFoundryTest,
+        "project contracts extending a non-Foundry dependency named Test should stay visible",
       );
       const depBase = graph.nodes.find((n) => n.name === "Dep");
       assert.equal(depBase, undefined, "dependency contracts should be excluded by default");

@@ -155,6 +155,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph and inheritance graph test filtering now distinguish Foundry's
   `Test` base from ordinary project contracts named `Test`, and no longer hide
   source contracts merely because they inherit a filtered dependency.
+- Project Graph and inheritance graph now keep source contracts visible when
+  they inherit from a non-Foundry dependency that happens to declare
+  `contract Test`, including through plain Solidity imports.
 - Added a Project Graph scope diagnostics command that opens a JSON report
   comparing Project Sources, Tests, Dependencies, and combined graph scopes.
 - VSIX verification now lives in a shared `scripts/verify-vsix.mjs` checker,

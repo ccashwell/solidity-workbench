@@ -1014,8 +1014,15 @@ contract LegitSource is Test { function run() external {} }
 import "../lib/Dep.sol";
 contract UsesDep is Dep { function run() external {} }
 `,
+        "src/UsesNonFoundryTest.sol": `pragma solidity ^0.8.24;
+import "../lib/other/Test.sol";
+contract UsesNonFoundryTest is Test { function run() external {} }
+`,
         "lib/Dep.sol": `pragma solidity ^0.8.24;
 contract Dep {}
+`,
+        "lib/other/Test.sol": `pragma solidity ^0.8.24;
+contract Test {}
 `,
         "lib/forge-std/Test.sol": `pragma solidity ^0.8.24;
 contract Test {}
@@ -1055,16 +1062,21 @@ contract ProdTest { function test_Run() external {} }
         defaultGraph.nodes.some((node) => node.name === "UsesDep"),
         "project contracts extending hidden non-test dependencies should stay visible",
       );
+      assert.ok(
+        defaultGraph.nodes.some((node) => node.name === "UsesNonFoundryTest"),
+        "project contracts extending a non-Foundry dependency named Test should stay visible",
+      );
 
       const withTests = graph.toProjectGraph(undefined, undefined, true);
       assert.ok(withTests.nodes.some((node) => node.name === "ProdTest"));
       assert.ok(withTests.nodes.some((node) => node.name === "SourceHarness"));
       assert.ok(withTests.nodes.some((node) => node.name === "test_run"));
 
-      assert.equal(
-        graph.search({ query: "ProdTest" }).matches.length,
-        0,
-        "default graph search should exclude test files",
+      assert.ok(
+        graph
+          .search({ query: "ProdTest" })
+          .matches.every((match) => match.node.name !== "ProdTest"),
+        "default graph search should exclude test-file nodes",
       );
       assert.equal(
         graph.search({ query: "SourceHarness" }).matches.length,

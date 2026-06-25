@@ -181,6 +181,10 @@ export class InheritanceGraphProvider {
     for (const edge of this.graphIndex?.getOutgoingEdges(nodeId, "inherits") ?? []) {
       const baseName = typeof edge.metadata?.baseName === "string" ? edge.metadata.baseName : "";
       const target = allNodes.get(edge.target);
+      if (!target) {
+        if (this.inheritanceEdgeTargetsFoundryTest(baseName, edge.metadata)) return true;
+        continue;
+      }
       if (this.isUnresolvedFoundryTestBase(baseName, target)) return true;
       if (target && this.isFoundryTestGraphNode(target)) return true;
       if (target && this.graphNodeExtendsFoundryTest(target.id, allNodes, visited)) return true;
@@ -213,14 +217,23 @@ export class InheritanceGraphProvider {
 
   private isFoundryTestGraphNode(node: SolidityGraphNode): boolean {
     if (!this.isContractLikeGraphNode(node) || node.name !== "Test") return false;
-    if (node.tier === "tests" || node.tier === "deps") return true;
-    return this.isForgeStdTestPath(node.filePath);
+    return node.tier === "tests" || this.isForgeStdTestPath(node.filePath);
   }
 
   private isFoundryTestResolvedContract(entry: ResolvedContract): boolean {
     if (entry.contract.name !== "Test") return false;
-    if (entry.tier === "tests" || entry.tier === "deps") return true;
-    return this.isForgeStdTestPath(entry.filePath);
+    return entry.tier === "tests" || this.isForgeStdTestPath(entry.filePath);
+  }
+
+  private inheritanceEdgeTargetsFoundryTest(
+    baseName: string,
+    metadata: Record<string, unknown> | undefined,
+  ): boolean {
+    if (baseName.split(".").pop() !== "Test") return false;
+    if (metadata?.resolved !== true) return true;
+    const tier = typeof metadata.resolvedTier === "string" ? metadata.resolvedTier : "";
+    const filePath = typeof metadata.resolvedFilePath === "string" ? metadata.resolvedFilePath : "";
+    return tier === "tests" || this.isForgeStdTestPath(filePath);
   }
 
   private isContractLikeGraphNode(node: SolidityGraphNode): boolean {

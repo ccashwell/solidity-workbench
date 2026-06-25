@@ -1503,7 +1503,11 @@ export class GraphIndex {
       const baseName = typeof edge.metadata?.baseName === "string" ? edge.metadata.baseName : "";
       const baseLeaf = baseName.split(".").pop();
       const target = this.nodes.get(edge.target);
-      if (baseLeaf === "Test" && (!target || this.isFoundryTestBaseNode(target))) return true;
+      if (baseLeaf === "Test" && !target) {
+        if (this.inheritanceEdgeTargetsFoundryTest(edge)) return true;
+        continue;
+      }
+      if (target && baseLeaf === "Test" && this.isFoundryTestBaseNode(target)) return true;
       if (target && this.isFoundryTestBaseNode(target)) return true;
       if (target?.tier === "tests") return true;
       if (target && excluded.has(edge.target) && target.tier !== "deps") return true;
@@ -1513,8 +1517,19 @@ export class GraphIndex {
 
   private isFoundryTestBaseNode(node: SolidityGraphNode): boolean {
     if (!this.isContractLikeNode(node) || node.name !== "Test") return false;
-    if (node.tier === "tests" || node.tier === "deps") return true;
-    return /(?:^|[/\\])forge-std(?:[/\\](?:src[/\\])?)?Test\.sol$/u.test(node.filePath);
+    return node.tier === "tests" || this.isForgeStdTestPath(node.filePath);
+  }
+
+  private inheritanceEdgeTargetsFoundryTest(edge: SolidityGraphEdge): boolean {
+    if (edge.metadata?.resolved !== true) return true;
+    const tier = typeof edge.metadata?.resolvedTier === "string" ? edge.metadata.resolvedTier : "";
+    const filePath =
+      typeof edge.metadata?.resolvedFilePath === "string" ? edge.metadata.resolvedFilePath : "";
+    return tier === "tests" || this.isForgeStdTestPath(filePath);
+  }
+
+  private isForgeStdTestPath(filePath: string): boolean {
+    return /(?:^|[/\\])forge-std(?:[/\\](?:src[/\\])?)?Test\.sol$/u.test(filePath);
   }
 
   private findInnermostNodeAtPosition(
@@ -1756,7 +1771,11 @@ export class GraphIndex {
         kind: "inherits",
         unresolvedTarget: resolved ? undefined : true,
         resolutionConfidence: resolved ? "parser" : "unknown",
-        metadata: { baseName: base.baseName, resolved: Boolean(resolved) },
+        metadata: {
+          baseName: base.baseName,
+          resolved: Boolean(resolved),
+          ...(resolved ? { resolvedFilePath: resolved.filePath, resolvedTier: resolved.tier } : {}),
+        },
       });
     }
     return contractId;

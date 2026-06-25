@@ -175,6 +175,16 @@ export class SemanticResolver {
           return resolved;
         }
       }
+
+      const isPlainImport = !imp.unitAlias && (imp.symbolAliases ?? []).length === 0;
+      if (isPlainImport) {
+        const targetUnit = this.parser.get(targetUri)?.sourceUnit;
+        if (targetUnit?.contracts.some((contract) => contract.name === name)) {
+          const resolved = { name, uri: targetUri };
+          this.importedSymbolCache.set(cacheKey, resolved);
+          return resolved;
+        }
+      }
     }
 
     this.importedSymbolCache.set(cacheKey, undefined);
