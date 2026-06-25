@@ -6,7 +6,7 @@ import type {
   UsingForDirective,
 } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
-import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
+import type { ResolvedContract, SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import { isSameTypeName } from "./receiver-type.js";
 
@@ -74,9 +74,12 @@ export function findUsingForFunction(
     }
 
     if (directive.libraryName) {
-      const libraryEntry =
-        resolver?.resolveContract(directive.libraryName, uri) ??
-        symbolIndex.getContract(directive.libraryName);
+      const libraryEntry = resolveUsingForLibrary(
+        symbolIndex,
+        uri,
+        directive.libraryName,
+        resolver,
+      );
       const library = libraryEntry?.contract;
       const fn = selectUsingForFunction(library?.functions ?? [], memberName, argumentCount);
       if (!library || !fn || fn.parameters.length === 0) continue;
@@ -104,6 +107,25 @@ export function findUsingForFunction(
   }
 
   return null;
+}
+
+function resolveUsingForLibrary(
+  symbolIndex: SymbolIndex,
+  uri: string,
+  libraryName: string,
+  resolver?: SemanticResolver,
+): { uri: string; contract: ContractDefinition } | ResolvedContract | undefined {
+  if (!resolver) return symbolIndex.getContract(libraryName);
+
+  const imported = resolver.resolveImportedSymbol(libraryName, uri);
+  if (imported) return resolver.resolveContract(libraryName, uri);
+
+  const visible = resolver.filterVisibleSymbols(
+    uri,
+    symbolIndex.findSymbols(libraryName).filter((symbol) => symbol.kind === "library"),
+  );
+  const sym = visible.find((candidate) => candidate.filePath === uri) ?? visible[0];
+  return sym ? resolver.resolveContract(sym.name, sym.filePath) : undefined;
 }
 
 function selectVisibleFreeFunction(

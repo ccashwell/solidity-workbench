@@ -491,6 +491,51 @@ library DataLib {
       assert.match(hover.contents.value, /function bump/);
       assert.match(hover.contents.value, /Defined in.*DataLib/);
     });
+
+    it("does not resolve using-for hovers through unimported test-only libraries", () => {
+      const currentUri = "file:///w/src/UsesGhostLib.sol";
+      const current = `pragma solidity ^0.8.24;
+struct Data {
+    uint256 value;
+}
+
+contract UsesGhostLib {
+    using GhostLib for Data;
+    Data internal data;
+
+    function f() external view {
+        data.bump();
+    }
+}`;
+      const files = {
+        "file:///w/test/GhostLib.sol": `pragma solidity ^0.8.24;
+struct Data {
+    uint256 value;
+}
+
+library GhostLib {
+    function bump(Data storage self) internal view returns (uint256) {
+        return self.value + 1;
+    }
+}
+`,
+        [currentUri]: current,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: () => null,
+      } as unknown as WorkspaceManager;
+      const { doc, provider } = setupFiles(currentUri, files, workspace);
+      const lines = current.split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("data.bump"));
+      const hover = provider.provideHover(doc, {
+        line,
+        character: lines[line].indexOf("bump") + 1,
+      });
+
+      assert.equal(hover, null);
+    });
   });
 
   describe("elementary type hover", () => {
