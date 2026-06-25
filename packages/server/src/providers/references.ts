@@ -171,15 +171,7 @@ export class ReferencesProvider {
     }
 
     if (context.includeDeclaration) {
-      const word = getWordAtPosition(document.getText(), position)?.text ?? null;
-      if (word) {
-        for (const sym of this.symbolIndex.findSymbols(word)) {
-          const key = `${sym.filePath}:${sym.nameRange.start.line}:${sym.nameRange.start.character}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          out.push(Location.create(sym.filePath, sym.nameRange));
-        }
-      } else if (refs.declaration) {
+      if (refs.declaration) {
         push(refs.declaration.filePath, refs.declaration.offset, refs.declaration.length);
       }
     }
