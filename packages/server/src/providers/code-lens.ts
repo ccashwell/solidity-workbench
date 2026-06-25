@@ -1,6 +1,7 @@
 import type { CodeLens, Range } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { ParameterDeclaration } from "@solidity-workbench/common";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
@@ -45,6 +46,7 @@ export class CodeLensProvider {
     private symbolIndex: SymbolIndex,
     private parser: SolidityParser,
     private workspace: WorkspaceManager,
+    private resolver?: SemanticResolver,
   ) {
     // Try to load gas snapshots on construction
     this.loadGasSnapshots();
@@ -371,9 +373,7 @@ export class CodeLensProvider {
     range: Range,
     documentUri: string,
   ): CodeLens | null {
-    const totalOccurrences = this.symbolIndex.referenceCount(symbolName);
-    const declarationCount = this.symbolIndex.findSymbols(symbolName).length;
-    const usageCount = Math.max(0, totalOccurrences - declarationCount);
+    const usageCount = this.referenceUsageCount(symbolName, documentUri);
 
     if (usageCount === 0) return null;
 
@@ -385,6 +385,33 @@ export class CodeLensProvider {
         arguments: [documentUri, range.start],
       },
     };
+  }
+
+  private referenceUsageCount(symbolName: string, declarationUri: string): number {
+    if (!this.resolver) {
+      const totalOccurrences = this.symbolIndex.referenceCount(symbolName);
+      const declarationCount = this.symbolIndex.findSymbols(symbolName).length;
+      return Math.max(0, totalOccurrences - declarationCount);
+    }
+
+    const reachableUris = this.urisThatCanReach(declarationUri);
+    const totalOccurrences = this.symbolIndex
+      .findReferences(symbolName)
+      .filter((ref) => reachableUris.has(ref.uri)).length;
+    const declarationCount = this.symbolIndex
+      .findSymbols(symbolName)
+      .filter((symbol) => reachableUris.has(symbol.filePath)).length;
+    return Math.max(0, totalOccurrences - declarationCount);
+  }
+
+  private urisThatCanReach(targetUri: string): Set<string> {
+    const uris = new Set<string>([targetUri]);
+    for (const uri of this.workspace.getAllFileUris()) {
+      if (this.resolver?.collectReachableUris(uri).has(targetUri)) {
+        uris.add(uri);
+      }
+    }
+    return uris;
   }
 
   private isTestFunction(name: string): boolean {

@@ -5,13 +5,18 @@ import { URI } from "vscode-uri";
 import { keccak256 } from "js-sha3";
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
+import { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { CodeLensProvider } from "../providers/code-lens.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
-function makeFakeWorkspace() {
+function makeFakeWorkspace(
+  uris: string[] = [],
+  resolveImport: (importPath: string, from: string) => string | null = () => null,
+) {
   return {
-    getAllFileUris: () => [],
+    getAllFileUris: () => uris,
     uriToPath: (uri: string) => URI.parse(uri).fsPath,
+    resolveImport,
     root: "/w",
   } as unknown as WorkspaceManager;
 }
@@ -24,6 +29,29 @@ function setup(uri: string, text: string) {
   return {
     doc: TextDocument.create(uri, "solidity", 1, text),
     provider: new CodeLensProvider(idx, parser, makeFakeWorkspace()),
+  };
+}
+
+function setupMulti(
+  files: Record<string, string>,
+  options: {
+    resolveImport?: (importPath: string, from: string) => string | null;
+    useResolver?: boolean;
+  } = {},
+) {
+  const parser = new SolidityParser();
+  const workspace = makeFakeWorkspace(Object.keys(files), options.resolveImport);
+  const idx = new SymbolIndex(parser, workspace);
+  const docs: Record<string, TextDocument> = {};
+  for (const [uri, text] of Object.entries(files)) {
+    parser.parse(uri, text);
+    idx.updateFile(uri);
+    docs[uri] = TextDocument.create(uri, "solidity", 1, text);
+  }
+  const resolver = options.useResolver ? new SemanticResolver(parser, workspace, idx) : undefined;
+  return {
+    docs,
+    provider: new CodeLensProvider(idx, parser, workspace, resolver),
   };
 }
 
@@ -96,6 +124,49 @@ contract User2 { Foo public b; }`;
         refLens,
         undefined,
         `orphan symbols should not produce a references lens; got ${JSON.stringify(refLens)}`,
+      );
+    });
+
+    it("counts references only from files that can reach the declaration", () => {
+      const helperUri = "file:///w/src/Helpers.sol";
+      const useUri = "file:///w/src/Use.sol";
+      const testHelperUri = "file:///w/test/Helpers.sol";
+      const files = {
+        [helperUri]: `function helper() pure returns (uint256) {
+    return 1;
+}`,
+        [useUri]: `import "./Helpers.sol";
+contract Use {
+    function run() external pure returns (uint256) {
+        return helper();
+    }
+}`,
+        [testHelperUri]: `function helper() pure returns (uint256) {
+    return 2;
+}`,
+      };
+      const { docs, provider } = setupMulti(files, {
+        useResolver: true,
+        resolveImport: (importPath, from) =>
+          importPath === "./Helpers.sol" && from.endsWith("/src/Use.sol")
+            ? URI.parse(helperUri).fsPath
+            : null,
+      });
+
+      const lenses = provider.provideCodeLenses(docs[helperUri]);
+      const refLens = lenses.find(
+        (l) =>
+          l.command?.command === "solidity-workbench.findReferencesAt" && l.range.start.line === 0,
+      );
+
+      assert.ok(
+        refLens,
+        `expected reference lens for source helper; got ${JSON.stringify(lenses)}`,
+      );
+      assert.equal(
+        refLens.command?.title,
+        "1 reference",
+        "unrelated same-name test helper must not inflate the source helper count",
       );
     });
   });
