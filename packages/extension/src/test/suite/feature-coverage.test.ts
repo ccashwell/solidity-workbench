@@ -6,6 +6,9 @@ import * as vscode from "vscode";
 import type { ProjectGraphResult, ProjectGraphStatsResult } from "@solidity-workbench/common";
 import {
   ProjectGraphExporter,
+  projectGraphQueryMissLabel,
+  projectGraphQueryTargetKinds,
+  PROJECT_GRAPH_CALLABLE_NODE_KINDS,
   serializeProjectGraphForExport,
   summarizeProjectGraphEdgeQuality,
   summarizeProjectGraphRelationshipStatus,
@@ -384,16 +387,22 @@ describe("Feature coverage — project graph export", () => {
     assert.match(html, /message\.clearQuery === true/);
   });
 
-  it("constrains text-driven graph call queries to callable targets", () => {
-    const source = fs.readFileSync(
-      path.join(__dirname, "../../../src/views/project-graph.ts"),
-      "utf8",
+  it("constrains graph call queries to callable targets", () => {
+    assert.deepEqual(PROJECT_GRAPH_CALLABLE_NODE_KINDS, [
+      "function",
+      "constructor",
+      "receive",
+      "fallback",
+      "modifier",
+    ]);
+    assert.deepEqual(projectGraphQueryTargetKinds("callers"), PROJECT_GRAPH_CALLABLE_NODE_KINDS);
+    assert.deepEqual(projectGraphQueryTargetKinds("callees"), PROJECT_GRAPH_CALLABLE_NODE_KINDS);
+    assert.equal(projectGraphQueryTargetKinds("impact"), undefined);
+    assert.equal(
+      projectGraphQueryMissLabel("callers"),
+      "No callable project graph query target found.",
     );
-
-    assert.match(source, /PROJECT_GRAPH_CALLABLE_NODE_KINDS/);
-    assert.match(source, /targetKinds:\s*this\.projectGraphQueryTargetKinds\(kind\)/);
-    assert.match(source, /projectGraphQueryTargetKinds\(pickedKind\.queryKind\)/);
-    assert.match(source, /No callable project graph query target found\./);
+    assert.equal(projectGraphQueryMissLabel("impact"), "No project graph query target found.");
   });
 
   it("summarizes project graph edge quality", () => {

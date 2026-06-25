@@ -53,13 +53,25 @@ const RESOLUTION_CONFIDENCE_VALUES: ProjectGraphResolutionConfidence[] = [
   "unknown",
 ];
 
-const PROJECT_GRAPH_CALLABLE_NODE_KINDS: ProjectGraphNodeKind[] = [
+export const PROJECT_GRAPH_CALLABLE_NODE_KINDS: ProjectGraphNodeKind[] = [
   "function",
   "constructor",
   "receive",
   "fallback",
   "modifier",
 ];
+
+export function projectGraphQueryTargetKinds(
+  kind: ProjectGraphQueryKind,
+): ProjectGraphNodeKind[] | undefined {
+  return kind === "impact" ? undefined : PROJECT_GRAPH_CALLABLE_NODE_KINDS;
+}
+
+export function projectGraphQueryMissLabel(kind: ProjectGraphQueryKind): string {
+  return kind === "impact"
+    ? "No project graph query target found."
+    : "No callable project graph query target found.";
+}
 
 interface ExportGraphNode {
   id: string;
@@ -580,11 +592,11 @@ export class ProjectGraphExporter {
             kind,
             target,
             query: target ? undefined : query,
-            targetKinds: this.projectGraphQueryTargetKinds(kind),
+            targetKinds: projectGraphQueryTargetKinds(kind),
             maxNodes: 240,
           });
           if (!result.found) {
-            await this.postProjectGraphStatus(this.projectGraphQueryMissLabel(kind));
+            await this.postProjectGraphStatus(projectGraphQueryMissLabel(kind));
             return;
           }
           const stats = await this.getProjectGraphStats();
@@ -786,12 +798,12 @@ export class ProjectGraphExporter {
           ? { uri: focused.uri.toString(), position: focused.position }
           : undefined,
       query: textQuery,
-      targetKinds: this.projectGraphQueryTargetKinds(pickedKind.queryKind),
+      targetKinds: projectGraphQueryTargetKinds(pickedKind.queryKind),
       maxNodes: 120,
     });
 
     if (!result.found) {
-      vscode.window.showInformationMessage(this.projectGraphQueryMissLabel(pickedKind.queryKind));
+      vscode.window.showInformationMessage(projectGraphQueryMissLabel(pickedKind.queryKind));
       return;
     }
 
@@ -931,18 +943,6 @@ export class ProjectGraphExporter {
 
   private parseProjectGraphQueryKind(value: string): ProjectGraphQueryKind | undefined {
     return value === "callers" || value === "callees" || value === "impact" ? value : undefined;
-  }
-
-  private projectGraphQueryTargetKinds(
-    kind: ProjectGraphQueryKind,
-  ): ProjectGraphNodeKind[] | undefined {
-    return kind === "impact" ? undefined : PROJECT_GRAPH_CALLABLE_NODE_KINDS;
-  }
-
-  private projectGraphQueryMissLabel(kind: ProjectGraphQueryKind): string {
-    return kind === "impact"
-      ? "No project graph query target found."
-      : "No callable project graph query target found.";
   }
 
   private graphQueryLabel(kind: ProjectGraphQueryKind): string {
