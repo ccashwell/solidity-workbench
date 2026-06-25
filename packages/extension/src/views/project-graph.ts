@@ -725,9 +725,7 @@ export class ProjectGraphExporter {
     }
 
     const includeTestsFlag = projectGraphIncludeTestsFlag(options);
-    if (includeTestsFlag !== undefined) {
-      this.includeProjectGraphTests = includeTestsFlag;
-    }
+    this.includeProjectGraphTests = includeTestsFlag === true;
 
     const focused = this.activeSolidityPosition();
     let graph = focused
@@ -2013,7 +2011,7 @@ export class ProjectGraphExporter {
   let scope = typeof persisted.scope === "string" && scopeValues.has(persisted.scope) ? persisted.scope : (activeId ? "neighbors" : "all");
   let nodeKind = typeof persisted.nodeKind === "string" && nodeKindValues.has(persisted.nodeKind) ? persisted.nodeKind : "all";
   let quality = typeof persisted.quality === "string" && qualityValues.has(persisted.quality) ? persisted.quality : "all";
-  let includeTests = typeof persisted.includeTests === "boolean" ? persisted.includeTests : Boolean(payload.includeTests);
+  let includeTests = Boolean(payload.includeTests);
   let zoom = typeof persisted.zoom === "number" ? Math.max(0.45, Math.min(1.8, persisted.zoom)) : 1;
   let pathMode = Boolean(persisted.pathMode);
   const defaultRenderedNodeLimit = ${PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT};
@@ -2851,7 +2849,6 @@ export class ProjectGraphExporter {
       quality,
       zoom,
       pathMode,
-      includeTests,
       renderedNodeLimit,
       visibleEdges: Array.from(visibleEdges),
     });

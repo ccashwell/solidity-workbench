@@ -512,7 +512,7 @@ export class GraphIndex {
     }
 
     for (const err of result.sourceUnit.errors) {
-      this.indexDeclarable(uri, fileNode.id, "error", err.name, err.range, err.nameRange);
+      this.indexError(uri, fileNode.id, undefined, err);
     }
 
     for (const constant of result.sourceUnit.fileConstants) {
@@ -1812,6 +1812,7 @@ export class GraphIndex {
   ): void {
     const node = this.memberNode(uri, parentId, "event", event.name, event.range, event.nameRange, {
       containerName,
+      detail: this.eventSignature(event),
     });
     this.addNode(node);
     this.addEdge({ source: parentId, target: node.id, kind: "contains" });
@@ -1829,11 +1830,12 @@ export class GraphIndex {
   private indexError(
     uri: string,
     parentId: string,
-    containerName: string,
+    containerName: string | undefined,
     error: ErrorDefinition,
   ): void {
     const node = this.memberNode(uri, parentId, "error", error.name, error.range, error.nameRange, {
       containerName,
+      detail: this.errorSignature(error),
     });
     this.addNode(node);
     this.addEdge({ source: parentId, target: node.id, kind: "contains" });
@@ -3817,6 +3819,26 @@ export class GraphIndex {
       .join(", ");
     const returns = fn.returnParameters.map((p) => p.typeName).join(", ");
     return `${fn.name ?? fn.kind}(${params})${returns ? ` returns (${returns})` : ""}`;
+  }
+
+  private eventSignature(event: EventDefinition): string {
+    const params = event.parameters.map((param) => this.parameterSignature(param)).join(", ");
+    return `${event.name}(${params})${event.isAnonymous ? " anonymous" : ""}`;
+  }
+
+  private errorSignature(error: ErrorDefinition): string {
+    const params = error.parameters.map((param) => this.parameterSignature(param)).join(", ");
+    return `${error.name}(${params})`;
+  }
+
+  private parameterSignature(param: {
+    typeName: string;
+    name?: string;
+    indexed?: boolean;
+  }): string {
+    return [param.typeName, param.indexed ? "indexed" : "", param.name ?? ""]
+      .filter(Boolean)
+      .join(" ");
   }
 
   private functionBody(text: string, range: SourceRange): FunctionBody | null {

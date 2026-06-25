@@ -970,7 +970,11 @@ describe("Feature coverage — project graph export", () => {
 
     runtime.change("nodeKind", "all");
     runtime.change("includeTests", true);
-    assert.equal(runtime.lastState()?.includeTests, true);
+    assert.equal(
+      runtime.lastState()?.includeTests,
+      undefined,
+      "includeTests should be controlled by the live checkbox or command flag, not persisted state",
+    );
     assert.deepEqual(runtime.lastPostedMessage(), { type: "loadCursor", includeTests: true });
 
     runtime.input("search", "helper");

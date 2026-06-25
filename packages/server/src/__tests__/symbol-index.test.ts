@@ -114,6 +114,28 @@ error MyError(uint256 x);
       assert.equal(syms.length, 1);
       assert.equal(syms[0].kind, "error");
       assert.equal(syms[0].containerName, undefined);
+      assert.equal(syms[0].detail, "(uint256 x)");
+    });
+
+    it("indexes file-level events with signature detail", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      indexText(
+        parser,
+        idx,
+        "file:///w/events.sol",
+        `
+pragma solidity ^0.8.24;
+
+event InventoryClaimed(address indexed account, uint256 amount);
+`,
+      );
+
+      const syms = idx.findSymbols("InventoryClaimed");
+      assert.equal(syms.length, 1);
+      assert.equal(syms[0].kind, "event");
+      assert.equal(syms[0].containerName, undefined);
+      assert.equal(syms[0].detail, "(address indexed account, uint256 amount)");
     });
 
     it("indexes struct and enum members with their container type name", () => {

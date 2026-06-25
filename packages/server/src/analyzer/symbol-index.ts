@@ -282,6 +282,7 @@ export class SymbolIndex {
           range: event.range,
           nameRange: event.nameRange,
           containerName: contract.name,
+          detail: this.buildEventSignature(event),
           natspec: event.natspec,
         });
       }
@@ -295,6 +296,7 @@ export class SymbolIndex {
           range: error.range,
           nameRange: error.nameRange,
           containerName: contract.name,
+          detail: this.buildErrorSignature(error),
           natspec: error.natspec,
         });
       }
@@ -368,6 +370,7 @@ export class SymbolIndex {
         filePath: uri,
         range: event.range,
         nameRange: event.nameRange,
+        detail: this.buildEventSignature(event),
         natspec: event.natspec,
       });
     }
@@ -380,6 +383,7 @@ export class SymbolIndex {
         filePath: uri,
         range: err.range,
         nameRange: err.nameRange,
+        detail: this.buildErrorSignature(err),
         natspec: err.natspec,
       });
     }
@@ -781,6 +785,31 @@ export class SymbolIndex {
     const mut = func.mutability !== "nonpayable" ? ` ${func.mutability}` : "";
     const ret = returns ? ` returns (${returns})` : "";
     return `(${params})${vis}${mut}${ret}`;
+  }
+
+  private buildEventSignature(event: {
+    parameters: { typeName: string; name?: string; indexed?: boolean }[];
+    isAnonymous?: boolean;
+  }): string {
+    const params = event.parameters.map((p) => this.buildParameterSignature(p)).join(", ");
+    return `(${params})${event.isAnonymous ? " anonymous" : ""}`;
+  }
+
+  private buildErrorSignature(error: {
+    parameters: { typeName: string; name?: string; indexed?: boolean }[];
+  }): string {
+    const params = error.parameters.map((p) => this.buildParameterSignature(p)).join(", ");
+    return `(${params})`;
+  }
+
+  private buildParameterSignature(param: {
+    typeName: string;
+    name?: string;
+    indexed?: boolean;
+  }): string {
+    return [param.typeName, param.indexed ? "indexed" : "", param.name ?? ""]
+      .filter(Boolean)
+      .join(" ");
   }
 
   private toLSPSymbolKind(kind: SymbolKind): LSPSymbolKind {

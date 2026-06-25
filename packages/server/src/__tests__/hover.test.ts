@@ -189,6 +189,41 @@ library InventoryLib {
       assert.doesNotMatch(value, /\{redeemClaims\}/);
     });
 
+    it("links braced NatSpec references to imported contracts and local functions", () => {
+      const currentUri = "file:///w/src/InventoryLib.sol";
+      const typesUri = "file:///w/src/Types.sol";
+      const files = {
+        [typesUri]: `pragma solidity ^0.8.24;
+contract PoolVault {}
+`,
+        [currentUri]: `pragma solidity ^0.8.24;
+import "./Types.sol";
+
+/// @notice Accounting helper for {PoolVault}; claims are redeemed via {redeemClaims}.
+library InventoryLib {
+    function redeemClaims() internal {}
+}
+`,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, fromPath: string) =>
+          importPath === "./Types.sol" && fromPath.endsWith("/src/InventoryLib.sol")
+            ? "/w/src/Types.sol"
+            : null,
+      } as unknown as WorkspaceManager;
+      const { doc, provider } = setupFiles(currentUri, files, workspace);
+
+      const h = provider.provideHover(doc, { line: 4, character: 9 });
+      assert.ok(h, "expected hover on library declaration");
+      const value = hoverValue(h);
+      assert.match(value, /\[PoolVault\]\(file:\/\/\/w\/src\/Types\.sol#L2,10\)/);
+      assert.match(value, /\[redeemClaims\]\(file:\/\/\/w\/src\/InventoryLib\.sol#L6,14\)/);
+      assert.doesNotMatch(value, /\{PoolVault\}/);
+      assert.doesNotMatch(value, /\{redeemClaims\}/);
+    });
+
     it("shows `contract C` for a contract-name hover", () => {
       const { doc, provider } = setup(
         "file:///w/D.sol",

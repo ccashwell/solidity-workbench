@@ -691,6 +691,7 @@ event FileClaimed(address indexed account, uint256 amount);
         .find((node) => node.kind === "event" && node.name === "FileClaimed");
       assert.ok(event, "expected file-level event node");
       assert.equal(event.containerName, undefined);
+      assert.equal(event.detail, "FileClaimed(address indexed account, uint256 amount)");
       assert.ok(
         graph.getOutgoingEdges(`file:${uri}`, "contains").some((edge) => edge.target === event.id),
         "expected file node to contain the file-level event",

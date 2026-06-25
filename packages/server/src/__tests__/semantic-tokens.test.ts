@@ -443,6 +443,39 @@ using {
       expectKeyword(4, "for");
       expectKeyword(4, "global");
     });
+
+    it("tokenizes keywords in contract-scoped multi-line using lists", () => {
+      const code = `type Inventory is uint256;
+library InventoryLib {
+    using {
+        vaultOf,
+        setVault,
+        sharesOf
+    } for Inventory global;
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+      const lines = code.split("\n");
+
+      for (const [lineNo, word] of [
+        [2, "using"],
+        [6, "for"],
+        [6, "global"],
+      ] as const) {
+        const char = lines[lineNo].indexOf(word);
+        assert.notEqual(char, -1, `test fixture missing ${word}`);
+        assert.ok(
+          tokens.some(
+            (token) =>
+              token.line === lineNo &&
+              token.char === char &&
+              token.length === word.length &&
+              token.type === "keyword",
+          ),
+          `expected ${word} to be tokenized as a keyword; got ${JSON.stringify(tokens)}`,
+        );
+      }
+    });
   });
 
   describe("range request", () => {
