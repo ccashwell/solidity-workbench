@@ -31,6 +31,43 @@ function makeFakeDocuments(docs: TextDocument[]): TextDocuments<TextDocument> {
 type ReferencesSolcBridge = Parameters<ReferencesProvider["setSolcBridge"]>[0];
 
 describe("ReferencesProvider", () => {
+  it("finds references for file-level event declarations", () => {
+    const uri = "file:///w/events.sol";
+    const text = `pragma solidity ^0.8.24;
+
+event FileClaimed(address indexed account, uint256 amount);
+
+contract C {
+    function run() external {
+        emit FileClaimed(address(0), 1);
+    }
+}`;
+    const parser = new SolidityParser();
+    const workspace = makeFakeWorkspace([uri]);
+    const index = new SymbolIndex(parser, workspace);
+    parser.parse(uri, text);
+    index.updateFile(uri);
+
+    const doc = TextDocument.create(uri, "solidity", 1, text);
+    const provider = new ReferencesProvider(index, workspace, parser, makeFakeDocuments([doc]));
+    const declarationLine = text.split("\n").findIndex((line) => line.startsWith("event "));
+    const refs = provider.provideReferences(
+      doc,
+      { line: declarationLine, character: "event ".length + 2 },
+      { includeDeclaration: true },
+    );
+
+    assert.equal(refs.length, 2);
+    assert.ok(
+      refs.some((ref) => ref.range.start.line === declarationLine),
+      "expected file-level event declaration reference",
+    );
+    assert.ok(
+      refs.some((ref) => ref.range.start.line === 6),
+      "expected file-level event emit reference",
+    );
+  });
+
   it("uses the solc declaration for includeDeclaration without merging same-name symbols", () => {
     const uri = "file:///w/Overloads.sol";
     const text =

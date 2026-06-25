@@ -591,6 +591,59 @@ contract C {
         .findIndex((l) => l.includes("struct MigratorParameters"));
       assert.equal(loc.range.start.line, structLine);
     });
+
+    it("jumps to a file-level event declaration from an emit site", () => {
+      const { docs, provider } = setup({
+        "file:///w/events.sol": `pragma solidity ^0.8.24;
+
+event FileClaimed(address indexed account, uint256 amount);
+
+contract C {
+    function run() external {
+        emit FileClaimed(address(0), 1);
+    }
+}`,
+      });
+      const document = docs["file:///w/events.sol"];
+      const lines = document.getText().split("\n");
+      const emitLine = lines.findIndex((line) => line.includes("emit FileClaimed"));
+      const def = provider.provideDefinition(document, {
+        line: emitLine,
+        character: lines[emitLine].indexOf("FileClaimed") + 2,
+      });
+
+      assert.ok(def, "expected definition for file-level event emit");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc);
+      assert.equal(loc.uri, "file:///w/events.sol");
+      assert.equal(loc.range.start.line, 2);
+    });
+
+    it("jumps from braced NatSpec refs to visible AST symbols", () => {
+      const { docs, provider } = setup({
+        "file:///w/InventoryLib.sol": `pragma solidity ^0.8.24;
+
+/// Reusable inventory accounting.
+///
+/// Claims are redeemed via {redeemClaims}.
+library InventoryLib {
+    function redeemClaims() internal {}
+}`,
+      });
+      const document = docs["file:///w/InventoryLib.sol"];
+      const lines = document.getText().split("\n");
+      const commentLine = lines.findIndex((line) => line.includes("{redeemClaims}"));
+      const def = provider.provideDefinition(document, {
+        line: commentLine,
+        character: lines[commentLine].indexOf("redeemClaims") + 2,
+      });
+
+      assert.ok(def, "expected definition for braced NatSpec reference");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc);
+      assert.equal(loc.uri, "file:///w/InventoryLib.sol");
+      assert.equal(loc.range.start.line, 6);
+    });
   });
 
   describe("go-to-type-definition", () => {

@@ -54,6 +54,9 @@ export class DefinitionProvider {
     const word = getWordAtPosition(text, position)?.text ?? null;
     if (!word) return null;
 
+    const natspecReference = this.resolveNatspecReferenceAtPosition(document.uri, text, position);
+    if (natspecReference) return natspecReference;
+
     // Check if this is an import path — navigate to the file
     const importTarget = this.resolveImportAtPosition(text, position);
     if (importTarget) {
@@ -279,6 +282,101 @@ export class DefinitionProvider {
 
   private filterVisibleSymbols<T extends { filePath: string }>(fromUri: string, symbols: T[]): T[] {
     return this.resolver ? this.resolver.filterVisibleSymbols(fromUri, symbols) : symbols;
+  }
+
+  private resolveNatspecReferenceAtPosition(
+    documentUri: string,
+    text: string,
+    position: Position,
+  ): Definition | null {
+    if (!this.isInsideNatspecComment(text, position)) return null;
+    const line = text.split("\n")[position.line] ?? "";
+    for (const match of line.matchAll(/\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\}/g)) {
+      const start = match.index ?? 0;
+      const end = start + match[0].length;
+      if (position.character < start || position.character > end) continue;
+
+      const target = this.resolveNatspecReference(documentUri, match[1]);
+      return target ? Location.create(this.symbolUri(target), target.nameRange) : null;
+    }
+    return null;
+  }
+
+  private isInsideNatspecComment(text: string, position: Position): boolean {
+    const lines = text.split("\n");
+    const line = lines[position.line] ?? "";
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith("///")) return true;
+
+    let openLine = -1;
+    for (let i = position.line; i >= 0; i--) {
+      const candidate = lines[i] ?? "";
+      const open = candidate.indexOf("/**");
+      const close = candidate.indexOf("*/");
+      if (close >= 0 && (i < position.line || close < position.character)) return false;
+      if (open >= 0) {
+        openLine = i;
+        break;
+      }
+    }
+    if (openLine < 0) return false;
+
+    for (let i = openLine; i <= position.line; i++) {
+      const close = (lines[i] ?? "").indexOf("*/");
+      if (close >= 0 && (i < position.line || close < position.character)) return false;
+    }
+    return true;
+  }
+
+  private resolveNatspecReference(documentUri: string, ref: string): SolSymbol | undefined {
+    const parts = ref.split(".");
+    const symbolName = parts[parts.length - 1];
+    const containerName = parts.length > 1 ? parts.slice(0, -1).join(".") : undefined;
+
+    let candidates = this.symbolIndex.findSymbols(symbolName);
+    candidates = this.filterVisibleSymbols(documentUri, candidates).filter((candidate) =>
+      this.isNatspecReferenceTarget(candidate),
+    );
+    if (candidates.length === 0) return undefined;
+
+    if (containerName) {
+      const resolvedContainer = this.resolver?.resolveContract(containerName, documentUri);
+      const importedContainer = resolvedContainer
+        ? candidates.find(
+            (candidate) =>
+              candidate.containerName === resolvedContainer.contract.name &&
+              candidate.filePath === resolvedContainer.uri,
+          )
+        : undefined;
+      if (importedContainer) return importedContainer;
+
+      const sameContainer = candidates.find(
+        (candidate) => candidate.containerName === containerName,
+      );
+      if (sameContainer) return sameContainer;
+    }
+
+    const sameFile = candidates.find((candidate) => candidate.filePath === documentUri);
+    return sameFile ?? candidates[0];
+  }
+
+  private isNatspecReferenceTarget(sym: SolSymbol): boolean {
+    return (
+      sym.kind === "contract" ||
+      sym.kind === "interface" ||
+      sym.kind === "library" ||
+      sym.kind === "function" ||
+      sym.kind === "modifier" ||
+      sym.kind === "event" ||
+      sym.kind === "error" ||
+      sym.kind === "struct" ||
+      sym.kind === "enum" ||
+      sym.kind === "userDefinedValueType"
+    );
+  }
+
+  private symbolUri(sym: SolSymbol): string {
+    return sym.filePath.startsWith("file:") ? sym.filePath : URI.file(sym.filePath).toString();
   }
 
   private isTypeSymbol(sym: SolSymbol): boolean {

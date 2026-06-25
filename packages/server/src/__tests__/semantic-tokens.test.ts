@@ -476,6 +476,44 @@ library InventoryLib {
         );
       }
     });
+
+    it("tokenizes the using keyword in library-scoped multi-line global using lists", () => {
+      const code = `type Currency is address;
+type Inventory is uint256;
+library CurrencyLibrary {}
+library InventoryLib {
+    using CurrencyLibrary for Currency;
+    using {
+        vaultOf,
+        setVault,
+        sharesOf,
+        erc20Of,
+        claimsOf,
+        assetBalance,
+        effectiveBalance,
+        unbackedClaims,
+        recordClaims,
+        debitERC20
+    } for Inventory global;
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+      const lines = code.split("\n");
+      const usingLine = lines.findIndex((line) => line.trim() === "using {");
+      const usingChar = lines[usingLine].indexOf("using");
+
+      assert.notEqual(usingLine, -1, "test fixture missing multi-line using directive");
+      assert.ok(
+        tokens.some(
+          (token) =>
+            token.line === usingLine &&
+            token.char === usingChar &&
+            token.length === "using".length &&
+            token.type === "keyword",
+        ),
+        `expected multi-line using keyword token; got ${JSON.stringify(tokens)}`,
+      );
+    });
   });
 
   describe("range request", () => {

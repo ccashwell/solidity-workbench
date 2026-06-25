@@ -805,7 +805,8 @@ export class HoverProvider {
   private symbolMarkdownUri(sym: SolSymbol): string {
     const line = sym.nameRange.start.line + 1;
     const character = sym.nameRange.start.character + 1;
-    return `${sym.filePath}#L${line},${character}`;
+    const uri = sym.filePath.startsWith("file:") ? sym.filePath : URI.file(sym.filePath).toString();
+    return `${uri}#L${line},${character}`;
   }
 
   private formatCustomNatspecLabel(tag: string): string {

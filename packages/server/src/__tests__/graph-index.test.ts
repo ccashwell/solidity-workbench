@@ -1006,6 +1006,50 @@ contract ProdTest { function test_Run() external {} }
         true,
         "includeTests should propagate through graph query target resolution",
       );
+
+      const sourceHarness = graph
+        .getNodes()
+        .find((node) => node.name === "SourceHarness" && node.kind === "contract");
+      const prod = graph
+        .getNodes()
+        .find((node) => node.name === "Prod" && node.kind === "contract");
+      assert.ok(sourceHarness, "expected indexed SourceHarness node before scope filtering");
+      assert.ok(prod, "expected indexed Prod node before scope filtering");
+
+      const hiddenNeighborhood = graph.toNeighborhood({ rootId: sourceHarness.id });
+      assert.equal(
+        hiddenNeighborhood.nodes.length,
+        0,
+        "focused neighborhoods should hide Foundry Test descendants by default",
+      );
+      const visibleNeighborhood = graph.toNeighborhood({
+        rootId: sourceHarness.id,
+        includeTests: true,
+      });
+      assert.ok(
+        visibleNeighborhood.nodes.some((node) => node.id === sourceHarness.id),
+        "includeTests should expose Foundry Test descendant neighborhoods",
+      );
+
+      const hiddenPath = graph.toShortestPath({
+        from: { nodeId: sourceHarness.id },
+        to: { nodeId: prod.id },
+      });
+      assert.equal(
+        hiddenPath.found,
+        false,
+        "path queries should hide Foundry Test descendants by default",
+      );
+      const visibleSelfPath = graph.toShortestPath({
+        from: { nodeId: sourceHarness.id },
+        to: { nodeId: sourceHarness.id },
+        includeTests: true,
+      });
+      assert.equal(
+        visibleSelfPath.found,
+        true,
+        "includeTests should expose Foundry Test descendant path endpoints",
+      );
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

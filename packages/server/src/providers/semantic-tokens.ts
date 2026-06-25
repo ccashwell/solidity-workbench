@@ -62,6 +62,9 @@ export class SemanticTokensProvider {
     this.collectDeclarationTokens(result, tokens);
     if (token?.isCancellationRequested) return tokens;
 
+    this.collectUsingDirectiveKeywordTokens(lines, tokens);
+    if (token?.isCancellationRequested) return tokens;
+
     const nameKinds = this.buildGlobalNameKinds(result);
     this.collectReferenceTokens(result, lines, nameKinds, tokens, token);
 
@@ -596,10 +599,41 @@ export class SemanticTokensProvider {
     }
   }
 
+  private collectUsingDirectiveKeywordTokens(lines: string[], tokens: TokenInfo[]): void {
+    let inDirective = false;
+    let inBlockComment = false;
+
+    for (let line = 0; line < lines.length; line++) {
+      const sanitized = stripCommentsAndStrings(lines[line] ?? "", inBlockComment);
+      inBlockComment = sanitized.inBlockComment;
+      const text = sanitized.text;
+
+      const usingMatch = inDirective ? null : /\busing\b/.exec(text);
+      const start = inDirective ? 0 : (usingMatch?.index ?? -1);
+      if (start < 0) continue;
+
+      inDirective = true;
+      const segment = text.slice(start);
+      for (const match of segment.matchAll(/\b(using|for|global)\b/g)) {
+        tokens.push({
+          line,
+          char: start + (match.index ?? 0),
+          length: match[1].length,
+          type: "keyword",
+          modifiers: [],
+        });
+      }
+
+      if (segment.includes(";")) {
+        inDirective = false;
+      }
+    }
+  }
+
   // ── Build / emit ────────────────────────────────────────────────────
 
   private buildFromTokens(tokens: TokenInfo[]): SemanticTokens {
-    const sorted = [...tokens].sort((a, b) => a.line - b.line || a.char - b.char);
+    const sorted = dedupeTokens(tokens).sort((a, b) => a.line - b.line || a.char - b.char);
     const builder = new SemanticTokensBuilder();
     for (const t of sorted) {
       this.pushToken(builder, t.line, t.char, t.length, t.type, t.modifiers);
@@ -766,6 +800,83 @@ function scanIdentifiersInRange(lines: string[], bounds: BodyBounds): Identifier
     }
   }
   return out;
+}
+
+function dedupeTokens(tokens: TokenInfo[]): TokenInfo[] {
+  const seen = new Set<string>();
+  const out: TokenInfo[] = [];
+  for (const token of tokens) {
+    const key = [
+      token.line,
+      token.char,
+      token.length,
+      token.type,
+      token.modifiers.slice().sort().join(","),
+    ].join(":");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(token);
+  }
+  return out;
+}
+
+function stripCommentsAndStrings(
+  line: string,
+  inBlockComment: boolean,
+): { text: string; inBlockComment: boolean } {
+  let out = "";
+  let col = 0;
+
+  while (col < line.length) {
+    if (inBlockComment) {
+      const close = line.indexOf("*/", col);
+      if (close === -1) {
+        out += " ".repeat(line.length - col);
+        return { text: out, inBlockComment: true };
+      }
+      out += " ".repeat(close + 2 - col);
+      col = close + 2;
+      inBlockComment = false;
+      continue;
+    }
+
+    const ch = line[col];
+    const next = col + 1 < line.length ? line[col + 1] : "";
+    if (ch === "/" && next === "*") {
+      out += "  ";
+      col += 2;
+      inBlockComment = true;
+      continue;
+    }
+    if (ch === "/" && next === "/") {
+      out += " ".repeat(line.length - col);
+      break;
+    }
+    if (ch === '"' || ch === "'") {
+      const quote = ch;
+      out += " ";
+      col++;
+      while (col < line.length) {
+        out += " ";
+        if (line[col] === "\\") {
+          col += 2;
+          out += col <= line.length ? " " : "";
+          continue;
+        }
+        if (line[col] === quote) {
+          col++;
+          break;
+        }
+        col++;
+      }
+      continue;
+    }
+
+    out += ch;
+    col++;
+  }
+
+  return { text: out, inBlockComment };
 }
 
 function isIdentStart(ch: string): boolean {
