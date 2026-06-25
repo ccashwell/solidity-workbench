@@ -67,6 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph call edges backed by warm solc declaration info now stay
   unresolved when the compiler target is outside the indexed graph, avoiding
   misleading parser fallback targets.
+- Project Graph state, event, error, type, creation, and delegatecall edges now
+  use the same solc-unmapped guard instead of preserving wrong parser fallback
+  targets.
 
 ### Fixed
 

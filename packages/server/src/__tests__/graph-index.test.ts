@@ -2161,6 +2161,171 @@ contract Caller {
     }
   });
 
+  it("marks warm solc non-call targets unresolved when the compiler target is not indexed", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-solc-unmapped-rich-"));
+    try {
+      const files = {
+        "src/Caller.sol": `pragma solidity ^0.8.24;
+contract Caller {
+    uint256 public total;
+    event Updated();
+    error Unauthorized();
+
+    function entry() external returns (uint256 copy) {
+        total = 1;
+        copy = total;
+        emit Updated();
+        revert Unauthorized();
+    }
+}
+`,
+        "lib/Other.sol": `pragma solidity ^0.8.24;
+contract Other {
+    uint256 public total;
+    event Updated();
+    error Unauthorized();
+}
+`,
+      };
+
+      const parser = new SolidityParser();
+      const uris: string[] = [];
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace = makeWorkspace(tmpDir, uris);
+      const symbolIndex = new SymbolIndex(parser, workspace);
+      for (const uri of uris) symbolIndex.updateFile(uri);
+      const resolver = new SemanticResolver(parser, workspace, symbolIndex);
+      const graph = new GraphIndex(parser, workspace, resolver, symbolIndex);
+      const callerPath = path.join(tmpDir, "src/Caller.sol");
+      const otherPath = path.join(tmpDir, "lib/Other.sol");
+      const callerText = files["src/Caller.sol"];
+      const otherText = files["lib/Other.sol"];
+      const totalWriteOffset = callerText.indexOf("total = 1");
+      const totalReadOffset = callerText.indexOf("copy = total") + "copy = ".length;
+      const emitOffset = callerText.indexOf("emit Updated();") + "emit ".length;
+      const revertOffset = callerText.lastIndexOf("Unauthorized();");
+      graph.setSolcBridge({
+        getDeclarationInfoAt: (filePath: string, offset: number) => {
+          if (filePath !== callerPath) return null;
+          if (offset === totalWriteOffset) {
+            return {
+              declarationId: 5201,
+              declarationFilePath: otherPath,
+              declarationOffset: otherText.indexOf("total"),
+              declarationLength: "total".length,
+              nodeType: "VariableDeclaration",
+              name: "total",
+            };
+          }
+          if (offset === totalReadOffset) {
+            return {
+              declarationId: 5202,
+              declarationFilePath: otherPath,
+              declarationOffset: otherText.indexOf("total"),
+              declarationLength: "total".length,
+              nodeType: "VariableDeclaration",
+              name: "total",
+            };
+          }
+          if (offset === emitOffset) {
+            return {
+              declarationId: 5203,
+              declarationFilePath: otherPath,
+              declarationOffset: otherText.indexOf("Updated"),
+              declarationLength: "Updated".length,
+              nodeType: "EventDefinition",
+              name: "Updated",
+            };
+          }
+          if (offset === revertOffset) {
+            return {
+              declarationId: 5204,
+              declarationFilePath: otherPath,
+              declarationOffset: otherText.indexOf("Unauthorized"),
+              declarationLength: "Unauthorized".length,
+              nodeType: "ErrorDefinition",
+              name: "Unauthorized",
+            };
+          }
+          return null;
+        },
+      } as unknown as SolcBridge);
+      graph.rebuildWorkspace();
+
+      const entry = graph
+        .getNodes()
+        .find((node) => node.name === "entry" && node.containerName === "Caller");
+      const callerTotal = graph
+        .getNodes()
+        .find((node) => node.name === "total" && node.containerName === "Caller");
+      const callerUpdated = graph
+        .getNodes()
+        .find((node) => node.name === "Updated" && node.containerName === "Caller");
+      const callerUnauthorized = graph
+        .getNodes()
+        .find((node) => node.name === "Unauthorized" && node.containerName === "Caller");
+      const otherTotal = graph
+        .getNodes()
+        .find((node) => node.name === "total" && node.containerName === "Other");
+      assert.ok(entry, "expected Caller.entry node");
+      assert.ok(callerTotal, "expected Caller.total node");
+      assert.ok(callerUpdated, "expected Caller.Updated node");
+      assert.ok(callerUnauthorized, "expected Caller.Unauthorized node");
+      assert.equal(otherTotal, undefined, "dependency Other should not be indexed by default");
+
+      const hasUnmappedSolcEdge = (
+        kind: "reads" | "writes" | "emits" | "revertsWith",
+        id: number,
+      ) =>
+        graph
+          .getOutgoingEdges(entry.id, kind)
+          .some(
+            (edge) =>
+              edge.target === entry.id &&
+              edge.unresolvedTarget === true &&
+              edge.metadata?.resolutionConfidence === "solc" &&
+              edge.metadata?.solcDeclarationId === id &&
+              edge.metadata?.solcTargetUnmapped === true,
+          );
+
+      assert.ok(hasUnmappedSolcEdge("writes", 5201), "expected unmapped write to stay unresolved");
+      assert.ok(hasUnmappedSolcEdge("reads", 5202), "expected unmapped read to stay unresolved");
+      assert.ok(hasUnmappedSolcEdge("emits", 5203), "expected unmapped emit to stay unresolved");
+      assert.ok(
+        hasUnmappedSolcEdge("revertsWith", 5204),
+        "expected unmapped revert to stay unresolved",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(entry.id, "writes").every((edge) => edge.target !== callerTotal.id),
+        "did not expect write edge to keep the parser fallback target",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(entry.id, "reads").every((edge) => edge.target !== callerTotal.id),
+        "did not expect read edge to keep the parser fallback target",
+      );
+      assert.ok(
+        graph.getOutgoingEdges(entry.id, "emits").every((edge) => edge.target !== callerUpdated.id),
+        "did not expect emit edge to keep the parser fallback target",
+      );
+      assert.ok(
+        graph
+          .getOutgoingEdges(entry.id, "revertsWith")
+          .every((edge) => edge.target !== callerUnauthorized.id),
+        "did not expect revert edge to keep the parser fallback target",
+      );
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("indexes implementation, override, creation, external-call, and delegatecall edges", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "graph-index-rich-edges-"));
     try {

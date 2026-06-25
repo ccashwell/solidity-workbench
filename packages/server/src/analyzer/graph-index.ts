@@ -1196,6 +1196,28 @@ export class GraphIndex {
     };
   }
 
+  private addResolvedGraphEdge(
+    sourceId: string,
+    resolved: ResolvedGraphTarget,
+    kind: SolidityGraphEdgeKind,
+    range: SourceRange | undefined,
+    metadata: Record<string, unknown>,
+  ): void {
+    const unresolvedTarget = resolved.solcTargetUnmapped === true;
+    this.addEdge({
+      source: sourceId,
+      target: unresolvedTarget ? sourceId : resolved.node.id,
+      kind,
+      range,
+      unresolvedTarget: unresolvedTarget || undefined,
+      metadata: {
+        ...metadata,
+        ...(unresolvedTarget ? { unresolvedTarget: true } : {}),
+        ...resolved.metadata,
+      },
+    });
+  }
+
   private findNodeForSolcDeclaration(
     metadata: SolcDeclarationMetadata,
     allowedKinds: Set<SolidityGraphNodeKind>,
@@ -1702,16 +1724,9 @@ export class GraphIndex {
           "parser",
           TYPE_TARGET_NODE_KINDS,
         );
-        this.addEdge({
-          source: sourceId,
-          target: resolved.node.id,
-          kind: "usesType",
-          range: ref.range,
-          metadata: {
-            typeName,
-            ...ref.metadata,
-            ...resolved.metadata,
-          },
+        this.addResolvedGraphEdge(sourceId, resolved, "usesType", ref.range, {
+          typeName,
+          ...ref.metadata,
         });
       }
     }
@@ -2189,15 +2204,8 @@ export class GraphIndex {
       "parser",
       CONTRACT_TARGET_NODE_KINDS,
     );
-    this.addEdge({
-      source: sourceId,
-      target: resolved.node.id,
-      kind: "creates",
-      range,
-      metadata: {
-        contractName: typeName,
-        ...resolved.metadata,
-      },
+    this.addResolvedGraphEdge(sourceId, resolved, "creates", range, {
+      contractName: typeName,
     });
   }
 
@@ -2227,16 +2235,24 @@ export class GraphIndex {
           CONTRACT_TARGET_NODE_KINDS,
         )
       : undefined;
+    if (resolved) {
+      this.addResolvedGraphEdge(sourceId, resolved, "delegateCall", callee.range, {
+        receiver,
+        receiverType,
+      });
+      return;
+    }
     this.addEdge({
       source: sourceId,
-      target: resolved?.node.id ?? sourceId,
+      target: sourceId,
       kind: "delegateCall",
       range: callee.range,
+      unresolvedTarget: true,
       metadata: {
         receiver,
         receiverType,
-        unresolvedTarget: !resolved,
-        ...(resolved?.metadata ?? this.resolutionMetadata(uri, callee.range.start, "heuristic")),
+        unresolvedTarget: true,
+        ...this.resolutionMetadata(uri, callee.range.start, "heuristic"),
       },
     });
   }
@@ -2265,12 +2281,8 @@ export class GraphIndex {
       "parser",
       EVENT_TARGET_NODE_KINDS,
     );
-    this.addEdge({
-      source: sourceId,
-      target: resolved.node.id,
-      kind: "emits",
-      range,
-      metadata: { eventName: eventExpression.name, ...resolved.metadata },
+    this.addResolvedGraphEdge(sourceId, resolved, "emits", range, {
+      eventName: eventExpression.name,
     });
   }
 
@@ -2298,12 +2310,8 @@ export class GraphIndex {
       "parser",
       ERROR_TARGET_NODE_KINDS,
     );
-    this.addEdge({
-      source: sourceId,
-      target: resolved.node.id,
-      kind: "revertsWith",
-      range,
-      metadata: { errorName: errorExpression.name, ...resolved.metadata },
+    this.addResolvedGraphEdge(sourceId, resolved, "revertsWith", range, {
+      errorName: errorExpression.name,
     });
   }
 
@@ -2332,21 +2340,14 @@ export class GraphIndex {
       "parser",
       STATE_TARGET_NODE_KINDS,
     );
-    this.addEdge({
-      source: sourceId,
-      target: resolved.node.id,
-      kind: accessKind,
-      range,
-      metadata: { variableName: identifier.name, ...resolved.metadata },
+    this.addResolvedGraphEdge(sourceId, resolved, accessKind, range, {
+      variableName: identifier.name,
     });
 
     if (context.compoundAssignmentTarget) {
-      this.addEdge({
-        source: sourceId,
-        target: resolved.node.id,
-        kind: "reads",
-        range,
-        metadata: { variableName: identifier.name, viaCompoundWrite: true, ...resolved.metadata },
+      this.addResolvedGraphEdge(sourceId, resolved, "reads", range, {
+        variableName: identifier.name,
+        viaCompoundWrite: true,
       });
     }
   }
@@ -2391,24 +2392,17 @@ export class GraphIndex {
           "parser",
           STATE_TARGET_NODE_KINDS,
         );
-        this.addEdge({
-          source: sourceId,
-          target: resolved.node.id,
-          kind: accessKind,
-          range,
-          metadata: { variableName: variable.name, ...resolved.metadata },
+        this.addResolvedGraphEdge(sourceId, resolved, accessKind, range, {
+          variableName: variable.name,
         });
 
         if (
           accessKind === "writes" &&
           this.isCompoundStateWrite(body.text, variable.name, match.index)
         ) {
-          this.addEdge({
-            source: sourceId,
-            target: resolved.node.id,
-            kind: "reads",
-            range,
-            metadata: { variableName: variable.name, viaCompoundWrite: true, ...resolved.metadata },
+          this.addResolvedGraphEdge(sourceId, resolved, "reads", range, {
+            variableName: variable.name,
+            viaCompoundWrite: true,
           });
         }
       }
@@ -2436,12 +2430,8 @@ export class GraphIndex {
         "parser",
         EVENT_TARGET_NODE_KINDS,
       );
-      this.addEdge({
-        source: sourceId,
-        target: resolved.node.id,
-        kind: "emits",
-        range,
-        metadata: { eventName, ...resolved.metadata },
+      this.addResolvedGraphEdge(sourceId, resolved, "emits", range, {
+        eventName,
       });
     }
   }
@@ -2467,12 +2457,8 @@ export class GraphIndex {
         "parser",
         ERROR_TARGET_NODE_KINDS,
       );
-      this.addEdge({
-        source: sourceId,
-        target: resolved.node.id,
-        kind: "revertsWith",
-        range,
-        metadata: { errorName, ...resolved.metadata },
+      this.addResolvedGraphEdge(sourceId, resolved, "revertsWith", range, {
+        errorName,
       });
     }
   }
