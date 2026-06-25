@@ -23,6 +23,76 @@ import type {
   UsingForDirective,
 } from "@solidity-workbench/common";
 
+interface ParserPosition {
+  line?: number;
+  column?: number;
+}
+
+interface ParserLocation {
+  start?: ParserPosition;
+  end?: ParserPosition;
+}
+
+interface ParserAstNode {
+  [key: string]: unknown;
+  type?: string;
+  name?: string | null;
+  value?: string;
+  path?: string;
+  loc?: ParserLocation;
+  range?: [number, number];
+  children?: ParserAstNode[];
+  subNodes?: ParserAstNode[];
+  functions?: (string | null)[];
+  libraryName?: string | null;
+  typeName?: ParserAstNode | string | null;
+  isGlobal?: boolean;
+  unitAlias?: string;
+  symbolAliases?: unknown[];
+  symbolAliasesIdentifiers?: unknown[];
+  kind?: ContractKind;
+  baseContracts?: ParserAstNode[];
+  baseName?: ParserAstNode | string;
+  namePath?: string;
+  definition?: ParserAstNode | string;
+  isDeclaredConst?: boolean;
+  isImmutable?: boolean;
+  visibility?: Visibility;
+  isReceiveEther?: boolean;
+  isFallback?: boolean;
+  isConstructor?: boolean;
+  stateMutability?: string;
+  parameters?: ParserAstNode[];
+  returnParameters?: ParserAstNode[];
+  modifiers?: ParserAstNode[];
+  body?: unknown;
+  isVirtual?: boolean;
+  override?: unknown;
+  variables?: ParserAstNode[];
+  storageLocation?: ParameterDeclaration["storageLocation"];
+  isIndexed?: boolean;
+  isAnonymous?: boolean;
+  members?: ParserAstNode[];
+  keyType?: ParserAstNode | string;
+  valueType?: ParserAstNode | string;
+  length?: ParserAstNode | string | number | null;
+  baseTypeName?: ParserAstNode | string;
+  parameterTypes?: ParserAstNode[];
+  returnTypes?: ParserAstNode[];
+  identifier?: { name?: string };
+  number?: string | number;
+}
+
+interface ParserParseError {
+  message?: string;
+  loc?: ParserLocation;
+}
+
+interface ParserSourceUnitNode extends ParserAstNode {
+  children?: ParserAstNode[];
+  errors?: ParserParseError[];
+}
+
 /**
  * Production Solidity parser wrapping @solidity-parser/parser (ANTLR4-based).
  *
@@ -83,11 +153,11 @@ export class SolidityParser {
         tolerant: true,
         loc: true,
         range: true,
-      });
+      }) as ParserSourceUnitNode;
 
       const errors: ParseError[] = [];
-      if ("errors" in ast && Array.isArray((ast as any).errors)) {
-        for (const err of (ast as any).errors) {
+      if (Array.isArray(ast.errors)) {
+        for (const err of ast.errors) {
           errors.push({
             message: err.message ?? String(err),
             range: this.locToRange(err.loc),
@@ -214,7 +284,7 @@ export class SolidityParser {
 
   // ── AST Mapping ────────────────────────────────────────────────────
 
-  private mapSourceUnit(uri: string, ast: any): SoliditySourceUnit {
+  private mapSourceUnit(uri: string, ast: ParserSourceUnitNode): SoliditySourceUnit {
     const pragmas: PragmaDirective[] = [];
     const imports: ImportDirective[] = [];
     const contracts: ContractDefinition[] = [];
@@ -237,8 +307,8 @@ export class SolidityParser {
         case "PragmaDirective":
           pragmas.push({
             type: "PragmaDirective",
-            name: node.name,
-            value: node.value,
+            name: node.name ?? "",
+            value: node.value ?? "",
             range: this.locToRange(node.loc),
           });
           break;
@@ -272,7 +342,7 @@ export class SolidityParser {
           fileConstants.push({
             type: "FileConstantDefinition",
             typeName: this.typeNameToString(node.typeName),
-            name: node.name,
+            name: node.name ?? "",
             mutability: node.isDeclaredConst ? "constant" : "immutable",
             range: this.locToRange(node.loc),
             nameRange: this.nameRange(node),
@@ -282,7 +352,7 @@ export class SolidityParser {
         case "TypeDefinition":
           userDefinedValueTypes.push({
             type: "UserDefinedValueTypeDefinition",
-            name: node.name,
+            name: node.name ?? "",
             underlyingType: this.typeNameToString(node.definition),
             range: this.locToRange(node.loc),
             nameRange: this.nameRange(node),
@@ -310,13 +380,15 @@ export class SolidityParser {
     };
   }
 
-  private mapUsingFor(node: any): UsingForDirective {
+  private mapUsingFor(node: ParserAstNode): UsingForDirective {
     const functionAliases = this.mapUsingForFunctionAliases(node);
     const functionNames =
       functionAliases.length > 0
         ? functionAliases.map((entry) => entry.memberName)
         : Array.isArray(node.functions)
-          ? node.functions.filter((name: string | null) => !!name)
+          ? node.functions.filter(
+              (name): name is string => typeof name === "string" && name.length > 0,
+            )
           : undefined;
     return {
       type: "UsingForDirective",
@@ -357,10 +429,10 @@ export class SolidityParser {
     return aliases;
   }
 
-  private mapImport(node: any): ImportDirective {
+  private mapImport(node: ParserAstNode): ImportDirective {
     const imp: ImportDirective = {
       type: "ImportDirective",
-      path: node.path,
+      path: node.path ?? "",
       range: this.locToRange(node.loc),
     };
 
@@ -407,8 +479,8 @@ export class SolidityParser {
     return undefined;
   }
 
-  private mapContract(node: any): ContractDefinition {
-    const kind: ContractKind = node.kind === "abstract" ? "abstract" : (node.kind ?? "contract");
+  private mapContract(node: ParserAstNode): ContractDefinition {
+    const kind: ContractKind = node.kind ?? "contract";
 
     const functions: FunctionDefinition[] = [];
     const stateVariables: StateVariableDeclaration[] = [];
@@ -449,15 +521,15 @@ export class SolidityParser {
       }
     }
 
-    const baseContracts = (node.baseContracts ?? []).map((b: any) => ({
-      baseName: b.baseName?.namePath ?? b.baseName ?? String(b),
+    const baseContracts = (node.baseContracts ?? []).map((b) => ({
+      baseName: this.baseContractName(b.baseName ?? b),
     }));
 
     const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
 
     return {
       type: "ContractDefinition",
-      name: node.name,
+      name: node.name ?? "",
       kind,
       baseContracts,
       stateVariables,
@@ -474,7 +546,7 @@ export class SolidityParser {
     };
   }
 
-  private mapFunction(node: any): FunctionDefinition {
+  private mapFunction(node: ParserAstNode): FunctionDefinition {
     const isReceive = !!node.isReceiveEther;
     const isFallback = !!node.isFallback;
     const isConstructor = !isReceive && !isFallback && (!!node.isConstructor || node.name === null);
@@ -490,9 +562,9 @@ export class SolidityParser {
     else if (node.stateMutability === "view") mutability = "view";
     else if (node.stateMutability === "payable") mutability = "payable";
 
-    const parameters = (node.parameters ?? []).map((p: any) => this.mapParameter(p));
-    const returnParameters = (node.returnParameters ?? []).map((p: any) => this.mapParameter(p));
-    const modifierNames = (node.modifiers ?? []).map((m: any) => m.name ?? "");
+    const parameters = (node.parameters ?? []).map((p) => this.mapParameter(p));
+    const returnParameters = (node.returnParameters ?? []).map((p) => this.mapParameter(p));
+    const modifierNames = (node.modifiers ?? []).map((m) => m.name ?? "");
 
     const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
     const nameRange =
@@ -516,7 +588,7 @@ export class SolidityParser {
     };
   }
 
-  private mapStateVars(node: any): StateVariableDeclaration[] {
+  private mapStateVars(node: ParserAstNode): StateVariableDeclaration[] {
     const vars: StateVariableDeclaration[] = [];
 
     // StateVariableDeclaration can declare multiple variables in some AST shapes,
@@ -551,12 +623,12 @@ export class SolidityParser {
     return vars;
   }
 
-  private mapEvent(node: any): EventDefinition {
+  private mapEvent(node: ParserAstNode): EventDefinition {
     const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
     return {
       type: "EventDefinition",
-      name: node.name,
-      parameters: (node.parameters ?? []).map((p: any) => this.mapParameter(p)),
+      name: node.name ?? "",
+      parameters: (node.parameters ?? []).map((p) => this.mapParameter(p)),
       isAnonymous: node.isAnonymous ?? false,
       natspec,
       range: this.locToRange(node.loc),
@@ -564,36 +636,36 @@ export class SolidityParser {
     };
   }
 
-  private mapError(node: any): ErrorDefinition {
+  private mapError(node: ParserAstNode): ErrorDefinition {
     const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
     return {
       type: "ErrorDefinition",
-      name: node.name,
-      parameters: (node.parameters ?? []).map((p: any) => this.mapParameter(p)),
+      name: node.name ?? "",
+      parameters: (node.parameters ?? []).map((p) => this.mapParameter(p)),
       natspec,
       range: this.locToRange(node.loc),
       nameRange: this.nameRange(node),
     };
   }
 
-  private mapStruct(node: any): StructDefinition {
+  private mapStruct(node: ParserAstNode): StructDefinition {
     const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
     return {
       type: "StructDefinition",
-      name: node.name,
-      members: (node.members ?? []).map((m: any) => this.mapParameter(m)),
+      name: node.name ?? "",
+      members: (node.members ?? []).map((m) => this.mapParameter(m)),
       natspec,
       range: this.locToRange(node.loc),
       nameRange: this.nameRange(node),
     };
   }
 
-  private mapEnum(node: any): EnumDefinition {
+  private mapEnum(node: ParserAstNode): EnumDefinition {
     const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
     return {
       type: "EnumDefinition",
-      name: node.name,
-      members: (node.members ?? []).map((m: any) => ({
+      name: node.name ?? "",
+      members: (node.members ?? []).map((m) => ({
         name: m.name ?? String(m),
         range: this.locToRange(m.loc),
         nameRange: this.nameRange(m),
@@ -604,12 +676,12 @@ export class SolidityParser {
     };
   }
 
-  private mapModifier(node: any): ModifierDefinition {
+  private mapModifier(node: ParserAstNode): ModifierDefinition {
     const natspec = this.extractNatspecBefore(this.currentLines, (node.loc?.start?.line ?? 1) - 1);
     return {
       type: "ModifierDefinition",
-      name: node.name,
-      parameters: (node.parameters ?? []).map((p: any) => this.mapParameter(p)),
+      name: node.name ?? "",
+      parameters: (node.parameters ?? []).map((p) => this.mapParameter(p)),
       isVirtual: node.isVirtual ?? false,
       isOverride: !!node.override,
       natspec,
@@ -618,7 +690,7 @@ export class SolidityParser {
     };
   }
 
-  private mapParameter(node: any): ParameterDeclaration {
+  private mapParameter(node: ParserAstNode): ParameterDeclaration {
     const param: ParameterDeclaration = {
       type: "ParameterDeclaration",
       typeName: this.typeNameToString(node.typeName),
@@ -633,11 +705,17 @@ export class SolidityParser {
     return param;
   }
 
+  private baseContractName(node: ParserAstNode | string): string {
+    if (typeof node === "string") return node;
+    return node.namePath ?? node.name ?? String(node);
+  }
+
   // ── Type name serialization ────────────────────────────────────────
 
-  private typeNameToString(node: any): string {
+  private typeNameToString(node: ParserAstNode | string | number | null | undefined): string {
     if (!node) return "unknown";
     if (typeof node === "string") return node;
+    if (typeof node === "number") return String(node);
 
     switch (node.type) {
       case "ElementaryTypeName":
@@ -653,15 +731,15 @@ export class SolidityParser {
 
       case "ArrayTypeName":
         return node.length
-          ? `${this.typeNameToString(node.baseTypeName)}[${node.length.number ?? node.length}]`
+          ? `${this.typeNameToString(node.baseTypeName)}[${this.arrayLengthToString(node.length)}]`
           : `${this.typeNameToString(node.baseTypeName)}[]`;
 
       case "FunctionTypeName": {
         const params = (node.parameterTypes ?? [])
-          .map((p: any) => this.typeNameToString(p.typeName))
+          .map((p) => this.typeNameToString(p.typeName))
           .join(", ");
         const ret = (node.returnTypes ?? [])
-          .map((p: any) => this.typeNameToString(p.typeName))
+          .map((p) => this.typeNameToString(p.typeName))
           .join(", ");
         return ret ? `function(${params}) returns (${ret})` : `function(${params})`;
       }
@@ -671,9 +749,14 @@ export class SolidityParser {
     }
   }
 
+  private arrayLengthToString(length: ParserAstNode | string | number): string {
+    if (typeof length === "string" || typeof length === "number") return String(length);
+    return String(length.number ?? length.name ?? "unknown");
+  }
+
   // ── Location helpers ───────────────────────────────────────────────
 
-  private locToRange(loc: any): SourceRange {
+  private locToRange(loc: ParserLocation | null | undefined): SourceRange {
     if (!loc) {
       return { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } };
     }
@@ -684,7 +767,7 @@ export class SolidityParser {
   }
 
   /** Range of `constructor` / `receive` / `fallback` on the declaration line. */
-  private keywordNameRange(node: any, keyword: string): SourceRange {
+  private keywordNameRange(node: ParserAstNode, keyword: string): SourceRange {
     const startLine = (node.loc?.start?.line ?? 1) - 1;
     const line = this.currentLines?.[startLine] ?? "";
     const startCol = node.loc?.start?.column ?? 0;
@@ -698,7 +781,7 @@ export class SolidityParser {
     return this.locToRange(node.loc);
   }
 
-  private nameRange(node: any): SourceRange {
+  private nameRange(node: ParserAstNode): SourceRange {
     // Try to compute a name-specific range from the node's location
     if (node.loc && node.name) {
       const name = String(node.name);
