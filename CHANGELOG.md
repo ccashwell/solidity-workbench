@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Project Graph view can now run indexed symbol searches and callers,
   callees, or impact queries directly from the graph toolbar, replacing the
   canvas with the focused result set.
+- Text-driven Project Graph callers/callees queries now constrain target
+  selection to callable declarations, avoiding same-name contracts, events,
+  types, or state variables being selected as call-hierarchy roots.
 
 ### Fixed
 

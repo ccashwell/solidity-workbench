@@ -384,6 +384,17 @@ describe("Feature coverage — project graph export", () => {
     assert.match(html, /message\.clearQuery === true/);
   });
 
+  it("constrains text-driven graph call queries to callable targets", () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, "../../../src/views/project-graph.ts"),
+      "utf8",
+    );
+
+    assert.match(source, /PROJECT_GRAPH_CALLABLE_NODE_KINDS/);
+    assert.match(source, /targetKinds:\s*target \? undefined : this\.projectGraphQueryTargetKinds/);
+    assert.match(source, /projectGraphQueryTargetKinds\(pickedKind\.queryKind\)/);
+  });
+
   it("summarizes project graph edge quality", () => {
     const status = summarizeProjectGraphEdgeQuality({
       nodeCount: 10,

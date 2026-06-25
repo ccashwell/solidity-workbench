@@ -14,6 +14,7 @@ import {
   type ProjectGraphEdgeKind,
   type ProjectGraphIndexStatus,
   type ProjectGraphNode,
+  type ProjectGraphNodeKind,
   type ProjectGraphPathResult,
   type ProjectGraphQueryKind,
   type ProjectGraphQueryResult,
@@ -50,6 +51,14 @@ const RESOLUTION_CONFIDENCE_VALUES: ProjectGraphResolutionConfidence[] = [
   "parser",
   "heuristic",
   "unknown",
+];
+
+const PROJECT_GRAPH_CALLABLE_NODE_KINDS: ProjectGraphNodeKind[] = [
+  "function",
+  "constructor",
+  "receive",
+  "fallback",
+  "modifier",
 ];
 
 interface ExportGraphNode {
@@ -571,6 +580,7 @@ export class ProjectGraphExporter {
             kind,
             target,
             query: target ? undefined : query,
+            targetKinds: target ? undefined : this.projectGraphQueryTargetKinds(kind),
             maxNodes: 240,
           });
           if (!result.found) {
@@ -776,6 +786,10 @@ export class ProjectGraphExporter {
           ? { uri: focused.uri.toString(), position: focused.position }
           : undefined,
       query: textQuery,
+      targetKinds:
+        focused && useCursor?.value !== false
+          ? undefined
+          : this.projectGraphQueryTargetKinds(pickedKind.queryKind),
       maxNodes: 120,
     });
 
@@ -920,6 +934,12 @@ export class ProjectGraphExporter {
 
   private parseProjectGraphQueryKind(value: string): ProjectGraphQueryKind | undefined {
     return value === "callers" || value === "callees" || value === "impact" ? value : undefined;
+  }
+
+  private projectGraphQueryTargetKinds(
+    kind: ProjectGraphQueryKind,
+  ): ProjectGraphNodeKind[] | undefined {
+    return kind === "impact" ? undefined : PROJECT_GRAPH_CALLABLE_NODE_KINDS;
   }
 
   private graphQueryLabel(kind: ProjectGraphQueryKind): string {

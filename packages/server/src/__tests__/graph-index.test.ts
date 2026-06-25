@@ -21,6 +21,9 @@ contract Base {
     function inherited() internal {}
 }
 `,
+        "src/helper.sol": `pragma solidity ^0.8.24;
+contract helper {}
+`,
         "src/Child.sol": `pragma solidity ^0.8.24;
 import "./Base.sol";
 contract Child is Base {
@@ -108,6 +111,9 @@ contract Child is Base {
       const helper = graph
         .getNodes()
         .find((node) => node.name === "helper" && node.containerName === "Child");
+      const helperContract = graph
+        .getNodes()
+        .find((node) => node.name === "helper" && node.kind === "contract");
       const inherited = graph
         .getNodes()
         .find((node) => node.name === "inherited" && node.containerName === "Base");
@@ -131,6 +137,7 @@ contract Child is Base {
         .find((node) => node.name === "Snapshot" && node.containerName === "Child");
       assert.ok(entry, "expected entry function node");
       assert.ok(helper, "expected helper function node");
+      assert.ok(helperContract, "expected same-name helper contract node");
       assert.ok(inherited, "expected inherited function node");
       assert.ok(count, "expected count state variable node");
       assert.ok(updated, "expected Updated event node");
@@ -334,6 +341,16 @@ contract Child is Base {
       assert.equal(cappedSearch.matches.length, 1);
       assert.equal(cappedSearch.truncated, true);
 
+      const unconstrainedHelperQuery = graph.query({
+        kind: "callers",
+        query: "helper",
+      });
+      assert.equal(
+        unconstrainedHelperQuery.targetId,
+        helperContract.id,
+        "expected unconstrained text query to show why callers must request callable targets",
+      );
+
       const helperCallers = graph.query({
         kind: "callers",
         query: "helper",
@@ -388,7 +405,7 @@ contract Child is Base {
       );
 
       const stats = graph.getStats();
-      assert.equal(stats.nodesByKind.contract, 2);
+      assert.equal(stats.nodesByKind.contract, 3);
       assert.equal(stats.edgesByKind.inherits, 1);
       assert.ok((stats.edgesByKind.usesType ?? 0) >= 3);
       assert.ok(
@@ -405,7 +422,7 @@ contract Child is Base {
       );
       assert.equal(stats.unresolvedEdgeCount, 0);
       assert.ok(stats.edgeCount >= graphSnapshot.edges.length);
-      assert.equal(stats.filesByTier.project, 2);
+      assert.equal(stats.filesByTier.project, 3);
       assert.ok(
         typeof stats.lastRebuildDurationMs === "number",
         "expected rebuild timing to be recorded",
