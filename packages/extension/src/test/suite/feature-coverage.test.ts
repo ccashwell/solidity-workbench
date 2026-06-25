@@ -208,6 +208,19 @@ describe("Feature coverage — project graph export", () => {
         containerName: "Vault",
         metadata: { visibility: "external" },
       },
+      {
+        id: "file:///workspace/src/Vault.sol#Vault:stateVariable:balances:2:20",
+        kind: "stateVariable",
+        name: "balances",
+        qualifiedName: "Vault.balances",
+        uri: "file:///workspace/src/Vault.sol",
+        filePath: "/workspace/src/Vault.sol",
+        tier: "project",
+        range: { start: { line: 2, character: 4 }, end: { line: 2, character: 53 } },
+        selectionRange: { start: { line: 2, character: 20 }, end: { line: 2, character: 28 } },
+        containerName: "Vault",
+        metadata: { visibility: "public", publicGetter: true, getterArgumentCount: 1 },
+      },
     ],
     edges: [
       {
@@ -381,6 +394,29 @@ describe("Feature coverage — project graph export", () => {
     assert.match(html, /Heuristic resolution - verify before relying on this edge/);
     assert.match(html, /row\.classList\.add\("unresolved"\)/);
     assert.match(html, /confidence\.classList\.add\("warning"\)/);
+  });
+
+  it("renders project graph node metadata badges", () => {
+    type ProjectGraphExporterInternals = {
+      buildHtml(
+        graph: ProjectGraphResult,
+        focusId?: string,
+        graphStats?: ProjectGraphStatsResult,
+      ): string;
+    };
+    const exporter = new ProjectGraphExporter(
+      {} as ConstructorParameters<typeof ProjectGraphExporter>[0],
+    ) as unknown as ProjectGraphExporterInternals;
+
+    const html = exporter.buildHtml(sampleGraph, sampleGraph.focusId);
+
+    assert.match(html, /function nodeBadges\(node\)/);
+    assert.match(html, /function appendNodeBadges\(parent, node\)/);
+    assert.match(html, /function nodeMetadataSearchText\(node\)/);
+    assert.match(html, /className = "node-badge " \+ badge\.className/);
+    assert.match(html, /"visibility":"public"/);
+    assert.match(html, /"publicGetter":true/);
+    assert.match(html, /"getterArgumentCount":1/);
   });
 
   it("renders embedded project graph search and query controls", () => {

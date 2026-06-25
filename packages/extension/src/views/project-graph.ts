@@ -1544,6 +1544,11 @@ export class ProjectGraphExporter {
     background: var(--list-active);
     color: var(--list-active-fg);
   }
+  .row-text {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
   .swatch {
     width: 10px;
     height: 10px;
@@ -1569,6 +1574,25 @@ export class ProjectGraphExporter {
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 11px;
+  }
+  .badge-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-width: 0;
+  }
+  .node-badge {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1;
+    padding: 2px 5px;
+    white-space: nowrap;
+  }
+  .node-badge.getter {
+    border-color: var(--accent);
+    color: var(--accent);
   }
   .canvas {
     min-width: 0;
@@ -1758,7 +1782,50 @@ export class ProjectGraphExporter {
   }
 
   function searchable(node) {
-    return [node.name, node.qualifiedName, node.kind, node.containerName, node.filePath, node.tier].filter(Boolean).join(" ").toLowerCase();
+    return [node.name, node.qualifiedName, node.kind, node.containerName, node.filePath, node.tier, nodeMetadataSearchText(node)].filter(Boolean).join(" ").toLowerCase();
+  }
+
+  function nodeMetadata(node) {
+    return node.metadata && typeof node.metadata === "object" ? node.metadata : {};
+  }
+
+  function nodeBadges(node) {
+    const metadata = nodeMetadata(node);
+    const badges = [];
+    if (typeof metadata.visibility === "string" && metadata.visibility) {
+      badges.push({ label: metadata.visibility, className: "visibility" });
+    }
+    if (metadata.publicGetter === true) {
+      const argc = typeof metadata.getterArgumentCount === "number" ? metadata.getterArgumentCount : 0;
+      badges.push({ label: argc > 0 ? "getter +" + argc : "getter", className: "getter" });
+    }
+    return badges;
+  }
+
+  function nodeBadgeText(node) {
+    return nodeBadges(node).map((badge) => badge.label).join(" · ");
+  }
+
+  function nodeMetadataSearchText(node) {
+    const metadata = nodeMetadata(node);
+    return [
+      nodeBadgeText(node),
+      metadata.publicGetter === true ? "public getter" : "",
+    ].filter(Boolean).join(" ");
+  }
+
+  function appendNodeBadges(parent, node) {
+    const badges = nodeBadges(node);
+    if (badges.length === 0) return;
+    const row = document.createElement("div");
+    row.className = "badge-row";
+    for (const badge of badges) {
+      const el = document.createElement("span");
+      el.className = "node-badge " + badge.className;
+      el.textContent = badge.label;
+      row.append(el);
+    }
+    parent.append(row);
   }
 
   function setGraph(nextGraph, nextFocusId, nextScope, nextStats, nextResultDiagnostics) {
@@ -1953,6 +2020,7 @@ export class ProjectGraphExporter {
       const swatch = document.createElement("span");
       swatch.className = "swatch " + node.kind;
       const text = document.createElement("span");
+      text.className = "row-text";
       const name = document.createElement("span");
       name.className = "row-name";
       name.textContent = node.qualifiedName;
@@ -1960,6 +2028,7 @@ export class ProjectGraphExporter {
       meta.className = "row-meta";
       meta.textContent = node.kind + " · " + node.tier;
       text.append(name, meta);
+      appendNodeBadges(text, node);
       row.append(swatch, text);
       nodeList.append(row);
     }
@@ -1985,6 +2054,7 @@ export class ProjectGraphExporter {
     meta.title = node.filePath || "";
     meta.textContent = node.kind + " · " + node.tier + (node.containerName ? " · " + node.containerName : "");
     details.append(title, meta);
+    appendNodeBadges(details, node);
 
     const actions = document.createElement("div");
     actions.className = "details-actions";
@@ -2195,7 +2265,7 @@ export class ProjectGraphExporter {
       meta.setAttribute("class", "meta");
       meta.setAttribute("x", "95");
       meta.setAttribute("y", "38");
-      meta.textContent = truncate(node.containerName || node.kind, 26);
+      meta.textContent = truncate([node.containerName || node.kind, nodeBadgeText(node)].filter(Boolean).join(" · "), 26);
       group.append(rect, name, meta);
       svg.append(group);
     }
