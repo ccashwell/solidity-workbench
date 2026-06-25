@@ -34,6 +34,7 @@ import {
   summarizeProjectGraphCompilerStatus,
   projectGraphQueryMissLabel,
   projectGraphQueryTargetKinds,
+  projectGraphIncludeDependenciesFlag,
   projectGraphIncludeTestsFlag,
   projectGraphShowMoreControlState,
   PROJECT_GRAPH_CALLABLE_NODE_KINDS,
@@ -929,10 +930,12 @@ describe("Feature coverage — project graph export", () => {
     assert.match(html, /id="serverQueryKind"/);
     assert.match(html, /id="serverQuery"/);
     assert.match(html, /id="includeTests"/);
+    assert.match(html, /id="includeDependencies"/);
     assert.match(html, /id="resultBanner"/);
     assert.match(html, /type: "searchGraph"/);
     assert.match(html, /type: "queryGraph"/);
     assert.match(html, /includeTests/);
+    assert.match(html, /includeDependencies/);
     assert.match(html, /resultDiagnosticsText/);
     assert.match(html, /message\.resultDiagnostics/);
     assert.match(html, /message\.clearQuery === true/);
@@ -995,7 +998,22 @@ describe("Feature coverage — project graph export", () => {
       undefined,
       "includeTests should be controlled by the live checkbox or command flag, not persisted state",
     );
-    assert.deepEqual(runtime.lastPostedMessage(), { type: "loadCursor", includeTests: true });
+    assert.deepEqual(runtime.lastPostedMessage(), {
+      type: "loadCursor",
+      includeTests: true,
+      includeDependencies: false,
+    });
+    runtime.change("includeDependencies", true);
+    assert.equal(
+      runtime.lastState()?.includeDependencies,
+      undefined,
+      "includeDependencies should be controlled by the live checkbox or command flag, not persisted state",
+    );
+    assert.deepEqual(runtime.lastPostedMessage(), {
+      type: "loadCursor",
+      includeTests: true,
+      includeDependencies: true,
+    });
 
     runtime.input("search", "helper");
     assert.equal(runtime.lastState()?.query, "helper");
@@ -1006,6 +1024,7 @@ describe("Feature coverage — project graph export", () => {
       type: "searchGraph",
       query: "helper",
       includeTests: true,
+      includeDependencies: true,
     });
     assert.equal(runtime.element("stats").textContent, "Searching project graph…");
   });
@@ -1076,6 +1095,11 @@ describe("Feature coverage — project graph export", () => {
     assert.equal(projectGraphIncludeTestsFlag({ includeTests: "true" }), undefined);
     assert.equal(projectGraphIncludeTestsFlag({}), undefined);
     assert.equal(projectGraphIncludeTestsFlag(undefined), undefined);
+    assert.equal(projectGraphIncludeDependenciesFlag({ includeDependencies: true }), true);
+    assert.equal(projectGraphIncludeDependenciesFlag({ includeDependencies: false }), false);
+    assert.equal(projectGraphIncludeDependenciesFlag({ includeDependencies: "true" }), undefined);
+    assert.equal(projectGraphIncludeDependenciesFlag({}), undefined);
+    assert.equal(projectGraphIncludeDependenciesFlag(undefined), undefined);
   });
 
   it("computes project graph node-kind filters", () => {
@@ -1789,6 +1813,7 @@ interface RuntimeState {
   renderedNodeLimit?: number;
   visibleEdges?: string[];
   includeTests?: boolean;
+  includeDependencies?: boolean;
 }
 
 type RuntimeMessage = Record<string, unknown>;

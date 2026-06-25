@@ -3315,6 +3315,31 @@ contract Dep {
         .find((node) => node.name === "total" && node.containerName === "Dep");
       assert.ok(depRead, "expected dependency function declaration node");
       assert.ok(depTotal, "expected dependency state declaration node");
+      assert.equal(
+        declarationsOnlyDeps.toProjectGraph().nodes.some((node) => node.containerName === "Dep"),
+        false,
+        "expected dependency declarations to stay hidden from project graph results by default",
+      );
+      assert.equal(
+        declarationsOnlyDeps
+          .toProjectGraph(undefined, undefined, false, true)
+          .nodes.some((node) => node.containerName === "Dep"),
+        true,
+        "expected includeDependencies to expose indexed dependency declarations",
+      );
+      assert.equal(
+        declarationsOnlyDeps
+          .search({ query: "Dep" })
+          .matches.some((match) => match.node.containerName === "Dep" || match.node.name === "Dep"),
+        false,
+        "expected dependency declarations to stay hidden from graph search by default",
+      );
+      assert.ok(
+        declarationsOnlyDeps
+          .search({ query: "Dep", includeDependencies: true })
+          .matches.some((match) => match.node.containerName === "Dep" || match.node.name === "Dep"),
+        "expected includeDependencies to expose dependency declarations in graph search",
+      );
 
       while (!declarationsOnlyDeps.indexRelationshipBatch(10, 10).complete) {
         // Drain project/test relationship work.

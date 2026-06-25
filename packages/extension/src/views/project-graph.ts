@@ -53,6 +53,11 @@ const EDGE_KIND_ITEMS: { label: ProjectGraphEdgeKind; description: string }[] = 
 type ProjectGraphExportFormat = "json" | "dot" | "graphml" | "codegraph-json";
 export interface ProjectGraphCommandOptions {
   includeTests?: boolean;
+  includeDependencies?: boolean;
+}
+interface ProjectGraphScope {
+  includeTests: boolean;
+  includeDependencies: boolean;
 }
 type ProjectGraphInternalRequest =
   | { method: "graph"; params?: GetProjectGraphParams }
@@ -129,6 +134,12 @@ export function projectGraphIncludeTestsFlag(options: unknown): boolean | undefi
   if (!options || typeof options !== "object") return undefined;
   const includeTests = (options as { includeTests?: unknown }).includeTests;
   return typeof includeTests === "boolean" ? includeTests : undefined;
+}
+
+export function projectGraphIncludeDependenciesFlag(options: unknown): boolean | undefined {
+  if (!options || typeof options !== "object") return undefined;
+  const includeDependencies = (options as { includeDependencies?: unknown }).includeDependencies;
+  return typeof includeDependencies === "boolean" ? includeDependencies : undefined;
 }
 
 export function projectGraphQueryMissLabel(
@@ -714,6 +725,7 @@ export class ProjectGraphExporter {
   private lastSolidityPosition: { uri: vscode.Uri; position: vscode.Position } | undefined;
   private projectGraphIndexingVisible = false;
   private includeProjectGraphTests = false;
+  private includeProjectGraphDependencies = false;
 
   private async showProjectGraph(
     options: ProjectGraphCommandOptions & { cursorNeighborhood?: boolean } = {},
@@ -726,8 +738,11 @@ export class ProjectGraphExporter {
 
     const includeTestsFlag = projectGraphIncludeTestsFlag(options);
     this.includeProjectGraphTests = includeTestsFlag === true;
+    const includeDependenciesFlag = projectGraphIncludeDependenciesFlag(options);
+    this.includeProjectGraphDependencies = includeDependenciesFlag === true;
 
     const focused = this.activeSolidityPosition();
+    const graphScope = this.projectGraphScope();
     let graph = focused
       ? await this.client.sendRequest<ProjectGraphResult>(GetProjectGraphNeighborhood, {
           uri: focused.uri.toString(),
@@ -747,13 +762,13 @@ export class ProjectGraphExporter {
           ],
           direction: "both",
           maxNodes: 240,
-          includeTests: this.includeProjectGraphTests,
+          ...graphScope,
         })
       : undefined;
     if (!graph || graph.nodes.length === 0) {
       graph = await this.client.sendRequest<ProjectGraphResult>(GetProjectGraph, {
         maxNodes: INTERACTIVE_GRAPH_NODE_LIMIT,
-        includeTests: this.includeProjectGraphTests,
+        ...graphScope,
       });
     }
     if (graph.nodes.length === 0) {
@@ -774,6 +789,8 @@ export class ProjectGraphExporter {
       this.panel.onDidDispose(() => {
         this.panel = undefined;
         this.projectGraphIndexingVisible = false;
+        this.includeProjectGraphTests = false;
+        this.includeProjectGraphDependencies = false;
       });
       this.panel.webview.onDidReceiveMessage(async (msg) => {
         if (msg.type === "navigate" && typeof msg.uri === "string") {
@@ -795,7 +812,7 @@ export class ProjectGraphExporter {
         if (msg.type === "loadWorkspace") {
           const fullGraph = await this.client.sendRequest<ProjectGraphResult>(GetProjectGraph, {
             maxNodes: INTERACTIVE_GRAPH_NODE_LIMIT,
-            includeTests: this.includeTestsFromMessage(msg),
+            ...this.scopeFromMessage(msg),
           });
           const stats = await this.getProjectGraphStats();
           if (this.panel) {
@@ -811,7 +828,7 @@ export class ProjectGraphExporter {
         }
 
         if (msg.type === "loadCursor") {
-          this.includeTestsFromMessage(msg);
+          this.scopeFromMessage(msg);
           await this.postCursorNeighborhood();
           return;
         }
@@ -830,7 +847,7 @@ export class ProjectGraphExporter {
               edgeDirection: "both",
               maxResults: 80,
               maxEdgesPerNode: 24,
-              includeTests: this.includeTestsFromMessage(msg),
+              ...this.scopeFromMessage(msg),
             },
           );
           if (result.matches.length === 0) {
@@ -873,7 +890,7 @@ export class ProjectGraphExporter {
             query: target ? undefined : query,
             targetKinds: projectGraphQueryTargetKinds(kind),
             maxNodes: 240,
-            includeTests: this.includeTestsFromMessage(msg),
+            ...this.scopeFromMessage(msg),
           });
           if (!result.found) {
             await this.postProjectGraphStatus(projectGraphQueryMissLabel(kind, result.missReason));
@@ -924,7 +941,7 @@ export class ProjectGraphExporter {
               direction: "both",
               edgeKinds,
               maxDepth: 16,
-              includeTests: this.includeTestsFromMessage(msg),
+              ...this.scopeFromMessage(msg),
             },
           );
           if (!pathGraph.found) {
@@ -956,6 +973,7 @@ export class ProjectGraphExporter {
       graph.focusId ?? this.findActiveNodeHint(graph),
       graphStats,
       this.includeProjectGraphTests,
+      this.includeProjectGraphDependencies,
     );
 
     if (options.cursorNeighborhood && focused) {
@@ -970,8 +988,8 @@ export class ProjectGraphExporter {
     });
     if (!format) return;
 
-    const includeTests = await this.promptProjectGraphIncludeTests(options);
-    if (includeTests === undefined) return;
+    const graphScope = await this.promptProjectGraphScope(options);
+    if (!graphScope) return;
 
     const selected = await vscode.window.showQuickPick(
       [{ label: "all", description: "all graph edges" }, ...EDGE_KIND_ITEMS],
@@ -993,7 +1011,7 @@ export class ProjectGraphExporter {
     const [graph, stats] = await Promise.all([
       this.client.sendRequest<ProjectGraphResult>(GetProjectGraph, {
         edgeKinds,
-        includeTests,
+        ...graphScope,
       }),
       this.getProjectGraphStats(),
     ]);
@@ -1013,8 +1031,8 @@ export class ProjectGraphExporter {
     });
     if (!query?.trim()) return;
 
-    const includeTests = await this.promptProjectGraphIncludeTests(options);
-    if (includeTests === undefined) return;
+    const graphScope = await this.promptProjectGraphScope(options);
+    if (!graphScope) return;
 
     const result = await this.client.sendRequest<ProjectGraphSearchResult>(SearchProjectGraph, {
       query,
@@ -1022,7 +1040,7 @@ export class ProjectGraphExporter {
       edgeDirection: "both",
       maxResults: 80,
       maxEdgesPerNode: 12,
-      includeTests,
+      ...graphScope,
     });
     if (result.matches.length === 0) {
       vscode.window.showInformationMessage(`No project graph matches for '${query}'.`);
@@ -1058,8 +1076,8 @@ export class ProjectGraphExporter {
     );
     if (!pickedKind) return;
 
-    const includeTests = await this.promptProjectGraphIncludeTests(options);
-    if (includeTests === undefined) return;
+    const graphScope = await this.promptProjectGraphScope(options);
+    if (!graphScope) return;
 
     const focused = this.activeSolidityPosition();
     const useCursor = focused
@@ -1095,7 +1113,7 @@ export class ProjectGraphExporter {
       query: textQuery,
       targetKinds: projectGraphQueryTargetKinds(pickedKind.queryKind),
       maxNodes: 120,
-      includeTests,
+      ...graphScope,
     });
 
     if (!result.found) {
@@ -1162,39 +1180,64 @@ export class ProjectGraphExporter {
     }
   }
 
-  private async promptProjectGraphIncludeTests(
+  private async promptProjectGraphScope(
     options?: ProjectGraphCommandOptions,
-  ): Promise<boolean | undefined> {
-    const explicit = projectGraphIncludeTestsFlag(options);
-    if (explicit !== undefined) {
-      this.includeProjectGraphTests = explicit;
-      return explicit;
+  ): Promise<ProjectGraphScope | undefined> {
+    const explicitTests = projectGraphIncludeTestsFlag(options);
+    const explicitDependencies = projectGraphIncludeDependenciesFlag(options);
+    if (explicitTests !== undefined || explicitDependencies !== undefined) {
+      const scope = {
+        includeTests: explicitTests ?? false,
+        includeDependencies: explicitDependencies ?? false,
+      };
+      this.applyProjectGraphScope(scope);
+      return scope;
     }
 
-    const items: (vscode.QuickPickItem & { includeTests: boolean })[] = [
+    const current = this.projectGraphScope();
+    const items: (vscode.QuickPickItem & ProjectGraphScope)[] = [
       {
         label: "Project Sources Only",
-        description: this.includeProjectGraphTests ? "" : "current",
-        detail: "Exclude test/ files and contracts that extend Foundry's Test base.",
+        description: !current.includeTests && !current.includeDependencies ? "current" : "",
+        detail: "Exclude test files and indexed dependency files.",
         includeTests: false,
+        includeDependencies: false,
       },
       {
         label: "Include Tests",
-        description: this.includeProjectGraphTests ? "current" : "",
+        description: current.includeTests && !current.includeDependencies ? "current" : "",
         detail: "Include test/ files and contracts that extend Foundry's Test base.",
         includeTests: true,
+        includeDependencies: false,
+      },
+      {
+        label: "Include Dependencies",
+        description: !current.includeTests && current.includeDependencies ? "current" : "",
+        detail: "Include indexed dependency declarations and relationship edges.",
+        includeTests: false,
+        includeDependencies: true,
+      },
+      {
+        label: "Include Tests and Dependencies",
+        description: current.includeTests && current.includeDependencies ? "current" : "",
+        detail: "Include tests and indexed dependency graph nodes.",
+        includeTests: true,
+        includeDependencies: true,
       },
     ];
-    if (this.includeProjectGraphTests) items.reverse();
 
     const picked = await vscode.window.showQuickPick(items, {
       title: "Solidity Project Graph Scope",
-      placeHolder: "Choose whether to include test files",
+      placeHolder: "Choose graph nodes to include",
     });
     if (!picked) return undefined;
 
-    this.includeProjectGraphTests = picked.includeTests;
-    return picked.includeTests;
+    const scope = {
+      includeTests: picked.includeTests,
+      includeDependencies: picked.includeDependencies,
+    };
+    this.applyProjectGraphScope(scope);
+    return scope;
   }
 
   private toGraphSearchQuickPick(
@@ -1359,9 +1402,28 @@ export class ProjectGraphExporter {
     return this.client.sendRequest<ProjectGraphStatsResult>(GetProjectGraphStats);
   }
 
-  private includeTestsFromMessage(msg: { includeTests?: unknown }): boolean {
-    this.includeProjectGraphTests = msg.includeTests === true;
-    return this.includeProjectGraphTests;
+  private projectGraphScope(): ProjectGraphScope {
+    return {
+      includeTests: this.includeProjectGraphTests,
+      includeDependencies: this.includeProjectGraphDependencies,
+    };
+  }
+
+  private applyProjectGraphScope(scope: ProjectGraphScope): void {
+    this.includeProjectGraphTests = scope.includeTests;
+    this.includeProjectGraphDependencies = scope.includeDependencies;
+  }
+
+  private scopeFromMessage(msg: {
+    includeTests?: unknown;
+    includeDependencies?: unknown;
+  }): ProjectGraphScope {
+    const scope = {
+      includeTests: msg.includeTests === true,
+      includeDependencies: msg.includeDependencies === true,
+    };
+    this.applyProjectGraphScope(scope);
+    return scope;
   }
 
   private async rebuildProjectGraph(): Promise<void> {
@@ -1452,7 +1514,7 @@ export class ProjectGraphExporter {
       ],
       direction: "both",
       maxNodes: 240,
-      includeTests: this.includeProjectGraphTests,
+      ...this.projectGraphScope(),
     });
     if (this.panel) {
       await this.panel.webview.postMessage({
@@ -1514,11 +1576,15 @@ export class ProjectGraphExporter {
     focusId?: string,
     graphStats?: ProjectGraphStatsResult,
     includeTests = false,
+    includeDependencies = false,
   ): string {
-    const graphJson = JSON.stringify({ graph, focusId, stats: graphStats, includeTests }).replace(
-      /</g,
-      "\\u003c",
-    );
+    const graphJson = JSON.stringify({
+      graph,
+      focusId,
+      stats: graphStats,
+      includeTests,
+      includeDependencies,
+    }).replace(/</g, "\\u003c");
     const edgeItemsJson = JSON.stringify(EDGE_KIND_ITEMS).replace(/</g, "\\u003c");
     const confidenceItemsJson = JSON.stringify(RESOLUTION_CONFIDENCE_VALUES).replace(
       /</g,
@@ -1951,6 +2017,10 @@ export class ProjectGraphExporter {
       <input id="includeTests" type="checkbox">
       Tests
     </label>
+    <label title="Include indexed dependency files">
+      <input id="includeDependencies" type="checkbox">
+      Deps
+    </label>
     <select id="quality" title="Filter edges by resolution quality">
       <option value="all">All Edge Quality</option>
       <option value="solc">Solc-confirmed</option>
@@ -2012,6 +2082,7 @@ export class ProjectGraphExporter {
   let nodeKind = typeof persisted.nodeKind === "string" && nodeKindValues.has(persisted.nodeKind) ? persisted.nodeKind : "all";
   let quality = typeof persisted.quality === "string" && qualityValues.has(persisted.quality) ? persisted.quality : "all";
   let includeTests = Boolean(payload.includeTests);
+  let includeDependencies = Boolean(payload.includeDependencies);
   let zoom = typeof persisted.zoom === "number" ? Math.max(0.45, Math.min(1.8, persisted.zoom)) : 1;
   let pathMode = Boolean(persisted.pathMode);
   const defaultRenderedNodeLimit = ${PROJECT_GRAPH_DEFAULT_RENDERED_NODE_LIMIT};
@@ -2037,6 +2108,7 @@ export class ProjectGraphExporter {
   const scopeSelect = document.getElementById("scope");
   const nodeKindSelect = document.getElementById("nodeKind");
   const includeTestsCheckbox = document.getElementById("includeTests");
+  const includeDependenciesCheckbox = document.getElementById("includeDependencies");
   const qualitySelect = document.getElementById("quality");
   const serverQueryKind = document.getElementById("serverQueryKind");
   const zoomLabel = document.getElementById("zoomLabel");
@@ -2701,6 +2773,7 @@ export class ProjectGraphExporter {
       toId,
       edgeKinds: Array.from(visibleEdges),
       includeTests,
+      includeDependencies,
     });
   }
 
@@ -2742,11 +2815,24 @@ export class ProjectGraphExporter {
     vscode.postMessage({
       type: scope === "neighbors" ? "loadCursor" : "loadWorkspace",
       includeTests,
+      includeDependencies,
+    });
+  });
+  includeDependenciesCheckbox.addEventListener("change", () => {
+    includeDependencies = includeDependenciesCheckbox.checked;
+    resetRenderedNodeLimit();
+    saveUiState();
+    setStatus(includeDependencies ? "Loading graph with dependencies…" : "Loading graph without dependencies…");
+    vscode.postMessage({
+      type: scope === "neighbors" ? "loadCursor" : "loadWorkspace",
+      includeTests,
+      includeDependencies,
     });
   });
   scopeSelect.value = scope;
   qualitySelect.value = quality;
   includeTestsCheckbox.checked = includeTests;
+  includeDependenciesCheckbox.checked = includeDependencies;
   search.value = query;
   document.getElementById("zoomOut").addEventListener("click", () => setZoom(zoom - 0.1));
   document.getElementById("zoomIn").addEventListener("click", () => setZoom(zoom + 0.1));
@@ -2771,7 +2857,7 @@ export class ProjectGraphExporter {
       return;
     }
     setStatus("Searching project graph…");
-    vscode.postMessage({ type: "searchGraph", query: serverQuery, includeTests });
+    vscode.postMessage({ type: "searchGraph", query: serverQuery, includeTests, includeDependencies });
   });
   document.getElementById("serverQuery").addEventListener("click", () => {
     const serverQuery = search.value.trim();
@@ -2786,13 +2872,14 @@ export class ProjectGraphExporter {
       targetId: activeId || undefined,
       query: serverQuery,
       includeTests,
+      includeDependencies,
     });
   });
   document.getElementById("workspace").addEventListener("click", () => {
-    vscode.postMessage({ type: "loadWorkspace", includeTests });
+    vscode.postMessage({ type: "loadWorkspace", includeTests, includeDependencies });
   });
   document.getElementById("cursor").addEventListener("click", () => {
-    vscode.postMessage({ type: "loadCursor", includeTests });
+    vscode.postMessage({ type: "loadCursor", includeTests, includeDependencies });
   });
   document.getElementById("rebuild").addEventListener("click", () => {
     setStatus("Rebuilding project graph…");

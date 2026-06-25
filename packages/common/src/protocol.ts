@@ -243,6 +243,8 @@ export interface GetProjectGraphParams {
   maxNodes?: number;
   /** Include test files and contracts that extend Foundry's Test base. Defaults to false. */
   includeTests?: boolean;
+  /** Include dependency files indexed by projectGraph.dependencyIndexing. Defaults to false. */
+  includeDependencies?: boolean;
 }
 
 /** Request a focused project graph neighborhood around a symbol or source position. */
@@ -267,6 +269,8 @@ export interface GetProjectGraphNeighborhoodParams {
   includeContainers?: boolean;
   /** Include test files and contracts that extend Foundry's Test base. Defaults to false. */
   includeTests?: boolean;
+  /** Include dependency files indexed by projectGraph.dependencyIndexing. Defaults to false. */
+  includeDependencies?: boolean;
 }
 
 /** Request the shortest graph path between two nodes or source positions. */
@@ -292,6 +296,8 @@ export interface GetProjectGraphPathParams {
   maxDepth?: number;
   /** Include test files and contracts that extend Foundry's Test base. Defaults to false. */
   includeTests?: boolean;
+  /** Include dependency files indexed by projectGraph.dependencyIndexing. Defaults to false. */
+  includeDependencies?: boolean;
 }
 
 export interface ProjectGraphNode {
@@ -361,6 +367,8 @@ export interface SearchProjectGraphParams {
   maxEdgesPerNode?: number;
   /** Include test files and contracts that extend Foundry's Test base. Defaults to false. */
   includeTests?: boolean;
+  /** Include dependency files indexed by projectGraph.dependencyIndexing. Defaults to false. */
+  includeDependencies?: boolean;
 }
 
 export interface ProjectGraphSearchMatch {
@@ -471,6 +479,8 @@ export interface QueryProjectGraphParams {
   includeContainers?: boolean;
   /** Include test files and contracts that extend Foundry's Test base. Defaults to false. */
   includeTests?: boolean;
+  /** Include dependency files indexed by projectGraph.dependencyIndexing. Defaults to false. */
+  includeDependencies?: boolean;
 }
 
 export interface ProjectGraphQueryResult extends ProjectGraphResult {

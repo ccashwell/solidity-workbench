@@ -135,6 +135,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Inheritance Graph now opens even when the default project-only scope has no
   visible contracts, so users can explicitly opt into tests or dependencies
   from the webview instead of being blocked by an empty initial result.
+- Project Graph dependency nodes now stay hidden from graph, search, query, and
+  path results unless the request or webview explicitly includes dependencies.
 - VSIX verification now lives in a shared `scripts/verify-vsix.mjs` checker,
   and local packaging, CI, and publish workflows all verify the same exact
   versioned artifact before upload or release.

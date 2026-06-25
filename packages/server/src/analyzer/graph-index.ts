@@ -58,6 +58,11 @@ export type SolidityGraphNode = ProjectGraphNode;
 export type SolidityGraphEdge = ProjectGraphEdge;
 export type GraphDependencyIndexingMode = "disabled" | "declarations" | "relationships";
 
+interface GraphScopeFilter {
+  includeTests?: boolean;
+  includeDependencies?: boolean;
+}
+
 const PROJECT_GRAPH_PERFORMANCE_BUDGET = {
   requestWarningMs: 500,
   requestSlowMs: 2_000,
@@ -660,9 +665,10 @@ export class GraphIndex {
     edgeKinds?: ProjectGraphEdgeKind[],
     maxNodes?: number,
     includeTests = false,
+    includeDependencies = false,
   ): ProjectGraphResult {
     const allowed = edgeKinds?.length ? new Set<ProjectGraphEdgeKind>(edgeKinds) : null;
-    const excluded = this.testGraphNodeIds(includeTests);
+    const excluded = this.excludedGraphNodeIds({ includeTests, includeDependencies });
     let nodes = this.getNodes().filter((node) => !excluded.has(node.id));
     let edges = allowed ? this.edges.filter((edge) => allowed.has(edge.kind)) : this.edges;
     edges = edges.filter((edge) => !excluded.has(edge.source) && !excluded.has(edge.target));
@@ -694,7 +700,7 @@ export class GraphIndex {
 
     const query = normalizeSearchText(rawQuery);
     const allowedKinds = params.kinds?.length ? new Set<ProjectGraphNodeKind>(params.kinds) : null;
-    const excluded = this.testGraphNodeIds(params.includeTests ?? false);
+    const excluded = this.excludedGraphNodeIds(params);
     const maxResults = Math.max(1, Math.min(params.maxResults ?? 50, 500));
     const maxEdgesPerNode = Math.max(0, Math.min(params.maxEdgesPerNode ?? 32, 250));
     const edgeKinds = params.edgeKinds?.length
@@ -756,8 +762,7 @@ export class GraphIndex {
   query(params: QueryProjectGraphParams): ProjectGraphQueryResult {
     const resolvedTarget = this.resolveGraphQueryTarget(params);
     const target = resolvedTarget.target;
-    const includeTests = params.includeTests ?? false;
-    const excluded = this.testGraphNodeIds(includeTests);
+    const excluded = this.excludedGraphNodeIds(params);
     if (!target) {
       return {
         nodes: [],
@@ -797,7 +802,8 @@ export class GraphIndex {
       edgeKinds,
       maxNodes: params.maxNodes,
       includeContainers: params.includeContainers,
-      includeTests,
+      includeTests: params.includeTests,
+      includeDependencies: params.includeDependencies,
     });
 
     return {
@@ -815,7 +821,7 @@ export class GraphIndex {
     const root = this.resolveNeighborhoodRoot(params);
     if (!root) return { nodes: [], edges: [] };
 
-    const excluded = this.testGraphNodeIds(params.includeTests ?? false);
+    const excluded = this.excludedGraphNodeIds(params);
     if (excluded.has(root.id)) return { nodes: [], edges: [] };
 
     const depth = Math.max(0, Math.min(params.depth ?? 2, 8));
@@ -890,7 +896,7 @@ export class GraphIndex {
     const from = this.resolveGraphEndpoint(params.from);
     const to = this.resolveGraphEndpoint(params.to);
     if (!from || !to) return { nodes: [], edges: [], fromId: from?.id, toId: to?.id, found: false };
-    const excluded = this.testGraphNodeIds(params.includeTests ?? false);
+    const excluded = this.excludedGraphNodeIds(params);
     if (excluded.has(from.id) || excluded.has(to.id)) {
       return { nodes: [], edges: [], fromId: from.id, toId: to.id, found: false };
     }
@@ -1193,8 +1199,7 @@ export class GraphIndex {
     target?: SolidityGraphNode;
     missReason: ProjectGraphQueryMissReason;
   } {
-    const includeTests = params.includeTests ?? false;
-    const excluded = this.testGraphNodeIds(includeTests);
+    const excluded = this.excludedGraphNodeIds(params);
     const allowedKinds = params.targetKinds?.length
       ? new Set<ProjectGraphNodeKind>(params.targetKinds)
       : null;
@@ -1227,13 +1232,19 @@ export class GraphIndex {
       query,
       kinds: params.targetKinds,
       maxResults: 500,
-      includeTests,
+      includeTests: params.includeTests,
+      includeDependencies: params.includeDependencies,
     }).matches.find((match) =>
       this.isAllowedGraphQueryTarget(params.kind, match.node, allowedKinds),
     )?.node;
     if (target) return { target, missReason: "targetNotFound" };
     const mismatchedTarget = params.targetKinds?.length
-      ? this.search({ query, maxResults: 1, includeTests }).matches[0]?.node
+      ? this.search({
+          query,
+          maxResults: 1,
+          includeTests: params.includeTests,
+          includeDependencies: params.includeDependencies,
+        }).matches[0]?.node
       : undefined;
     return mismatchedTarget
       ? { missReason: "targetKindMismatch" }
@@ -1339,37 +1350,42 @@ export class GraphIndex {
     });
   }
 
-  private testGraphNodeIds(includeTests: boolean): Set<string> {
+  private excludedGraphNodeIds(scope: GraphScopeFilter): Set<string> {
     const excluded = new Set<string>();
-    if (includeTests) return excluded;
+    const includeTests = scope.includeTests === true;
+    const includeDependencies = scope.includeDependencies === true;
+    if (includeTests && includeDependencies) return excluded;
 
     for (const node of this.nodes.values()) {
-      if (node.tier === "tests") excluded.add(node.id);
+      if (!includeTests && node.tier === "tests") excluded.add(node.id);
+      if (!includeDependencies && node.tier === "deps") excluded.add(node.id);
     }
 
     let changed = true;
     while (changed) {
       changed = false;
 
-      for (const node of this.nodes.values()) {
-        if (excluded.has(node.id)) continue;
-        if (!this.isContractLikeNode(node)) continue;
-        if (this.extendsFoundryTest(node.id, excluded)) {
-          excluded.add(node.id);
-          changed = true;
+      if (!includeTests) {
+        for (const node of this.nodes.values()) {
+          if (excluded.has(node.id)) continue;
+          if (!this.isContractLikeNode(node)) continue;
+          if (this.extendsFoundryTest(node.id, excluded)) {
+            excluded.add(node.id);
+            changed = true;
+          }
         }
-      }
 
-      for (const node of this.nodes.values()) {
-        if (excluded.has(node.id) || node.name !== "Test" || !this.isContractLikeNode(node)) {
-          continue;
-        }
-        const inheritedByExcluded = (this.edgesByTarget.get(node.id) ?? []).some(
-          (edge) => edge.kind === "inherits" && excluded.has(edge.source),
-        );
-        if (inheritedByExcluded) {
-          excluded.add(node.id);
-          changed = true;
+        for (const node of this.nodes.values()) {
+          if (excluded.has(node.id) || node.name !== "Test" || !this.isContractLikeNode(node)) {
+            continue;
+          }
+          const inheritedByExcluded = (this.edgesByTarget.get(node.id) ?? []).some(
+            (edge) => edge.kind === "inherits" && excluded.has(edge.source),
+          );
+          if (inheritedByExcluded) {
+            excluded.add(node.id);
+            changed = true;
+          }
         }
       }
 
