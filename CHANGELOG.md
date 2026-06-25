@@ -87,6 +87,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Project Graph callers and impact queries now drain relationship indexing in
   async batches with server-state progress notifications, so large queries do
   not block without status feedback.
+- The Project Graph webview now mirrors server relationship-indexing progress
+  in its own status banner while it is open, including long callers/impact
+  query drains.
 
 ### Fixed
 

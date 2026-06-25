@@ -9,6 +9,7 @@ import {
   QueryProjectGraph,
   RebuildProjectGraph,
   SearchProjectGraph,
+  ServerStateNotification,
   type ProjectGraphEdge,
   type ProjectGraphEdgeQuality,
   type ProjectGraphEdgeKind,
@@ -24,6 +25,7 @@ import {
   type ProjectGraphSearchMatch,
   type ProjectGraphSearchResult,
   type ProjectGraphStatsResult,
+  type ServerStateParams,
 } from "@solidity-workbench/common";
 
 const EDGE_KIND_ITEMS: { label: ProjectGraphEdgeKind; description: string }[] = [
@@ -417,6 +419,9 @@ export class ProjectGraphExporter {
     this.context = context;
     this.rememberActiveSolidityPosition();
     context.subscriptions.push(
+      this.client.onNotification(ServerStateNotification, (state: ServerStateParams) => {
+        void this.applyServerStateToProjectGraph(state);
+      }),
       vscode.commands.registerCommand("solidity-workbench.projectGraph", () =>
         this.showProjectGraph(),
       ),
@@ -456,6 +461,7 @@ export class ProjectGraphExporter {
   private panel: vscode.WebviewPanel | undefined;
   private context: vscode.ExtensionContext | undefined;
   private lastSolidityPosition: { uri: vscode.Uri; position: vscode.Position } | undefined;
+  private projectGraphIndexingVisible = false;
 
   private async showProjectGraph(options: { cursorNeighborhood?: boolean } = {}): Promise<void> {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
@@ -508,6 +514,7 @@ export class ProjectGraphExporter {
       );
       this.panel.onDidDispose(() => {
         this.panel = undefined;
+        this.projectGraphIndexingVisible = false;
       });
       this.panel.webview.onDidReceiveMessage(async (msg) => {
         if (msg.type === "navigate" && typeof msg.uri === "string") {
@@ -983,6 +990,22 @@ export class ProjectGraphExporter {
   private async postProjectGraphStatus(message: string): Promise<void> {
     if (!this.panel) return;
     await this.panel.webview.postMessage({ type: "status", message });
+  }
+
+  private async applyServerStateToProjectGraph(state: ServerStateParams): Promise<void> {
+    if (!this.panel) return;
+    if (state.phase === "indexing") {
+      this.projectGraphIndexingVisible = true;
+      const indexed = Math.max(0, state.filesIndexed);
+      const total = Math.max(0, state.filesTotal);
+      const suffix = total > 0 ? ` ${indexed}/${total}` : "";
+      await this.postProjectGraphStatus(`Indexing project graph relationships${suffix}...`);
+      return;
+    }
+    if (state.phase === "idle" && this.projectGraphIndexingVisible) {
+      this.projectGraphIndexingVisible = false;
+      await this.postProjectGraphStatus("Project graph indexing complete.");
+    }
   }
 
   private async openProjectGraphNode(node: ProjectGraphNode): Promise<void> {
