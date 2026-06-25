@@ -1700,6 +1700,7 @@ export class ProjectGraphExporter {
     <span class="zoom" id="zoomLabel"></span>
     <button class="compact" id="zoomIn" title="Zoom in">+</button>
     <button id="fit" title="Fit to graph">Fit</button>
+    <button id="showMoreNodes" title="Render more hidden graph nodes" hidden>More</button>
     <button id="pathMode" title="Find a graph path from the focused node">Path</button>
     <button id="cursor" title="Load a server-computed neighborhood from the current Solidity cursor">Cursor</button>
     <button id="workspace" title="Load full workspace graph">Workspace</button>
@@ -1738,7 +1739,12 @@ export class ProjectGraphExporter {
   let quality = typeof persisted.quality === "string" && qualityValues.has(persisted.quality) ? persisted.quality : "all";
   let zoom = typeof persisted.zoom === "number" ? Math.max(0.45, Math.min(1.8, persisted.zoom)) : 1;
   let pathMode = Boolean(persisted.pathMode);
-  const maxRenderedNodes = 240;
+  const defaultRenderedNodeLimit = 240;
+  const renderNodeLimitStep = 240;
+  const maxRenderedNodeLimit = 2400;
+  let renderedNodeLimit = typeof persisted.renderedNodeLimit === "number"
+    ? Math.max(defaultRenderedNodeLimit, Math.min(maxRenderedNodeLimit, persisted.renderedNodeLimit))
+    : defaultRenderedNodeLimit;
   const defaultEdges = new Set(["imports", "inherits", "implements", "overrides", "calls", "externalCall", "delegateCall", "creates", "usesModifier", "usesType"]);
   const persistedEdges = Array.isArray(persisted.visibleEdges) ? persisted.visibleEdges.filter((kind) => edgeItems.some((item) => item.label === kind)) : [];
   const visibleEdges = new Set(persistedEdges.length > 0 ? persistedEdges : defaultEdges);
@@ -1758,6 +1764,7 @@ export class ProjectGraphExporter {
   const serverQueryKind = document.getElementById("serverQueryKind");
   const zoomLabel = document.getElementById("zoomLabel");
   const pathModeButton = document.getElementById("pathMode");
+  const showMoreNodesButton = document.getElementById("showMoreNodes");
   const laneDefs = [
     { key: "file", label: "Files", x: 90 },
     { key: "type", label: "Contracts & Types", x: 350 },
@@ -1960,7 +1967,7 @@ export class ProjectGraphExporter {
   }
 
   function cappedNodeState(nodes) {
-    const capped = nodes.slice(0, maxRenderedNodes);
+    const capped = nodes.slice(0, renderedNodeLimit);
     return {
       ids: new Set(capped.map((node) => node.id)),
       candidateCount: nodes.length,
@@ -1973,6 +1980,22 @@ export class ProjectGraphExporter {
       ? " · " + nodeState.hiddenCount + " hidden by render cap"
       : "";
     return nodeState.ids.size + "/" + nodeState.candidateCount + " rendered nodes" + hiddenText + " · " + visibleGraphEdges.length + "/" + graph.edges.length + " edges" + (graph.truncated ? " · truncated" : "") + (edgeQualityText() ? " · " + edgeQualityText() : "");
+  }
+
+  function resetRenderedNodeLimit() {
+    renderedNodeLimit = defaultRenderedNodeLimit;
+  }
+
+  function updateShowMoreButton(nodeState) {
+    const hidden = nodeState.hiddenCount > 0;
+    showMoreNodesButton.hidden = !hidden;
+    showMoreNodesButton.disabled = hidden && renderedNodeLimit >= maxRenderedNodeLimit;
+    showMoreNodesButton.textContent = showMoreNodesButton.disabled
+      ? "Max"
+      : "More +" + Math.min(renderNodeLimitStep, nodeState.hiddenCount);
+    showMoreNodesButton.title = showMoreNodesButton.disabled
+      ? "Maximum rendered node limit reached; narrow the graph with filters"
+      : "Render " + Math.min(renderNodeLimitStep, nodeState.hiddenCount) + " more hidden graph nodes";
   }
 
   function compareNodes(a, b) {
@@ -2008,6 +2031,7 @@ export class ProjectGraphExporter {
       checkbox.addEventListener("change", () => {
         if (checkbox.checked) visibleEdges.add(item.label);
         else visibleEdges.delete(item.label);
+        resetRenderedNodeLimit();
         saveUiState();
         render();
       });
@@ -2029,6 +2053,7 @@ export class ProjectGraphExporter {
           return;
         }
         activeId = node.id;
+        resetRenderedNodeLimit();
         saveUiState();
         navigate(node);
         render();
@@ -2082,6 +2107,7 @@ export class ProjectGraphExporter {
     focus.addEventListener("click", () => {
       scope = "neighbors";
       scopeSelect.value = scope;
+      resetRenderedNodeLimit();
       saveUiState();
       render();
     });
@@ -2106,6 +2132,7 @@ export class ProjectGraphExporter {
       row.title = edgeTitle(edge, other);
       const focusOther = () => {
         activeId = other.id;
+        resetRenderedNodeLimit();
         saveUiState();
         render();
       };
@@ -2264,6 +2291,7 @@ export class ProjectGraphExporter {
           return;
         }
         activeId = id;
+        resetRenderedNodeLimit();
         saveUiState();
         navigate(node);
         render();
@@ -2288,6 +2316,7 @@ export class ProjectGraphExporter {
     }
 
     stats.textContent = graphStatsText(nodeState, visibleGraphEdges);
+    updateShowMoreButton(nodeState);
     readiness.textContent = relationshipStatusText();
     const partialRelationships = Boolean(graphStats && graphStats.relationshipIndexComplete === false);
     readiness.classList.toggle("partial", partialRelationships);
@@ -2343,16 +2372,19 @@ export class ProjectGraphExporter {
 
   search.addEventListener("input", () => {
     query = search.value;
+    resetRenderedNodeLimit();
     saveUiState();
     render();
   });
   scopeSelect.addEventListener("change", () => {
     scope = scopeSelect.value;
+    resetRenderedNodeLimit();
     saveUiState();
     render();
   });
   qualitySelect.addEventListener("change", () => {
     quality = qualitySelect.value;
+    resetRenderedNodeLimit();
     saveUiState();
     render();
   });
@@ -2364,6 +2396,11 @@ export class ProjectGraphExporter {
   document.getElementById("fit").addEventListener("click", () => {
     setZoom(1);
     canvas.scrollTo({ top: 0, left: 0 });
+  });
+  showMoreNodesButton.addEventListener("click", () => {
+    renderedNodeLimit = Math.min(maxRenderedNodeLimit, renderedNodeLimit + renderNodeLimitStep);
+    saveUiState();
+    render();
   });
   pathModeButton.addEventListener("click", () => {
     pathMode = !pathMode;
@@ -2416,6 +2453,7 @@ export class ProjectGraphExporter {
         query = "";
         search.value = "";
       }
+      resetRenderedNodeLimit();
       setGraph(message.graph, message.focusId, message.scope, message.stats, message.resultDiagnostics);
       if (typeof message.status === "string") setStatus(message.status);
       return;
@@ -2452,6 +2490,7 @@ export class ProjectGraphExporter {
       quality,
       zoom,
       pathMode,
+      renderedNodeLimit,
       visibleEdges: Array.from(visibleEdges),
     });
   }

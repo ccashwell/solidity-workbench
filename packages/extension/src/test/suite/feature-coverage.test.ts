@@ -440,6 +440,35 @@ describe("Feature coverage — project graph export", () => {
     assert.match(html, /rendered nodes/);
   });
 
+  it("renders expandable project graph cap controls", () => {
+    type ProjectGraphExporterInternals = {
+      buildHtml(
+        graph: ProjectGraphResult,
+        focusId?: string,
+        graphStats?: ProjectGraphStatsResult,
+      ): string;
+    };
+    const exporter = new ProjectGraphExporter(
+      {} as ConstructorParameters<typeof ProjectGraphExporter>[0],
+    ) as unknown as ProjectGraphExporterInternals;
+
+    const html = exporter.buildHtml(sampleGraph, sampleGraph.focusId);
+
+    assert.match(html, /id="showMoreNodes"/);
+    assert.match(html, /const defaultRenderedNodeLimit = 240/);
+    assert.match(html, /const renderNodeLimitStep = 240/);
+    assert.match(html, /const maxRenderedNodeLimit = 2400/);
+    assert.match(html, /persisted\.renderedNodeLimit/);
+    assert.match(html, /function updateShowMoreButton\(nodeState\)/);
+    assert.match(html, /showMoreNodesButton\.addEventListener\("click"/);
+    assert.match(
+      html,
+      /Math\.min\(maxRenderedNodeLimit, renderedNodeLimit \+ renderNodeLimitStep\)/,
+    );
+    assert.match(html, /function resetRenderedNodeLimit\(\)/);
+    assert.match(html, /renderedNodeLimit,/);
+  });
+
   it("renders embedded project graph search and query controls", () => {
     type ProjectGraphExporterInternals = {
       buildHtml(

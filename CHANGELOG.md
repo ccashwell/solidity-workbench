@@ -103,6 +103,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   public getters in the canvas, sidebar, and details pane.
 - The Project Graph status line now reports how many matching nodes are hidden
   by the interactive render cap.
+- The Project Graph view now includes a bounded "More" control for expanding
+  capped result sets without rebuilding or changing filters.
 - Project Graph callers/callees/impact queries now understand exact callable
   signatures such as `Vault.deposit(uint256)`, so overloaded functions resolve
   to the requested target instead of the highest-ranked same-name symbol.
