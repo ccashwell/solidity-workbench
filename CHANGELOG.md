@@ -59,6 +59,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parser-only Call Hierarchy incoming-call filtering now scopes target
   inheritance through the selected declaration file, preventing same-named test
   contracts from making source functions appear to have unrelated callers.
+- Parser-only Signature Help now resolves imported file-level functions,
+  events, and errors through the current file's import list, preventing hidden
+  helpers or duplicate test declarations from surfacing as call signatures.
 
 ## [0.8.8] - 2026-06-29
 

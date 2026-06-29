@@ -316,6 +316,72 @@ contract Uses {
       assert.match(sig!.signatures[0].label, /selected\(uint256 value\)/);
     });
 
+    it("returns parser-only signatures for named imported free functions before duplicate globals", () => {
+      const files = {
+        "test/Helpers.sol": `pragma solidity ^0.8.24;
+function selected(address account) pure returns (address) {
+    return account;
+}`,
+        "src/Helpers.sol": `pragma solidity ^0.8.24;
+function selected(uint256 value) pure returns (uint256) {
+    return value;
+}`,
+        "src/Uses.sol": `pragma solidity ^0.8.24;
+import { selected } from "./Helpers.sol";
+contract Uses {
+    function f() external pure {
+        selected(1);
+    }
+}`,
+      };
+      const { docs, provider } = setupFilesParserOnly(files);
+      const text = files["src/Uses.sol"];
+      const lines = text.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("selected(1"));
+      const col = lines[callLine].indexOf("selected(") + "selected(".length;
+
+      const sig = provider.provideSignatureHelp(docs["src/Uses.sol"], {
+        line: callLine,
+        character: col,
+      });
+
+      assert.ok(sig, "expected parser-only signature help for imported free function");
+      assert.equal(sig!.signatures.length, 1);
+      assert.match(sig!.signatures[0].label, /selected\(uint256 value\)/);
+      assert.doesNotMatch(sig!.signatures[0].label, /address account/);
+    });
+
+    it("does not expose non-imported free functions from named imports in parser-only mode", () => {
+      const files = {
+        "src/Helpers.sol": `pragma solidity ^0.8.24;
+function selected(uint256 value) pure returns (uint256) {
+    return value;
+}
+function hidden(address account) pure returns (address) {
+    return account;
+}`,
+        "src/Uses.sol": `pragma solidity ^0.8.24;
+import { selected } from "./Helpers.sol";
+contract Uses {
+    function f() external pure {
+        hidden(address(0));
+    }
+}`,
+      };
+      const { docs, provider } = setupFilesParserOnly(files);
+      const text = files["src/Uses.sol"];
+      const lines = text.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("hidden(address"));
+      const col = lines[callLine].indexOf("hidden(") + "hidden(".length;
+
+      const sig = provider.provideSignatureHelp(docs["src/Uses.sol"], {
+        line: callLine,
+        character: col,
+      });
+
+      assert.equal(sig, null);
+    });
+
     it("resolves receiver variables declared with imported interface aliases", () => {
       const files = {
         "src/IVault.sol": `pragma solidity ^0.8.24;

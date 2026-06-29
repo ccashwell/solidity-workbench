@@ -188,10 +188,10 @@ export class SignatureHelpProvider {
     if (scopedSignatures.length > 0) return scopedSignatures;
 
     // Otherwise search globally. This is intentionally only a legacy
-    // parser-only fallback for setups without an import-aware resolver;
-    // resolver-backed workspaces should prefer no result over an
-    // unrelated same-named declaration from a reachable file.
-    if (this.resolver) return signatures;
+    // parser-only fallback for minimal single-file setups without import
+    // awareness; resolver-backed or workspace-backed flows should prefer no
+    // result over an unrelated same-named declaration from a reachable file.
+    if (this.resolver || this.workspace) return signatures;
 
     const symbols = this.symbolIndex.findSymbols(funcName);
     for (const sym of symbols) {
@@ -202,7 +202,7 @@ export class SignatureHelpProvider {
         sym.kind === "error"
       ) {
         if (sym.containerName) {
-          const entry = this.symbolIndex.getContract(sym.containerName);
+          const entry = this.symbolIndex.getContract(sym.containerName, sym.filePath);
           if (entry) {
             const func = entry.contract.functions.find((f) => f.name === funcName);
             if (func) {
@@ -334,9 +334,9 @@ export class SignatureHelpProvider {
     funcName: string,
     documentUri: string,
   ): void {
-    if (!this.resolver) return;
-
-    const imported = this.resolver.resolveImportedSymbol(funcName, documentUri);
+    const imported = this.resolver
+      ? this.resolver.resolveImportedSymbol(funcName, documentUri)
+      : this.resolveParserImportedSymbol(funcName, documentUri);
     if (imported) {
       const importedUnit = this.parser.get(imported.uri)?.sourceUnit;
       if (importedUnit) {
@@ -344,6 +344,59 @@ export class SignatureHelpProvider {
       }
       return;
     }
+  }
+
+  private resolveParserImportedSymbol(
+    name: string,
+    documentUri: string,
+  ): { name: string; uri: string } | undefined {
+    if (!this.workspace) return undefined;
+
+    const sourceUnit = this.parser.get(documentUri)?.sourceUnit;
+    if (!sourceUnit) return undefined;
+
+    let fromPath: string;
+    try {
+      fromPath = this.workspace.uriToPath(documentUri);
+    } catch {
+      return undefined;
+    }
+
+    const scoped = name.includes(".") ? name.split(".") : null;
+    for (const imp of sourceUnit.imports) {
+      let targetPath: string | null;
+      try {
+        targetPath = this.workspace.resolveImport(imp.path, fromPath);
+      } catch {
+        targetPath = null;
+      }
+      if (!targetPath) continue;
+      const targetUri = URI.file(targetPath).toString();
+
+      if (scoped && imp.unitAlias === scoped[0] && scoped[1]) {
+        return { name: scoped[1], uri: targetUri };
+      }
+
+      if (scoped) continue;
+      for (const alias of imp.symbolAliases ?? []) {
+        const visibleName = alias.alias ?? alias.symbol;
+        if (visibleName === name) return { name: alias.symbol, uri: targetUri };
+      }
+
+      const isPlainImport = !imp.unitAlias && (imp.symbolAliases ?? []).length === 0;
+      if (isPlainImport) {
+        const targetUnit = this.parser.get(targetUri)?.sourceUnit;
+        if (
+          targetUnit?.freeFunctions.some((fn) => fn.name === name) ||
+          targetUnit?.events.some((event) => event.name === name) ||
+          targetUnit?.errors.some((error) => error.name === name)
+        ) {
+          return { name, uri: targetUri };
+        }
+      }
+    }
+
+    return undefined;
   }
 
   private dedupeSignatures(signatures: SignatureInformation[]): SignatureInformation[] {
