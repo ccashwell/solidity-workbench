@@ -3,6 +3,28 @@ import type { SolSymbol, SourceRange } from "@solidity-workbench/common";
 import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 
+const NATSPEC_REFERENCE_PATTERN = /\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?(?:\([^{}]*\))?)\}/g;
+
+export interface NatspecReferenceMatch {
+  raw: string;
+  ref: string;
+  start: number;
+  end: number;
+}
+
+export function findNatspecReferenceMatches(text: string): NatspecReferenceMatch[] {
+  return Array.from(text.matchAll(NATSPEC_REFERENCE_PATTERN), (match) => {
+    const raw = match[0];
+    const start = match.index ?? 0;
+    return {
+      raw,
+      ref: match[1],
+      start,
+      end: start + raw.length,
+    };
+  });
+}
+
 export function resolveNatspecReference(
   ref: string,
   documentUri: string,

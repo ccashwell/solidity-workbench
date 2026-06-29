@@ -19,6 +19,7 @@ import {
 import { findUsingForFunction } from "../utils/using-for.js";
 import { getEnclosingContract, getEnclosingFunctionScope } from "../utils/scope.js";
 import {
+  findNatspecReferenceMatches,
   isNatspecReferenceTarget,
   resolveNatspecReference,
   symbolDocumentUri,
@@ -299,15 +300,11 @@ export class DefinitionProvider {
     if (!comment) return null;
     const fromSymbol = this.findDocumentedSymbol(documentUri, comment.endLine);
     const line = text.split("\n")[position.line] ?? "";
-    for (const match of line.matchAll(
-      /\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?(?:\([^{}]*\))?)\}/g,
-    )) {
-      const start = match.index ?? 0;
-      const end = start + match[0].length;
-      if (position.character < start || position.character > end) continue;
+    for (const match of findNatspecReferenceMatches(line)) {
+      if (position.character < match.start || position.character > match.end) continue;
 
       const target = resolveNatspecReference(
-        match[1],
+        match.ref,
         documentUri,
         this.symbolIndex,
         this.resolver,

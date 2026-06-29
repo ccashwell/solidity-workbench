@@ -24,7 +24,11 @@ import {
 } from "../utils/receiver-type.js";
 import { getEnclosingContract } from "../utils/scope.js";
 import { resolveEffectiveNatspec } from "../utils/natspec.js";
-import { resolveNatspecReference, symbolTargetUri } from "../utils/natspec-references.js";
+import {
+  findNatspecReferenceMatches,
+  resolveNatspecReference,
+  symbolTargetUri,
+} from "../utils/natspec-references.js";
 import { findUsingForFunction, usingForFunctionToSymbol } from "../utils/using-for.js";
 import { extractDottedReceiver } from "../utils/text.js";
 
@@ -744,20 +748,21 @@ export class HoverProvider {
   }
 
   private linkNatspecReferences(text: string, fromSymbol?: SolSymbol): string {
-    return text.replace(
-      /\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?(?:\([^{}]*\))?)\}/g,
-      (match, ref) => {
-        const target = resolveNatspecReference(
-          ref,
-          fromSymbol?.filePath ?? "",
-          this.symbolIndex,
-          this.resolver,
-          fromSymbol,
-        );
-        if (!target) return match;
-        return `[${ref}](${symbolTargetUri(target)})`;
-      },
-    );
+    let linked = "";
+    let cursor = 0;
+    for (const match of findNatspecReferenceMatches(text)) {
+      linked += text.slice(cursor, match.start);
+      const target = resolveNatspecReference(
+        match.ref,
+        fromSymbol?.filePath ?? "",
+        this.symbolIndex,
+        this.resolver,
+        fromSymbol,
+      );
+      linked += target ? `[${match.ref}](${symbolTargetUri(target)})` : match.raw;
+      cursor = match.end;
+    }
+    return linked + text.slice(cursor);
   }
 
   private formatCustomNatspecLabel(tag: string): string {

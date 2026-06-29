@@ -7,6 +7,7 @@ import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import {
+  findNatspecReferenceMatches,
   isNatspecReferenceTarget,
   rangeSize,
   resolveNatspecReference,
@@ -71,13 +72,9 @@ export class DocumentLinksProvider {
       const fromSymbol = this.findDocumentedSymbol(document.uri, comment.endLine);
       for (let line = comment.startLine; line <= comment.endLine; line++) {
         const text = lines[line] ?? "";
-        for (const match of text.matchAll(
-          /\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?(?:\([^{}]*\))?)\}/g,
-        )) {
-          const ref = match[1];
-          const start = match.index ?? 0;
+        for (const match of findNatspecReferenceMatches(text)) {
           const target = resolveNatspecReference(
-            ref,
+            match.ref,
             document.uri,
             this.symbolIndex,
             this.resolver,
@@ -87,8 +84,8 @@ export class DocumentLinksProvider {
 
           links.push({
             range: {
-              start: { line, character: start },
-              end: { line, character: start + match[0].length },
+              start: { line, character: match.start },
+              end: { line, character: match.end },
             },
             target: symbolTargetUri(target),
             tooltip: `Open ${target.containerName ? `${target.containerName}.` : ""}${target.name}`,
