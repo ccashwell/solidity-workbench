@@ -1820,10 +1820,14 @@ contract Guarded {
       assert.ok(checked, "expected Checked event node");
       assert.ok(closed, "expected Closed error node");
 
-      assert.ok(
-        graph.getOutgoingEdges(run.id, "usesModifier").some((edge) => edge.target === onlyOpen.id),
-        "expected function to use onlyOpen modifier",
-      );
+      const usesOnlyOpen = graph
+        .getOutgoingEdges(run.id, "usesModifier")
+        .find((edge) => edge.target === onlyOpen.id);
+      assert.ok(usesOnlyOpen, "expected function to use onlyOpen modifier");
+      assert.deepEqual(usesOnlyOpen.range, {
+        start: { line: 14, character: 28 },
+        end: { line: 14, character: 36 },
+      });
       assert.ok(
         graph.getOutgoingEdges(onlyOpen.id, "calls").some((edge) => edge.target === helper.id),
         "expected modifier body helper() call edge",

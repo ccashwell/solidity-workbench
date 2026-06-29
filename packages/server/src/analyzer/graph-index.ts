@@ -44,7 +44,14 @@ import type { SolcBridge } from "../compiler/solc-bridge.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { ResolvedContract, SemanticResolver } from "./semantic-resolver.js";
-import { CALL_LIKE_KEYWORDS, extractDottedReceiver, isSolidityBuiltinType } from "../utils/text.js";
+import {
+  CALL_LIKE_KEYWORDS,
+  extractDottedReceiver,
+  findCommentRanges,
+  isInsideString,
+  isPositionInCommentRanges,
+  isSolidityBuiltinType,
+} from "../utils/text.js";
 import { SOLIDITY_KEYWORDS } from "../utils/text.js";
 import {
   normalizeTypeName,
@@ -506,6 +513,7 @@ export class GraphIndex {
       this.lastUpdateDurationMs = Date.now() - startedAt;
       return;
     }
+    const text = result.text ?? "";
 
     const fileNode = this.fileNode(uri);
     this.addNode(fileNode);
@@ -536,7 +544,7 @@ export class GraphIndex {
     }
 
     for (const fn of result.sourceUnit.freeFunctions) {
-      this.indexFunction(uri, fileNode.id, undefined, fn);
+      this.indexFunction(uri, fileNode.id, undefined, fn, text);
     }
 
     for (const event of result.sourceUnit.events) {
@@ -569,7 +577,12 @@ export class GraphIndex {
     }
 
     for (const contract of result.sourceUnit.contracts) {
-      this.indexContractMemberDeclarations(uri, this.contractNodeId(uri, contract.name), contract);
+      this.indexContractMemberDeclarations(
+        uri,
+        this.contractNodeId(uri, contract.name),
+        contract,
+        text,
+      );
     }
 
     if (includeRelationshipEdges) {
@@ -1726,7 +1739,7 @@ export class GraphIndex {
       }
     }
 
-    this.indexContractMemberDeclarations(uri, contractId, contract);
+    this.indexContractMemberDeclarations(uri, contractId, contract, text);
 
     this.indexOverrideEdges(uri, contract);
 
@@ -1794,13 +1807,14 @@ export class GraphIndex {
     uri: string,
     contractId: string,
     contract: ContractDefinition,
+    text: string,
   ): void {
     for (const variable of contract.stateVariables) {
       this.indexStateVariable(uri, contractId, contract.name, variable);
     }
 
     for (const fn of contract.functions) {
-      this.indexFunction(uri, contractId, contract, fn);
+      this.indexFunction(uri, contractId, contract, fn, text);
     }
 
     for (const mod of contract.modifiers) {
@@ -1829,6 +1843,7 @@ export class GraphIndex {
     parentId: string,
     contract: ContractDefinition | undefined,
     fn: FunctionDefinition,
+    text: string,
   ): void {
     const name = fn.name ?? fn.kind;
     if (!name) return;
@@ -1874,6 +1889,7 @@ export class GraphIndex {
             modifier.nameRange,
           ),
           kind: "usesModifier",
+          range: this.findModifierInvocationRange(text, fn, modifierName),
           metadata: { modifierName },
         });
       }
@@ -4578,6 +4594,33 @@ export class GraphIndex {
       if (lineNo < lines.length - 1) body += "\n";
     }
     return null;
+  }
+
+  private findModifierInvocationRange(
+    text: string,
+    fn: FunctionDefinition,
+    modifierName: string,
+  ): SourceRange | undefined {
+    const lines = text.split("\n");
+    const open = this.findOpenBrace(lines, Math.max(0, fn.range.start.line));
+    if (!open) return undefined;
+
+    const commentRanges = findCommentRanges(text);
+    const pattern = new RegExp(`\\b${escapeRegExp(modifierName)}\\b`, "g");
+    for (let line = Math.max(0, fn.range.start.line); line <= open.line; line++) {
+      const lineText = line === open.line ? lines[line].slice(0, open.character) : lines[line];
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(lineText)) !== null) {
+        const character = match.index;
+        if (isPositionInCommentRanges(commentRanges, line, character)) continue;
+        if (isInsideString(lines[line] ?? "", character)) continue;
+        return {
+          start: { line, character },
+          end: { line, character: character + modifierName.length },
+        };
+      }
+    }
+    return undefined;
   }
 
   private findOpenBrace(

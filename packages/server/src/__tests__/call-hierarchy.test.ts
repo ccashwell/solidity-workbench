@@ -557,6 +557,89 @@ contract Guarded {
       }
     });
 
+    it("maps graph-backed modifier uses into call hierarchy", async () => {
+      const modifierFixture = setupFixture({
+        "src/Modifiers.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract Guarded {
+    modifier onlyOwner() {
+        audit();
+        _;
+    }
+
+    function audit() internal {}
+
+    function work() internal {}
+
+    function run() external onlyOwner {
+        work();
+    }
+}
+`,
+      });
+
+      try {
+        const resolver = new SemanticResolver(
+          modifierFixture.parser,
+          modifierFixture.workspace,
+          modifierFixture.symbolIndex,
+        );
+        const graphIndex = new GraphIndex(
+          modifierFixture.parser,
+          modifierFixture.workspace,
+          resolver,
+          modifierFixture.symbolIndex,
+        );
+        graphIndex.rebuildWorkspace();
+        const provider = new CallHierarchyProvider(
+          modifierFixture.symbolIndex,
+          modifierFixture.workspace,
+          modifierFixture.parser,
+          resolver,
+          graphIndex,
+        );
+        const uri = URI.file(path.join(modifierFixture.tmpDir, "src/Modifiers.sol")).toString();
+
+        const runOutgoing = await provider.getOutgoingCalls({
+          name: "run",
+          kind: SymbolKind.Function,
+          uri,
+          range: { start: { line: 13, character: 4 }, end: { line: 15, character: 5 } },
+          selectionRange: { start: { line: 13, character: 13 }, end: { line: 13, character: 16 } },
+          detail: "Guarded",
+        });
+
+        const onlyOwner = runOutgoing.find((call) => call.to.name === "onlyOwner");
+        assert.ok(onlyOwner, "expected graph-backed outgoing calls to include onlyOwner modifier");
+        assert.deepEqual(onlyOwner.fromRanges, [
+          { start: { line: 13, character: 28 }, end: { line: 13, character: 37 } },
+        ]);
+        assert.ok(
+          runOutgoing.some((call) => call.to.name === "work"),
+          "expected graph-backed normal body calls to remain indexed",
+        );
+
+        const modifierIncoming = await provider.getIncomingCalls(onlyOwner.to);
+        assert.ok(
+          modifierIncoming.some((call) => call.from.name === "run"),
+          "expected graph-backed callers of onlyOwner to include Guarded.run",
+        );
+
+        const modifierOutgoing = await provider.getOutgoingCalls(onlyOwner.to);
+        const audit = modifierOutgoing.find((call) => call.to.name === "audit");
+        assert.ok(audit, "expected graph-backed modifier outgoing calls to include audit");
+
+        const auditIncoming = await provider.getIncomingCalls(audit.to);
+        assert.ok(
+          auditIncoming.some((call) => call.from.name === "onlyOwner"),
+          "expected graph-backed callers of audit to include modifier body",
+        );
+      } finally {
+        teardownFixture(modifierFixture);
+      }
+    });
+
     it("uses focused graph indexing for outgoing calls while graph relationships are partial", async () => {
       const graphBacked = setupFixture({
         "A.sol": A_SOL,

@@ -334,7 +334,7 @@ export class CallHierarchyProvider {
     if (!source) return null;
 
     const calleeMap = new Map<string, { item: CallHierarchyItem; ranges: Range[] }>();
-    for (const edgeKind of ["calls", "emits", "revertsWith"] as const) {
+    for (const edgeKind of ["calls", "usesModifier", "emits", "revertsWith"] as const) {
       for (const edge of this.graphIndex!.getOutgoingEdges(source.id, edgeKind)) {
         if (!edge.range) continue;
         const target = this.graphIndex!.getNode(edge.target);
@@ -399,9 +399,12 @@ export class CallHierarchyProvider {
     return this.isCallHierarchySourceNode(node) || node.kind === "event" || node.kind === "error";
   }
 
-  private graphIncomingEdgeKinds(node: SolidityGraphNode): ("calls" | "emits" | "revertsWith")[] {
+  private graphIncomingEdgeKinds(
+    node: SolidityGraphNode,
+  ): ("calls" | "usesModifier" | "emits" | "revertsWith")[] {
     if (node.kind === "event") return ["emits"];
     if (node.kind === "error") return ["revertsWith"];
+    if (node.kind === "modifier") return ["calls", "usesModifier"];
     return ["calls"];
   }
 

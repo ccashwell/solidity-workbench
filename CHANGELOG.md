@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Call Hierarchy fallback indexing now treats modifier invocations and calls
   made inside modifier bodies as call edges, so modifier targets behave
   consistently when graph relationships are unavailable.
+- Graph-backed Call Hierarchy now includes modifier-use edges with precise
+  source ranges, keeping modifier callers/callees consistent with fallback
+  indexing once Project Graph relationships are available.
 
 ## [0.8.8] - 2026-06-29
 
