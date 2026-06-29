@@ -1278,5 +1278,80 @@ contract UseA {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }
     });
+
+    it("finds the real function body when header comments contain braces or semicolons", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "call-hierarchy-body-test-"));
+      try {
+        const files = {
+          "A.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract A {
+    function transfer() external {}
+}
+`,
+          "UseA.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "./A.sol";
+
+contract UseA {
+    function run(A a) external /* ; { } */ {
+        a.transfer();
+    }
+}
+`,
+        };
+
+        const uris: string[] = [];
+        for (const [name, contents] of Object.entries(files)) {
+          const filePath = path.join(tmpDir, name);
+          fs.writeFileSync(filePath, contents, "utf-8");
+          uris.push(URI.file(filePath).toString());
+        }
+
+        const workspace: Pick<WorkspaceManager, "getAllFileUris" | "uriToPath" | "resolveImport"> =
+          {
+            getAllFileUris: () => uris.slice(),
+            uriToPath: (uri: string) => URI.parse(uri).fsPath,
+            resolveImport: (importPath: string, fromFile: string) => {
+              if (!importPath.startsWith(".")) return null;
+              const target = path.resolve(path.dirname(fromFile), importPath);
+              return fs.existsSync(target) ? target : null;
+            },
+          };
+
+        const parser = new SolidityParser();
+        const symbolIndex = new SymbolIndex(parser, workspace as WorkspaceManager);
+        for (const uri of uris) {
+          const text = fs.readFileSync(URI.parse(uri).fsPath, "utf-8");
+          parser.parse(uri, text);
+          symbolIndex.updateFile(uri);
+        }
+
+        const provider = new CallHierarchyProvider(
+          symbolIndex,
+          workspace as WorkspaceManager,
+          parser,
+        );
+        const useAUri = URI.file(path.join(tmpDir, "UseA.sol")).toString();
+        const outgoing = await provider.getOutgoingCalls({
+          name: "run",
+          kind: SymbolKind.Function,
+          uri: useAUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "UseA",
+        });
+
+        assert.deepEqual(
+          outgoing.map((call) => `${call.to.detail ?? ""}.${call.to.name}`),
+          ["A.transfer"],
+          "header comments must not hide the real function body",
+        );
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
   });
 });

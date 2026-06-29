@@ -621,7 +621,7 @@ export class CallHierarchyProvider {
         const callerName = func.name ?? func.kind;
         const callerKey = this.makeKey(uri, callerName, contract.name);
 
-        const bodyRange = this.getFunctionBodyRange(text, func.range.start.line);
+        const bodyRange = this.getFunctionBodyRange(text, func.range.start.line, commentRanges);
         if (!bodyRange) continue;
 
         // Start *after* the opening brace so the function's own signature
@@ -1069,6 +1069,7 @@ export class CallHierarchyProvider {
   private getFunctionBodyRange(
     text: string,
     funcStartLine: number,
+    commentRanges: Map<number, Array<[number, number]>>,
   ): { bodyStartLine: number; bodyStartChar: number; bodyEndLine: number } | null {
     const lines = text.split("\n");
     let braceDepth = 0;
@@ -1079,6 +1080,8 @@ export class CallHierarchyProvider {
     for (let i = funcStartLine; i < lines.length; i++) {
       const line = lines[i];
       for (let j = 0; j < line.length; j++) {
+        if (isPositionInCommentRanges(commentRanges, i, j)) continue;
+        if (isInsideString(line, j)) continue;
         const ch = line[j];
         if (ch === "{") {
           if (!foundOpen) {
@@ -1095,10 +1098,24 @@ export class CallHierarchyProvider {
         }
       }
       // If we hit a semicolon before opening brace, it's an interface function
-      if (!foundOpen && line.includes(";")) return null;
+      if (!foundOpen && this.hasSemicolonOutsideIgnoredRanges(line, i, commentRanges)) return null;
     }
 
     return null;
+  }
+
+  private hasSemicolonOutsideIgnoredRanges(
+    line: string,
+    lineNum: number,
+    commentRanges: Map<number, Array<[number, number]>>,
+  ): boolean {
+    for (let col = 0; col < line.length; col++) {
+      if (line[col] !== ";") continue;
+      if (isPositionInCommentRanges(commentRanges, lineNum, col)) continue;
+      if (isInsideString(line, col)) continue;
+      return true;
+    }
+    return false;
   }
 
   private makeKey(uri: string, name: string, containerName?: string): string {
