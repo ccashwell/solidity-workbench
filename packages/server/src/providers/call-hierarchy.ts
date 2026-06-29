@@ -132,10 +132,14 @@ export class CallHierarchyProvider {
    */
   prepareCallHierarchy(document: TextDocument, position: Position): CallHierarchyItem[] {
     const text = document.getText();
-    const word = getWordAtPosition(text, position)?.text ?? null;
-    if (!word) return [];
+    const wordResult = getWordAtPosition(text, position);
+    const word = wordResult?.text ?? null;
+    if (!word || !wordResult) return [];
+    const includeNamespaceImports = this.isQualifiedIdentifier(text, wordResult.range);
 
-    const symbols = this.filterVisibleSymbols(document.uri, this.symbolIndex.findSymbols(word));
+    const symbols = this.filterVisibleSymbols(document.uri, this.symbolIndex.findSymbols(word), {
+      includeNamespaceImports,
+    });
     const funcSymbols = symbols.filter((s) => this.isCallHierarchySymbolKind(s.kind));
 
     if (funcSymbols.length === 0) return [];
@@ -1200,12 +1204,18 @@ export class CallHierarchyProvider {
   private filterVisibleSymbols<T extends { filePath: string }>(
     callerUri: string,
     symbols: T[],
+    options?: { includeNamespaceImports?: boolean },
   ): T[] {
-    if (this.resolver) return this.resolver.filterVisibleSymbols(callerUri, symbols);
+    if (this.resolver) return this.resolver.filterVisibleSymbols(callerUri, symbols, options);
     const resolveImport = (this.workspace as Partial<WorkspaceManager>).resolveImport;
     if (!resolveImport) return symbols;
     const reachable = this.collectReachableUris(callerUri);
     return symbols.filter((sym) => reachable.has(sym.filePath));
+  }
+
+  private isQualifiedIdentifier(text: string, range: Range): boolean {
+    const line = text.split("\n")[range.start.line] ?? "";
+    return range.start.character > 0 && line[range.start.character - 1] === ".";
   }
 
   private collectReachableUris(

@@ -227,6 +227,74 @@ contract Use {
       }
     });
 
+    it("does not prepare bare call hierarchy items for namespace-only free functions", () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "call-hierarchy-namespace-prepare-"));
+      try {
+        const files = {
+          "src/Helpers.sol": `function hidden() pure returns (uint256) {
+    return 1;
+}
+`,
+          "src/Use.sol": `import * as Helpers from "./Helpers.sol";
+contract Use {
+    function run() external pure returns (uint256) {
+        Helpers.hidden();
+        return hidden();
+    }
+}
+`,
+        };
+        const uris: string[] = [];
+        for (const [name, contents] of Object.entries(files)) {
+          const filePath = path.join(tmpDir, name);
+          fs.mkdirSync(path.dirname(filePath), { recursive: true });
+          fs.writeFileSync(filePath, contents, "utf-8");
+          uris.push(URI.file(filePath).toString());
+        }
+
+        const workspace: Pick<WorkspaceManager, "getAllFileUris" | "uriToPath" | "resolveImport"> =
+          {
+            getAllFileUris: () => uris.slice(),
+            uriToPath: (uri: string) => URI.parse(uri).fsPath,
+            resolveImport: (importPath: string, fromFile: string) => {
+              if (!importPath.startsWith(".")) return null;
+              const target = path.resolve(path.dirname(fromFile), importPath);
+              return fs.existsSync(target) ? target : null;
+            },
+          };
+
+        const parser = new SolidityParser();
+        const symbolIndex = new SymbolIndex(parser, workspace as WorkspaceManager);
+        for (const uri of uris) {
+          const text = fs.readFileSync(URI.parse(uri).fsPath, "utf-8");
+          parser.parse(uri, text);
+          symbolIndex.updateFile(uri);
+        }
+        const resolver = new SemanticResolver(parser, workspace as WorkspaceManager, symbolIndex);
+        const provider = new CallHierarchyProvider(
+          symbolIndex,
+          workspace as WorkspaceManager,
+          parser,
+          resolver,
+        );
+        const useUri = URI.file(path.join(tmpDir, "src/Use.sol")).toString();
+        const useText = fs.readFileSync(URI.parse(useUri).fsPath, "utf-8");
+        const doc = TextDocument.create(useUri, "solidity", 1, useText);
+        const line = useText
+          .split("\n")
+          .findIndex((candidate) => candidate.includes("return hidden();"));
+
+        const items = provider.prepareCallHierarchy(doc, {
+          line,
+          character: useText.split("\n")[line].indexOf("hidden") + 1,
+        });
+
+        assert.deepEqual(items, []);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+
     it("attributes `this.X()` and qualified `a.X()` calls to the right contract", async () => {
       const calls = await fixture.provider.getIncomingCalls(transferItem(fixture.aUri, "A"));
       const callerNames = calls.map((c) => c.from.name).sort();

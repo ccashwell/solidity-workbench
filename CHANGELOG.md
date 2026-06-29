@@ -79,6 +79,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parser-only Type Hierarchy and Go To Implementation now use strict bare-symbol
   import exposure, preventing namespace-only contracts and interfaces from
   surfacing for unresolved bare type names.
+- Parser-only Call Hierarchy preparation now uses strict bare-symbol import
+  exposure, preventing namespace-only free functions from surfacing when the
+  cursor is on an unresolved bare call.
 
 ## [0.8.8] - 2026-06-29
 
