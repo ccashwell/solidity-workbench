@@ -579,7 +579,14 @@ export class SymbolIndex {
    * document has already been pulled in by
    * {@link ensureImportsIndexed}.
    */
-  getContract(name: string): { uri: string; contract: ContractDefinition } | undefined {
+  getContract(
+    name: string,
+    uri?: string,
+  ): { uri: string; contract: ContractDefinition } | undefined {
+    if (uri) {
+      const contract = this.parser.get(uri)?.sourceUnit.contracts.find((c) => c.name === name);
+      if (contract) return { uri, contract };
+    }
     return this.contractsByName.get(name);
   }
 

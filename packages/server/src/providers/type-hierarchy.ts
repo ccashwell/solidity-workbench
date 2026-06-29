@@ -40,7 +40,7 @@ export class TypeHierarchyProvider {
     if (underCursor) {
       const resolved = this.resolver?.resolveContract(underCursor.name, underCursor.filePath);
       if (resolved) return [this.contractToItem(resolved.contract, resolved.uri, resolved.id)];
-      const entry = this.symbolIndex.getContract(underCursor.name);
+      const entry = this.symbolIndex.getContract(underCursor.name, underCursor.filePath);
       return entry ? [this.contractToItem(entry.contract, entry.uri)] : [];
     }
 
@@ -59,7 +59,7 @@ export class TypeHierarchyProvider {
         visibleSymbols[0];
       const resolved = this.resolver?.resolveContract(sym.name, sym.filePath);
       if (resolved) return [this.contractToItem(resolved.contract, resolved.uri, resolved.id)];
-      const entry = this.symbolIndex.getContract(sym.name);
+      const entry = this.symbolIndex.getContract(sym.name, sym.filePath);
       return entry ? [this.contractToItem(entry.contract, entry.uri)] : [];
     }
 
@@ -101,7 +101,7 @@ export class TypeHierarchyProvider {
       return supertypes;
     }
 
-    const entry = this.symbolIndex.getContract(item.name);
+    const entry = this.symbolIndex.getContract(item.name, item.uri);
     if (!entry) return [];
 
     const supertypes: TypeHierarchyItem[] = [];

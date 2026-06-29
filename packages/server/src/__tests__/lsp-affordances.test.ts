@@ -585,6 +585,26 @@ contract Base {}`,
     );
   });
 
+  it("prepares parser-only type hierarchy items from the contract under the cursor when names collide", () => {
+    const files = {
+      "src/Base.sol": `pragma solidity ^0.8.24;
+contract Base {}`,
+      "test/Base.sol": `pragma solidity ^0.8.24;
+contract Base {}`,
+    };
+    const { docs, parser, idx } = setupFiles(files);
+    const provider = new TypeHierarchyProvider(idx, parser);
+    const doc = docs["src/Base.sol"];
+    const line = files["src/Base.sol"].split("\n")[1];
+    const col = line.indexOf("Base");
+
+    const prepared = provider.prepareTypeHierarchy(doc, { line: 1, character: col });
+
+    assert.equal(prepared.length, 1);
+    assert.equal(prepared[0].name, "Base");
+    assert.equal(prepared[0].uri, URI.file("/w/src/Base.sol").toString());
+  });
+
   it("does not prepare type hierarchy for unimported test-only symbols in source files", () => {
     const files = {
       "src/Current.sol": `pragma solidity ^0.8.24;
