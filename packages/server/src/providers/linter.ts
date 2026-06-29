@@ -1355,12 +1355,21 @@ export class SolidityLinter {
     lines: string[],
   ): undefined {
     const seen = new Set<string>();
-    const loopShadowedStateVarNames = new Set(shadowedStateVarNames);
+    const localShadows = new Map<
+      string,
+      { declarationRange: Range; suppressAfter: Range["end"] }[]
+    >();
     this.visitRaw(loop, {
       VariableDeclarationStatement: (stmt) => {
+        const statementRange = this.nodeRange(stmt);
         for (const variable of stmt.variables ?? []) {
           if (variable?.name && stateVarNames.has(variable.name)) {
-            loopShadowedStateVarNames.add(variable.name);
+            const declarations = localShadows.get(variable.name) ?? [];
+            declarations.push({
+              declarationRange: this.nodeRange(variable.identifier ?? variable),
+              suppressAfter: statementRange.end,
+            });
+            localShadows.set(variable.name, declarations);
           }
         }
         return undefined;
@@ -1371,8 +1380,12 @@ export class SolidityLinter {
       Identifier: (n) => {
         if (!n.name) return undefined;
         if (!stateVarNames.has(n.name)) return undefined;
-        if (loopShadowedStateVarNames.has(n.name)) return undefined;
+        if (shadowedStateVarNames.has(n.name)) return undefined;
         const range = this.nodeRange(n);
+        const declarations = localShadows.get(n.name) ?? [];
+        if (declarations.some((declaration) => this.localShadowCovers(range, declaration))) {
+          return undefined;
+        }
         const key = `${range.start.line}:${n.name}`;
         if (seen.has(key)) return undefined;
         seen.add(key);
@@ -1387,6 +1400,25 @@ export class SolidityLinter {
       },
     });
     return undefined;
+  }
+
+  private localShadowCovers(
+    range: Range,
+    shadow: { declarationRange: Range; suppressAfter: Range["end"] },
+  ): boolean {
+    if (this.rangesSameStart(range, shadow.declarationRange)) return true;
+    return this.positionAtOrAfter(range.start, shadow.suppressAfter);
+  }
+
+  private rangesSameStart(a: Range, b: Range): boolean {
+    return a.start.line === b.start.line && a.start.character === b.start.character;
+  }
+
+  private positionAtOrAfter(position: Range["start"], threshold: Range["end"]): boolean {
+    return (
+      position.line > threshold.line ||
+      (position.line === threshold.line && position.character >= threshold.character)
+    );
   }
 
   // ── Dangerous delegatecall (AST) ───────────────────────────────────

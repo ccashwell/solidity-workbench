@@ -213,6 +213,28 @@ contract C {
       assert.equal(loop.length, 0);
     });
 
+    it("storage-in-loop: still fires before a later same-named loop-local declaration", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+
+contract C {
+    uint256 public cap;
+
+    function mixed() external returns (uint256) {
+        uint256 s;
+        for (uint256 i; i < 3; ++i) {
+            s += cap;
+            uint256 cap = i;
+            s += cap;
+        }
+        return s;
+    }
+}
+`);
+      const loop = diags.filter((d) => d.code === "storage-in-loop");
+      assert.equal(loop.length, 1);
+    });
+
     it("missing-event: does NOT fire when the function emits but from a helper", () => {
       const diags = lint(`
 pragma solidity ^0.8.24;
