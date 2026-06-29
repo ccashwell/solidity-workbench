@@ -50,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parser-only parameter inlay hints now scope receiver and inherited internal
   call lookups to visible imports, preventing duplicate test contracts from
   leaking source call-site labels.
+- Parser-only implement-interface code actions now resolve base interfaces
+  through same-file or imported declarations, preventing unrelated test
+  interfaces from generating source stubs.
 
 ## [0.8.8] - 2026-06-29
 

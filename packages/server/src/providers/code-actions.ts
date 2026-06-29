@@ -5,6 +5,8 @@ import type { ContractDefinition, FunctionDefinition } from "@solidity-workbench
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { ResolvedContract, SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import { URI } from "vscode-uri";
 
 /**
  * Provides code actions (quick fixes and refactorings) for Solidity.
@@ -27,6 +29,7 @@ export class CodeActionsProvider {
     private symbolIndex: SymbolIndex,
     private parser: SolidityParser,
     private resolver?: SemanticResolver,
+    private workspace?: WorkspaceManager,
   ) {}
 
   provideCodeActions(
@@ -125,7 +128,58 @@ export class CodeActionsProvider {
     baseName: string,
   ): { contract: ContractDefinition; uri: string } | ResolvedContract | undefined {
     if (this.resolver) return this.resolver.resolveBaseContract(fromUri, baseName);
+    const local = this.symbolIndex.getContract(baseName, fromUri);
+    if (local) return local;
+    const imported = this.resolveParserImportedContract(fromUri, baseName);
+    if (imported) return imported;
+    if (this.workspace) return undefined;
     return this.symbolIndex.getContract(baseName);
+  }
+
+  private resolveParserImportedContract(
+    fromUri: string,
+    baseName: string,
+  ): { contract: ContractDefinition; uri: string } | undefined {
+    if (!this.workspace) return undefined;
+    const sourceUnit = this.parser.get(fromUri)?.sourceUnit;
+    if (!sourceUnit) return undefined;
+
+    let fromPath: string;
+    try {
+      fromPath = this.workspace.uriToPath(fromUri);
+    } catch {
+      return undefined;
+    }
+
+    const scoped = baseName.includes(".") ? baseName.split(".") : null;
+    for (const imp of sourceUnit.imports) {
+      let targetPath: string | null;
+      try {
+        targetPath = this.workspace.resolveImport(imp.path, fromPath);
+      } catch {
+        targetPath = null;
+      }
+      if (!targetPath) continue;
+      const targetUri = URI.file(targetPath).toString();
+
+      if (scoped && imp.unitAlias === scoped[0] && scoped[1]) {
+        return this.symbolIndex.getContract(scoped[1], targetUri);
+      }
+
+      if (scoped) continue;
+      for (const alias of imp.symbolAliases ?? []) {
+        const visibleName = alias.alias ?? alias.symbol;
+        if (visibleName !== baseName) continue;
+        return this.symbolIndex.getContract(alias.symbol, targetUri);
+      }
+
+      if (!imp.unitAlias && (imp.symbolAliases ?? []).length === 0) {
+        const imported = this.symbolIndex.getContract(baseName, targetUri);
+        if (imported) return imported;
+      }
+    }
+
+    return undefined;
   }
 
   private createAddSPDXAction(uri: string): CodeAction {
