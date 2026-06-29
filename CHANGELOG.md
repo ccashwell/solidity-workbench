@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-06-29
+
+### Fixed
+
+- Unqualified inherited internal-call inlay hints now resolve through the
+  imported/enclosing base contract instead of falling back to unrelated
+  same-named contracts from tests or other reachable files.
+
 ## [0.8.5] - 2026-06-29
 
 ### Added
