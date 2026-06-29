@@ -182,6 +182,31 @@ describe("DocumentHighlightProvider", () => {
     }
   });
 
+  it("scopes parser fallback highlights to shadowing local variables", () => {
+    const text = `contract C {
+    uint256 public count;
+    function f() external {
+        count = count + 1;
+    }
+    function g() external {
+        uint256 count = 0;
+        count;
+    }
+}`;
+    const { doc, provider } = setup("file:///C.sol", text);
+    const lines = text.split("\n");
+    const localLine = lines.findIndex((line) => line.includes("uint256 count"));
+    const col = lines[localLine].indexOf("count");
+
+    const hits = provider.provideDocumentHighlights(doc, {
+      line: localLine,
+      character: col,
+    });
+    const hitLines = hits.map((hit) => hit.range.start.line).sort((a, b) => a - b);
+
+    assert.deepEqual(hitLines, [6, 7]);
+  });
+
   it("prefers SolcBridge semantic references when available", () => {
     const text = `contract C {
     uint256 public count;

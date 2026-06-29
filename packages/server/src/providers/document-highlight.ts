@@ -5,7 +5,12 @@ import { URI } from "vscode-uri";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
-import { getWordAtPosition } from "../utils/text.js";
+import {
+  findLocalVariableType,
+  getFunctionBodyTextPrefix,
+  getWordAtPosition,
+} from "../utils/text.js";
+import { getEnclosingFunctionScope } from "../utils/scope.js";
 
 /**
  * Document highlight provider — answers `textDocument/documentHighlight`.
@@ -36,8 +41,9 @@ export class DocumentHighlightProvider {
 
   provideDocumentHighlights(document: TextDocument, position: Position): DocumentHighlight[] {
     const text = document.getText();
-    const word = getWordAtPosition(text, position)?.text;
-    if (!word) return [];
+    const wordAtPosition = getWordAtPosition(text, position);
+    const word = wordAtPosition?.text;
+    if (!wordAtPosition || !word) return [];
 
     const semantic = this.provideSemanticHighlights(document, position);
     if (semantic) return semantic;
@@ -48,6 +54,7 @@ export class DocumentHighlightProvider {
     const refs = this.symbolIndex.findReferences(word);
     const localRefs = refs.filter((r) => r.uri === document.uri);
     if (localRefs.length === 0) return [];
+    const scopedRefs = this.scopeFallbackReferences(document, position, word, localRefs);
 
     // All occurrences come back as `Read`. LSP also has `Write` for
     // declaration / assignment sites, but accurately distinguishing
@@ -56,10 +63,62 @@ export class DocumentHighlightProvider {
     // Claiming Write unreliably is worse than claiming Read uniformly;
     // the subtle background VSCode applies for Read is identical to
     // the legacy fallback's, so the visual experience is consistent.
-    return localRefs.map((ref) => ({
+    return scopedRefs.map((ref) => ({
       range: ref.range,
       kind: DocumentHighlightKind.Read,
     }));
+  }
+
+  private scopeFallbackReferences<T extends { range: { start: Position; end: Position } }>(
+    document: TextDocument,
+    position: Position,
+    word: string,
+    refs: T[],
+  ): T[] {
+    const parsed = this.parser.get(document.uri)?.sourceUnit;
+    if (!parsed) return refs;
+
+    const scope = getEnclosingFunctionScope(parsed, position);
+    if (!scope) return refs;
+
+    const isParameter = scope.fn.parameters.some((param) => param.name === word);
+    const isLocal = this.isLocalDeclaredAtOrBefore(
+      document,
+      scope.fn.range.start.line,
+      position,
+      word,
+    );
+    if (!isParameter && !isLocal) return refs;
+
+    return refs.filter((ref) => this.rangeContains(scope.fn.range, ref.range.start));
+  }
+
+  private isLocalDeclaredAtOrBefore(
+    document: TextDocument,
+    functionStartLine: number,
+    position: Position,
+    word: string,
+  ): boolean {
+    const lines = document.getText().split("\n");
+    const lineEnd = lines[position.line]?.length ?? position.character;
+    const bodyPrefix = getFunctionBodyTextPrefix(
+      document.getText(),
+      functionStartLine,
+      position.line,
+      Math.max(position.character, lineEnd),
+    );
+    return bodyPrefix ? findLocalVariableType(bodyPrefix, word) !== undefined : false;
+  }
+
+  private rangeContains(range: { start: Position; end: Position }, position: Position): boolean {
+    if (position.line < range.start.line || position.line > range.end.line) return false;
+    if (position.line === range.start.line && position.character < range.start.character) {
+      return false;
+    }
+    if (position.line === range.end.line && position.character > range.end.character) {
+      return false;
+    }
+    return true;
   }
 
   private provideSemanticHighlights(
