@@ -191,4 +191,30 @@ describe("function body helpers", () => {
 
     assert.equal(getFunctionBodyRange(text, 1), null);
   });
+
+  it("ignores commented-out local variable declarations", () => {
+    const prefix = `{
+        // Ghost memory ghost;
+        /*
+            Ghost memory otherGhost;
+        */
+        RealThing memory realThing;
+    `;
+
+    assert.equal(findLocalVariableType(prefix, "ghost"), undefined);
+    assert.equal(findLocalVariableType(prefix, "otherGhost"), undefined);
+    assert.equal(findLocalVariableType(prefix, "realThing"), "RealThing");
+  });
+
+  it("ignores local variable declarations inside string literals", () => {
+    const prefix = `{
+        string memory note = "Ghost memory ghost;";
+        string memory other = 'Other memory otherGhost;';
+        RealThing memory realThing;
+    `;
+
+    assert.equal(findLocalVariableType(prefix, "ghost"), undefined);
+    assert.equal(findLocalVariableType(prefix, "otherGhost"), undefined);
+    assert.equal(findLocalVariableType(prefix, "realThing"), "RealThing");
+  });
 });

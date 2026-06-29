@@ -450,6 +450,7 @@ export function getFunctionBodyTextPrefix(
  * scanning `bodyPrefix` for `TypeName name` declarations (last match wins).
  */
 export function findLocalVariableType(bodyPrefix: string, name: string): string | undefined {
+  const codePrefix = maskCommentsAndStrings(bodyPrefix);
   const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const declarationRe = new RegExp(
     String.raw`(?:^|[;{}\n])\s*([A-Za-z_$][\w$]*(?:\s*\[[^\]]*\])*)\s+(?:(?:memory|storage|calldata)\s+)?${escapedName}\s*(?:=|;|,|\))`,
@@ -457,10 +458,84 @@ export function findLocalVariableType(bodyPrefix: string, name: string): string 
   );
   let match: RegExpExecArray | null;
   let typeName: string | undefined;
-  while ((match = declarationRe.exec(bodyPrefix)) !== null) {
+  while ((match = declarationRe.exec(codePrefix)) !== null) {
     typeName = stripTypeDecorations(match[1]);
   }
   return typeName;
+}
+
+function maskCommentsAndStrings(text: string): string {
+  let out = "";
+  let i = 0;
+  let state: "code" | "lineComment" | "blockComment" | "single" | "double" = "code";
+
+  while (i < text.length) {
+    const ch = text[i];
+    const next = text[i + 1];
+
+    if (state === "code") {
+      if (ch === "/" && next === "/") {
+        out += "  ";
+        i += 2;
+        state = "lineComment";
+        continue;
+      }
+      if (ch === "/" && next === "*") {
+        out += "  ";
+        i += 2;
+        state = "blockComment";
+        continue;
+      }
+      if (ch === "'") {
+        out += " ";
+        i++;
+        state = "single";
+        continue;
+      }
+      if (ch === '"') {
+        out += " ";
+        i++;
+        state = "double";
+        continue;
+      }
+      out += ch;
+      i++;
+      continue;
+    }
+
+    if (state === "lineComment") {
+      out += ch === "\n" ? "\n" : " ";
+      i++;
+      if (ch === "\n") state = "code";
+      continue;
+    }
+
+    if (state === "blockComment") {
+      if (ch === "*" && next === "/") {
+        out += "  ";
+        i += 2;
+        state = "code";
+      } else {
+        out += ch === "\n" ? "\n" : " ";
+        i++;
+      }
+      continue;
+    }
+
+    if (state === "single" || state === "double") {
+      const quote = state === "single" ? "'" : '"';
+      if (ch === "\\") {
+        out += next === undefined ? " " : "  ";
+        i += next === undefined ? 1 : 2;
+        continue;
+      }
+      out += ch === "\n" ? "\n" : " ";
+      i++;
+      if (ch === quote) state = "code";
+    }
+  }
+
+  return out;
 }
 
 export function stripTypeDecorations(typeName: string | undefined): string | undefined {
