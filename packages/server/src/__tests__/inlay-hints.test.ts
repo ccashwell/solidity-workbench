@@ -51,6 +51,30 @@ function setupFiles(currentUri: string, files: Record<string, string>) {
   };
 }
 
+function setupFilesParserOnly(currentUri: string, files: Record<string, string>) {
+  const uris = Object.keys(files);
+  const workspace = {
+    getAllFileUris: () => uris.slice(),
+    uriToPath: (uri: string) => URI.parse(uri).fsPath,
+    resolveImport: (importPath: string, fromFile: string) => {
+      const slash = fromFile.lastIndexOf("/");
+      const base = slash >= 0 ? fromFile.slice(0, slash + 1) : "";
+      const normalized = new URL(importPath, URI.file(base).toString()).toString();
+      return uris.includes(normalized) ? URI.parse(normalized).fsPath : null;
+    },
+  } as unknown as WorkspaceManager;
+  const parser = new SolidityParser();
+  const idx = new SymbolIndex(parser, workspace);
+  for (const [uri, text] of Object.entries(files)) {
+    parser.parse(uri, text);
+    idx.updateFile(uri);
+  }
+  return {
+    doc: TextDocument.create(currentUri, "solidity", 1, files[currentUri]),
+    provider: new InlayHintsProvider(idx, parser, undefined, workspace),
+  };
+}
+
 describe("InlayHintsProvider", () => {
   it("emits parameter-name hints at known-function call sites", () => {
     const text = `pragma solidity ^0.8.0;
@@ -207,6 +231,48 @@ contract Base {
 }`,
     };
     const { doc, provider } = setupFiles(childUri, files);
+    const hints = provider.provideInlayHints(doc, {
+      start: { line: 0, character: 0 },
+      end: { line: files[childUri].split("\n").length, character: 0 },
+    });
+
+    const labels = hints.map((h) => h.label);
+    assert.ok(
+      labels.includes("sourceAmount:"),
+      `expected source Base.sourceOpen parameter, got ${JSON.stringify(labels)}`,
+    );
+    assert.ok(
+      !labels.includes("wrongAccount:"),
+      `must not use same-name test Base.sourceOpen parameter, got ${JSON.stringify(labels)}`,
+    );
+  });
+
+  it("resolves parser-only unqualified inherited calls through the imported base contract", () => {
+    const baseUri = "file:///w/src/Base.sol";
+    const childUri = "file:///w/src/Child.sol";
+    const testBaseUri = "file:///w/test/Base.sol";
+    const files = {
+      [baseUri]: `pragma solidity ^0.8.24;
+contract Base {
+    function sourceOpen(uint256 sourceAmount) internal pure returns (uint256) {
+        return sourceAmount;
+    }
+}`,
+      [childUri]: `pragma solidity ^0.8.24;
+import "./Base.sol";
+contract Child is Base {
+    function run() external pure returns (uint256) {
+        return sourceOpen(1);
+    }
+}`,
+      [testBaseUri]: `pragma solidity ^0.8.24;
+contract Base {
+    function sourceOpen(address wrongAccount) internal pure returns (address) {
+        return wrongAccount;
+    }
+}`,
+    };
+    const { doc, provider } = setupFilesParserOnly(childUri, files);
     const hints = provider.provideInlayHints(doc, {
       start: { line: 0, character: 0 },
       end: { line: files[childUri].split("\n").length, character: 0 },
@@ -429,6 +495,51 @@ library Helper {
       );
     });
 
+    it("scopes parser-only static receiver hints to the imported library", () => {
+      const helperUri = "file:///w/src/Helper.sol";
+      const currentUri = "file:///w/src/User.sol";
+      const current = `pragma solidity ^0.8.24;
+import {Helper} from "./Helper.sol";
+
+contract User {
+    function f() external pure returns (uint256) {
+        return Helper.encode(1);
+    }
+}`;
+      const { doc, provider } = setupFilesParserOnly(currentUri, {
+        [helperUri]: `pragma solidity ^0.8.24;
+library Helper {
+    function encode(uint256 amount) internal pure returns (uint256) {
+        return amount;
+    }
+}
+`,
+        "file:///w/test/Helper.sol": `pragma solidity ^0.8.24;
+library Helper {
+    function encode(address account) internal pure returns (uint256) {
+        account;
+        return 0;
+    }
+}
+`,
+        [currentUri]: current,
+      });
+
+      const hints = provider.provideInlayHints(doc, {
+        start: { line: 0, character: 0 },
+        end: { line: current.split("\n").length, character: 0 },
+      });
+      const labels = hints.map((h) => h.label);
+      assert.ok(
+        labels.includes("amount:"),
+        `expected "amount:" from imported Helper.encode; got ${JSON.stringify(labels)}`,
+      );
+      assert.ok(
+        !labels.includes("account:"),
+        `must not leak params from test/Helper.sol; got ${JSON.stringify(labels)}`,
+      );
+    });
+
     it("skips the implicit receiver parameter for using-for library calls", () => {
       const text = `pragma solidity ^0.8.0;
 interface IERC20 {}
@@ -526,6 +637,36 @@ interface Ghost {
 }
 `,
         [currentUri]: current,
+      });
+
+      const hints = provider.provideInlayHints(doc, {
+        start: { line: 0, character: 0 },
+        end: { line: current.split("\n").length, character: 0 },
+      });
+      const labels = hints.map((h) => h.label);
+      assert.ok(
+        !labels.includes("value:"),
+        `must not leak params from test/Ghost.sol; got ${JSON.stringify(labels)}`,
+      );
+    });
+
+    it("does not emit parser-only receiver hints from unimported test-only types", () => {
+      const currentUri = "file:///w/src/UsesGhost.sol";
+      const current = `pragma solidity ^0.8.24;
+contract UsesGhost {
+    Ghost internal ghost;
+
+    function f() external view {
+        ghost.ping(1);
+    }
+}`;
+      const { doc, provider } = setupFilesParserOnly(currentUri, {
+        [currentUri]: current,
+        "file:///w/test/Ghost.sol": `pragma solidity ^0.8.24;
+interface Ghost {
+    function ping(uint256 value) external view returns (uint256);
+}
+`,
       });
 
       const hints = provider.provideInlayHints(doc, {

@@ -1,9 +1,12 @@
 import type { InlayHint, Range } from "vscode-languageserver/node.js";
 import { InlayHintKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
+import type { ContractDefinition } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import { URI } from "vscode-uri";
 import { resolveReceiverTypeName, type ReceiverExpression } from "../utils/receiver-type.js";
 import { usingForParameterNames } from "../utils/using-for.js";
 import { getEnclosingContract } from "../utils/scope.js";
@@ -31,6 +34,7 @@ export class InlayHintsProvider {
     private symbolIndex: SymbolIndex,
     private parser: SolidityParser,
     private resolver?: SemanticResolver,
+    private workspace?: WorkspaceManager,
   ) {}
 
   provideInlayHints(document: TextDocument, range: Range): InlayHint[] {
@@ -361,7 +365,7 @@ export class InlayHintsProvider {
       const resolved = this.resolver?.resolveContract(contract.name, uri);
       const chain = resolved
         ? (this.resolver?.getInheritanceChainFor(resolved).map((entry) => entry.contract) ?? [])
-        : this.symbolIndex.getInheritanceChain(contract.name);
+        : this.getVisibleInheritanceChain(contract.name, uri);
       for (const c of chain) {
         const fn = c.functions.find((f) => f.name === funcName);
         if (fn) {
@@ -380,11 +384,16 @@ export class InlayHintsProvider {
 
   private findVisibleSymbols(uri: string, name: string) {
     const symbols = this.symbolIndex.findSymbols(name);
-    return this.resolver ? this.resolver.filterVisibleSymbols(uri, symbols) : symbols;
+    if (this.resolver) return this.resolver.filterVisibleSymbols(uri, symbols);
+    if (!this.workspace) return symbols.filter((sym) => sym.filePath === uri);
+    const reachable = this.collectReachableUris(uri);
+    return symbols.filter((sym) => reachable.has(sym.filePath));
   }
 
   private getVisibleInheritanceChain(typeName: string, uri: string) {
-    if (!this.resolver) return this.symbolIndex.getInheritanceChain(typeName);
+    if (!this.resolver) {
+      return this.getParserInheritanceChain(typeName, uri).map((entry) => entry.contract);
+    }
 
     const imported = this.resolver.resolveImportedSymbol(typeName, uri);
     if (imported) return this.resolver.getInheritanceChain(typeName, uri).map((e) => e.contract);
@@ -396,6 +405,118 @@ export class InlayHintsProvider {
     const sym = symbols.find((candidate) => candidate.filePath === uri) ?? symbols[0];
     const resolved = sym ? this.resolver.resolveContract(sym.name, sym.filePath) : undefined;
     return resolved ? this.resolver.getInheritanceChainFor(resolved).map((e) => e.contract) : [];
+  }
+
+  private collectReachableUris(uri: string, visited: Set<string> = new Set()): Set<string> {
+    if (visited.has(uri)) return visited;
+    visited.add(uri);
+    if (!this.workspace) return visited;
+
+    const result = this.parser.get(uri);
+    if (!result) return visited;
+
+    let fsPath: string;
+    try {
+      fsPath = this.workspace.uriToPath(uri);
+    } catch {
+      return visited;
+    }
+
+    for (const imp of result.sourceUnit.imports) {
+      let targetPath: string | null;
+      try {
+        targetPath = this.workspace.resolveImport(imp.path, fsPath);
+      } catch {
+        targetPath = null;
+      }
+      if (!targetPath) continue;
+      this.collectReachableUris(URI.file(targetPath).toString(), visited);
+    }
+
+    return visited;
+  }
+
+  private getParserInheritanceChain(
+    typeName: string,
+    uri: string,
+  ): Array<{ uri: string; contract: ContractDefinition }> {
+    const root = this.resolveParserVisibleContract(typeName, uri);
+    if (!root) return [];
+
+    const chain: Array<{ uri: string; contract: ContractDefinition }> = [];
+    const visited = new Set<string>();
+
+    const walk = (entry: { uri: string; contract: ContractDefinition }): void => {
+      const key = `${entry.uri}#${entry.contract.name}`;
+      if (visited.has(key)) return;
+      visited.add(key);
+      chain.push(entry);
+
+      for (const base of entry.contract.baseContracts) {
+        const baseEntry = this.resolveParserVisibleContract(base.baseName, entry.uri);
+        if (baseEntry) walk(baseEntry);
+      }
+    };
+
+    walk(root);
+    return chain;
+  }
+
+  private resolveParserVisibleContract(
+    typeName: string,
+    uri: string,
+  ): { uri: string; contract: ContractDefinition } | undefined {
+    const local = this.symbolIndex.getContract(typeName, uri);
+    if (local) return local;
+
+    return this.resolveParserImportedContract(typeName, uri);
+  }
+
+  private resolveParserImportedContract(
+    typeName: string,
+    uri: string,
+  ): { uri: string; contract: ContractDefinition } | undefined {
+    if (!this.workspace) return undefined;
+
+    const sourceUnit = this.parser.get(uri)?.sourceUnit;
+    if (!sourceUnit) return undefined;
+
+    let fromPath: string;
+    try {
+      fromPath = this.workspace.uriToPath(uri);
+    } catch {
+      return undefined;
+    }
+
+    const scoped = typeName.includes(".") ? typeName.split(".") : null;
+    for (const imp of sourceUnit.imports) {
+      let targetPath: string | null;
+      try {
+        targetPath = this.workspace.resolveImport(imp.path, fromPath);
+      } catch {
+        targetPath = null;
+      }
+      if (!targetPath) continue;
+      const targetUri = URI.file(targetPath).toString();
+
+      if (scoped && imp.unitAlias === scoped[0] && scoped[1]) {
+        return this.symbolIndex.getContract(scoped[1], targetUri);
+      }
+
+      if (scoped) continue;
+      for (const alias of imp.symbolAliases ?? []) {
+        const visibleName = alias.alias ?? alias.symbol;
+        if (visibleName !== typeName) continue;
+        return this.symbolIndex.getContract(alias.symbol, targetUri);
+      }
+
+      if (!imp.unitAlias && (imp.symbolAliases ?? []).length === 0) {
+        const imported = this.symbolIndex.getContract(typeName, targetUri);
+        if (imported) return imported;
+      }
+    }
+
+    return undefined;
   }
 
   private isContractLike(kind: string): boolean {

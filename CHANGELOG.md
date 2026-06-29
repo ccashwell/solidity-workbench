@@ -47,6 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parser-only Signature Help now resolves receiver and enclosing-contract
   inheritance through visible imports, preventing same-named test contracts
   from replacing source call signatures.
+- Parser-only parameter inlay hints now scope receiver and inherited internal
+  call lookups to visible imports, preventing duplicate test contracts from
+  leaking source call-site labels.
 
 ## [0.8.8] - 2026-06-29
 

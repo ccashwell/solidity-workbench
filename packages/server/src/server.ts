@@ -388,7 +388,12 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   codeActionsProvider = new CodeActionsProvider(symbolIndex, parser, semanticResolver);
   formattingProvider = new FormattingProvider(workspaceManager);
   documentSymbolProvider = new DocumentSymbolProvider(parser);
-  inlayHintsProvider = new InlayHintsProvider(symbolIndex, parser, semanticResolver);
+  inlayHintsProvider = new InlayHintsProvider(
+    symbolIndex,
+    parser,
+    semanticResolver,
+    workspaceManager,
+  );
   signatureHelpProvider = new SignatureHelpProvider(
     symbolIndex,
     parser,
