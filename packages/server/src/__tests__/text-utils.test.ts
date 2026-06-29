@@ -8,6 +8,9 @@ import {
   isSolidityBuiltinType,
   isInsideString,
   findLineCommentStart,
+  getFunctionBodyRange,
+  getFunctionBodyTextPrefix,
+  findLocalVariableType,
 } from "../utils/text.js";
 
 describe("getWordAtPosition", () => {
@@ -130,5 +133,62 @@ describe("findLineCommentStart", () => {
   it("finds comment after string", () => {
     const pos = findLineCommentStart('string s = "val"; // comment');
     assert.ok(pos > 16);
+  });
+});
+
+describe("function body helpers", () => {
+  it("ignores braces and semicolons inside function header comments", () => {
+    const text = `contract C {
+    function f() external /* ; { } */ returns (uint256) {
+        return 1;
+    }
+}`;
+
+    const range = getFunctionBodyRange(text, 1);
+    assert.deepEqual(range, {
+      bodyStartLine: 1,
+      bodyStartChar: text.split("\n")[1].lastIndexOf("{") + 1,
+      bodyEndLine: 3,
+    });
+  });
+
+  it("keeps local variable type lookup working after commented header delimiters", () => {
+    const text = `contract C {
+    function f() external /* ; { } */ {
+        LocalThing memory thing;
+        thing;
+    }
+}`;
+    const lines = text.split("\n");
+    const useLine = 3;
+    const prefix = getFunctionBodyTextPrefix(
+      text,
+      1,
+      useLine,
+      lines[useLine].indexOf("thing") + "thing".length,
+    );
+
+    assert.ok(prefix, "expected body prefix");
+    assert.equal(findLocalVariableType(prefix!, "thing"), "LocalThing");
+  });
+
+  it("treats semicolons in comments as non-code for implemented functions", () => {
+    const text = `contract C {
+    function f() external // ;
+    {
+        return;
+    }
+}`;
+
+    const range = getFunctionBodyRange(text, 1);
+    assert.equal(range?.bodyStartLine, 2);
+  });
+
+  it("still returns null for interface-style declarations", () => {
+    const text = `interface I {
+    function f() external;
+}`;
+
+    assert.equal(getFunctionBodyRange(text, 1), null);
   });
 });

@@ -328,6 +328,8 @@ export interface FunctionBodyRange {
 /**
  * Locate the `{ ... }` body of a function starting at `funcStartLine`.
  * Returns null for interface-style declarations that end with `;`.
+ * Comments and strings in the function header/body are treated as non-code so
+ * delimiters in prose do not affect body detection.
  */
 export function getFunctionBodyRange(
   text: string,
@@ -338,16 +340,63 @@ export function getFunctionBodyRange(
   let foundOpen = false;
   let bodyStartLine = funcStartLine;
   let bodyStartChar = 0;
+  let inBlockComment = false;
+  let inSingle = false;
+  let inDouble = false;
 
   for (let i = funcStartLine; i < lines.length; i++) {
     const line = lines[i];
-    for (let j = 0; j < line.length; j++) {
-      const ch = line[j];
+    let col = 0;
+    while (col < line.length) {
+      const ch = line[col];
+      const next = col + 1 < line.length ? line[col + 1] : "";
+
+      if (inBlockComment) {
+        if (ch === "*" && next === "/") {
+          inBlockComment = false;
+          col += 2;
+        } else {
+          col++;
+        }
+        continue;
+      }
+
+      if (inSingle || inDouble) {
+        const quote = inSingle ? "'" : '"';
+        if (ch === "\\") {
+          col += 2;
+          continue;
+        }
+        if (ch === quote) {
+          inSingle = false;
+          inDouble = false;
+        }
+        col++;
+        continue;
+      }
+
+      if (ch === "/" && next === "*") {
+        inBlockComment = true;
+        col += 2;
+        continue;
+      }
+      if (ch === "/" && next === "/") break;
+      if (ch === "'") {
+        inSingle = true;
+        col++;
+        continue;
+      }
+      if (ch === '"') {
+        inDouble = true;
+        col++;
+        continue;
+      }
+
       if (ch === "{") {
         if (!foundOpen) {
           foundOpen = true;
           bodyStartLine = i;
-          bodyStartChar = j + 1;
+          bodyStartChar = col + 1;
         }
         braceDepth++;
       } else if (ch === "}") {
@@ -355,9 +404,11 @@ export function getFunctionBodyRange(
         if (foundOpen && braceDepth === 0) {
           return { bodyStartLine, bodyStartChar, bodyEndLine: i };
         }
+      } else if (!foundOpen && ch === ";") {
+        return null;
       }
+      col++;
     }
-    if (!foundOpen && line.includes(";")) return null;
   }
 
   return null;
