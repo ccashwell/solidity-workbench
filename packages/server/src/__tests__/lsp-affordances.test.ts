@@ -326,6 +326,31 @@ library InventoryLib {}
     );
   });
 
+  it("links NatSpec refs through named import aliases", () => {
+    const files = {
+      "src/Helpers.sol": `pragma solidity ^0.8.24;
+function selected() pure returns (uint256) {
+    return 1;
+}
+`,
+      "src/InventoryLib.sol": `pragma solidity ^0.8.24;
+import { selected as chosen } from "./Helpers.sol";
+
+/// @notice See {chosen}.
+library InventoryLib {}
+`,
+    };
+    const { docs, parser, idx, resolver, workspace } = setupFiles(files);
+
+    const links = new DocumentLinksProvider(parser, workspace, idx, resolver).provideDocumentLinks(
+      docs["src/InventoryLib.sol"],
+    );
+    const chosen = links.find((link) => link.tooltip === "Open selected");
+
+    assert.ok(chosen, "expected alias reference to link to selected()");
+    assert.equal(chosen.target, "file:///w/src/Helpers.sol#L2,10");
+  });
+
   it("turns braced references in block NatSpec into document links", () => {
     const text = `pragma solidity ^0.8.24;
 
