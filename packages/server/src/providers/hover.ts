@@ -744,17 +744,20 @@ export class HoverProvider {
   }
 
   private linkNatspecReferences(text: string, fromSymbol?: SolSymbol): string {
-    return text.replace(/\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\}/g, (match, ref) => {
-      const target = resolveNatspecReference(
-        ref,
-        fromSymbol?.filePath ?? "",
-        this.symbolIndex,
-        this.resolver,
-        fromSymbol,
-      );
-      if (!target) return match;
-      return `[${ref}](${symbolTargetUri(target)})`;
-    });
+    return text.replace(
+      /\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?(?:\([^{}]*\))?)\}/g,
+      (match, ref) => {
+        const target = resolveNatspecReference(
+          ref,
+          fromSymbol?.filePath ?? "",
+          this.symbolIndex,
+          this.resolver,
+          fromSymbol,
+        );
+        if (!target) return match;
+        return `[${ref}](${symbolTargetUri(target)})`;
+      },
+    );
   }
 
   private formatCustomNatspecLabel(tag: string): string {

@@ -264,6 +264,29 @@ library InventoryLib {}
       assert.doesNotMatch(value, /file:\/\/\/w\/test\/IFoo\.sol#L4,14/);
     });
 
+    it("links signature-qualified braced NatSpec refs to the matching overload", () => {
+      const uri = "file:///w/Router.sol";
+      const { doc, provider } = setup(
+        uri,
+        `pragma solidity ^0.8.24;
+
+/// @notice Routes via {execute(address,uint256)} and {execute(bytes32)}.
+/// Unknown overloads like {execute(bool)} stay plain text.
+contract Router {
+    function execute(bytes32 id) external {}
+    function execute(address target, uint256 amount) external {}
+}`,
+      );
+
+      const h = provider.provideHover(doc, { line: 4, character: 10 });
+      assert.ok(h, "expected hover on contract declaration");
+      const value = hoverValue(h);
+      assert.match(value, /\[execute\(address,uint256\)\]\(file:\/\/\/w\/Router\.sol#L7,14\)/);
+      assert.match(value, /\[execute\(bytes32\)\]\(file:\/\/\/w\/Router\.sol#L6,14\)/);
+      assert.match(value, /\{execute\(bool\)\}/);
+      assert.doesNotMatch(value, /\[execute\(bool\)\]/);
+    });
+
     it("shows `contract C` for a contract-name hover", () => {
       const { doc, provider } = setup(
         "file:///w/D.sol",
