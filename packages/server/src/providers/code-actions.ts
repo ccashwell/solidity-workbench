@@ -3,6 +3,7 @@ import { CodeActionKind, TextEdit } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { ContractDefinition, FunctionDefinition } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
+import type { ResolvedContract, SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 
 /**
@@ -25,6 +26,7 @@ export class CodeActionsProvider {
   constructor(
     private symbolIndex: SymbolIndex,
     private parser: SolidityParser,
+    private resolver?: SemanticResolver,
   ) {}
 
   provideCodeActions(
@@ -88,7 +90,7 @@ export class CodeActionsProvider {
         ) {
           // Check if contract implements an interface with missing methods
           for (const base of contract.baseContracts) {
-            const baseContract = this.symbolIndex.getContract(base.baseName);
+            const baseContract = this.resolveBaseContract(uri, base.baseName);
             if (baseContract && baseContract.contract.kind === "interface") {
               const missing = this.findUnimplementedMethods(contract, baseContract.contract);
               if (missing.length > 0) {
@@ -116,6 +118,14 @@ export class CodeActionsProvider {
     }
 
     return actions;
+  }
+
+  private resolveBaseContract(
+    fromUri: string,
+    baseName: string,
+  ): { contract: ContractDefinition; uri: string } | ResolvedContract | undefined {
+    if (this.resolver) return this.resolver.resolveBaseContract(fromUri, baseName);
+    return this.symbolIndex.getContract(baseName);
   }
 
   private createAddSPDXAction(uri: string): CodeAction {

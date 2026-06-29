@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import * as assert from "node:assert/strict";
+import * as path from "node:path";
 import { TextDocument } from "vscode-languageserver-textdocument";
 import { URI } from "vscode-uri";
 import type { Diagnostic } from "vscode-languageserver/node.js";
@@ -7,6 +8,7 @@ import { DiagnosticSeverity } from "vscode-languageserver/node.js";
 import { SolidityParser } from "../parser/solidity-parser.js";
 import { SymbolIndex } from "../analyzer/symbol-index.js";
 import { CodeActionsProvider } from "../providers/code-actions.js";
+import { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 
 function makeFakeWorkspace() {
@@ -26,6 +28,35 @@ function setup(uri: string, text: string) {
     provider: new CodeActionsProvider(idx, parser),
     idx,
     parser,
+  };
+}
+
+function setupFiles(files: Record<string, string>) {
+  const parser = new SolidityParser();
+  const filePaths = new Set(Object.keys(files).map((name) => path.join("/w", name)));
+  const uris = Object.keys(files).map((name) => URI.file(path.join("/w", name)).toString());
+  const workspace = {
+    getAllFileUris: () => uris.slice(),
+    uriToPath: (uri: string) => URI.parse(uri).fsPath,
+    resolveImport: (importPath: string, fromFile: string) => {
+      const target = path.resolve(path.dirname(fromFile), importPath);
+      return filePaths.has(target) ? target : null;
+    },
+  } as unknown as WorkspaceManager;
+  const idx = new SymbolIndex(parser, workspace);
+  const docs: Record<string, TextDocument> = {};
+
+  for (const [name, text] of Object.entries(files)) {
+    const uri = URI.file(path.join("/w", name)).toString();
+    parser.parse(uri, text);
+    idx.updateFile(uri);
+    docs[name] = TextDocument.create(uri, "solidity", 1, text);
+  }
+
+  const resolver = new SemanticResolver(parser, workspace, idx);
+  return {
+    docs,
+    provider: new CodeActionsProvider(idx, parser, resolver),
   };
 }
 
@@ -241,6 +272,41 @@ contract Foo is IFoo {
       const edit = impl!.edit!.changes!["file:///w/Impl.sol"][0];
       assert.match(edit.newText, /function bar\(uint256 x\) external override returns \(bool\)/);
       assert.match(edit.newText, /function baz\(\) external view override returns \(address\)/);
+    });
+
+    it("uses the imported interface instead of an unrelated same-name test interface", () => {
+      const files = {
+        "src/IFoo.sol": `pragma solidity ^0.8.24;
+interface IFoo {
+    function sourceOnly(uint256 amount) external returns (bool);
+}`,
+        "src/Impl.sol": `pragma solidity ^0.8.24;
+import { IFoo } from "./IFoo.sol";
+contract Foo is IFoo {
+    // source method unimplemented
+}`,
+        "test/IFoo.sol": `pragma solidity ^0.8.24;
+interface IFoo {
+    function testOnly(address account) external returns (address);
+}`,
+      };
+      const { docs, provider } = setupFiles(files);
+
+      const actions = provider.provideCodeActions(
+        docs["src/Impl.sol"],
+        { start: { line: 3, character: 9 }, end: { line: 3, character: 9 } },
+        { diagnostics: [] },
+      );
+
+      const impl = actions.find((a) => a.title.startsWith("Implement IFoo"));
+      assert.ok(impl, `expected an Implement IFoo action; got ${actions.map((a) => a.title)}`);
+
+      const edit = impl!.edit!.changes![URI.file("/w/src/Impl.sol").toString()][0];
+      assert.match(
+        edit.newText,
+        /function sourceOnly\(uint256 amount\) external override returns \(bool\)/,
+      );
+      assert.doesNotMatch(edit.newText, /testOnly/);
     });
   });
 });

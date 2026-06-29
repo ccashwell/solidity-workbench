@@ -385,7 +385,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   diagnosticsProvider = new DiagnosticsProvider(workspaceManager, connection, documents);
   diagnosticsProvider.setParser(parser);
   semanticTokensProvider = new SemanticTokensProvider(parser);
-  codeActionsProvider = new CodeActionsProvider(symbolIndex, parser);
+  codeActionsProvider = new CodeActionsProvider(symbolIndex, parser, semanticResolver);
   formattingProvider = new FormattingProvider(workspaceManager);
   documentSymbolProvider = new DocumentSymbolProvider(parser);
   inlayHintsProvider = new InlayHintsProvider(symbolIndex, parser, semanticResolver);
