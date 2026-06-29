@@ -165,6 +165,32 @@ contract C {
       );
     });
 
+    it("returns signatures for modifier invocations in function declarations", () => {
+      const text = `pragma solidity ^0.8.24;
+contract Guarded {
+    /// @param account Account allowed to continue.
+    modifier onlyAccount(address account) {
+        _;
+    }
+
+    function run(address account) external onlyAccount(account) {}
+}`;
+      const { doc, provider } = setup("file:///w/ModifierSig.sol", text);
+      const lines = text.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("onlyAccount(account"));
+      const col = lines[callLine].indexOf("onlyAccount(") + "onlyAccount(".length;
+
+      const sig = provider.provideSignatureHelp(doc, { line: callLine, character: col });
+
+      assert.ok(sig, "expected signature help for modifier invocation");
+      assert.equal(sig!.signatures.length, 1);
+      assert.match(sig!.signatures[0].label, /onlyAccount\(address account\)/);
+      assert.deepEqual(sig!.signatures[0].parameters?.[0].documentation, {
+        kind: "markdown",
+        value: "Account allowed to continue.",
+      });
+    });
+
     it("resolves unqualified internal calls from the enclosing contract before imported same-name functions", () => {
       const files = {
         "src/Other.sol": `pragma solidity ^0.8.24;

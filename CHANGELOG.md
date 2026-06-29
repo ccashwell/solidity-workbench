@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Signature Help now treats modifier invocations in function declarations as
+  callable signatures, including modifier parameter NatSpec.
 - Call Hierarchy fallback indexing now scans file-level free-function bodies,
   so switching between outgoing callees and incoming callers works for free
   functions even when the graph index is unavailable.

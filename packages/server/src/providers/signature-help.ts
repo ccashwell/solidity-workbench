@@ -7,6 +7,7 @@ import type {
   NatspecComment,
   EventDefinition,
   ErrorDefinition,
+  ModifierDefinition,
   SoliditySourceUnit,
 } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
@@ -189,7 +190,12 @@ export class SignatureHelpProvider {
 
     const symbols = this.symbolIndex.findSymbols(funcName);
     for (const sym of symbols) {
-      if (sym.kind === "function" || sym.kind === "event" || sym.kind === "error") {
+      if (
+        sym.kind === "function" ||
+        sym.kind === "modifier" ||
+        sym.kind === "event" ||
+        sym.kind === "error"
+      ) {
         if (sym.containerName) {
           const entry = this.symbolIndex.getContract(sym.containerName);
           if (entry) {
@@ -197,6 +203,15 @@ export class SignatureHelpProvider {
             if (func) {
               signatures.push(
                 this.buildSignature(func, sym.containerName, {
+                  containerUri: entry.uri,
+                }),
+              );
+              continue;
+            }
+            const mod = entry.contract.modifiers.find((m) => m.name === funcName);
+            if (mod) {
+              signatures.push(
+                this.buildModifierSignature(mod, sym.containerName, {
                   containerUri: entry.uri,
                 }),
               );
@@ -275,6 +290,13 @@ export class SignatureHelpProvider {
     for (const func of contract.functions) {
       if (func.name === funcName) {
         signatures.push(this.buildSignature(func, contract.name, uri ? { containerUri: uri } : {}));
+      }
+    }
+    for (const mod of contract.modifiers) {
+      if (mod.name === funcName) {
+        signatures.push(
+          this.buildModifierSignature(mod, contract.name, uri ? { containerUri: uri } : {}),
+        );
       }
     }
     for (const event of contract.events) {
@@ -364,6 +386,13 @@ export class SignatureHelpProvider {
         );
       }
     }
+    for (const mod of entry.contract.modifiers) {
+      if (mod.name === funcName) {
+        signatures.push(
+          this.buildModifierSignature(mod, entry.contract.name, { containerUri: entry.uri }),
+        );
+      }
+    }
   }
 
   private findEnclosingContract(
@@ -446,6 +475,43 @@ export class SignatureHelpProvider {
       label: `event ${event.name}(${paramStr})`,
       documentation: event.natspec?.notice
         ? { kind: MarkupKind.Markdown, value: event.natspec.notice }
+        : undefined,
+      parameters: params,
+    };
+  }
+
+  private buildModifierSignature(
+    mod: ModifierDefinition,
+    containerName: string,
+    options: { containerUri?: string } = {},
+  ): SignatureInformation {
+    const sym = this.symbolIndex
+      .findSymbols(mod.name)
+      .find(
+        (s) =>
+          s.kind === "modifier" &&
+          s.containerName === containerName &&
+          (!options.containerUri || s.filePath === options.containerUri),
+      );
+    const effective = sym
+      ? resolveEffectiveNatspec(sym, this.symbolIndex, this.resolver)
+      : mod.natspec;
+
+    const params = mod.parameters.map((p) => {
+      const label = `${p.typeName}${p.storageLocation ? " " + p.storageLocation : ""}${p.name ? " " + p.name : ""}`;
+      const doc = effective?.params?.[p.name ?? ""];
+      return {
+        label,
+        documentation: doc ? { kind: MarkupKind.Markdown, value: doc } : undefined,
+      };
+    });
+    const paramStr = params.map((p) => p.label).join(", ");
+    const documentation = this.buildDocumentation(effective, containerName);
+
+    return {
+      label: `${mod.name}(${paramStr})`,
+      documentation: documentation
+        ? { kind: MarkupKind.Markdown, value: documentation }
         : undefined,
       parameters: params,
     };
