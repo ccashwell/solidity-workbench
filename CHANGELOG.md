@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-06-29
+
+### Fixed
+
+- Local variable type inference now ignores commented-out declarations and
+  string literal contents, preventing hover, type definition, document
+  highlights, and receiver-aware resolution from treating prose as real
+  Solidity locals.
+
 ## [0.8.6] - 2026-06-29
 
 ### Fixed
