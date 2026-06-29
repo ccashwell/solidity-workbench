@@ -18,7 +18,14 @@ import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
 import type { SemanticResolver } from "../analyzer/semantic-resolver.js";
 import type { GraphIndex, SolidityGraphNode } from "../analyzer/graph-index.js";
-import { getWordAtPosition, CALL_LIKE_KEYWORDS, isSolidityBuiltinType } from "../utils/text.js";
+import {
+  getWordAtPosition,
+  CALL_LIKE_KEYWORDS,
+  findCommentRanges,
+  isInsideString,
+  isPositionInCommentRanges,
+  isSolidityBuiltinType,
+} from "../utils/text.js";
 import { resolveDottedReceiverTypeInfo } from "../utils/receiver-type.js";
 
 const CALL_HIERARCHY_INDEX_BATCH_SIZE = 24;
@@ -593,6 +600,7 @@ export class CallHierarchyProvider {
   private indexCallsInFile(uri: string, text: string): void {
     const result = this.parser.get(uri) ?? this.parser.parse(uri, text);
     const lines = text.split("\n");
+    const commentRanges = findCommentRanges(text);
 
     // Track which callee names and caller keys this file owns so
     // `invalidateFile` can drop them in O(file) instead of scanning
@@ -663,6 +671,9 @@ export class CallHierarchyProvider {
             newlinesBefore === 0
               ? bodyRange.bodyStartChar + absoluteMatchStart
               : absoluteMatchStart - lineStartOffset;
+
+          if (isPositionInCommentRanges(commentRanges, callLine, callCol)) continue;
+          if (isInsideString(lines[callLine] ?? "", callCol)) continue;
 
           const callRange: Range = {
             start: { line: callLine, character: Math.max(0, callCol) },

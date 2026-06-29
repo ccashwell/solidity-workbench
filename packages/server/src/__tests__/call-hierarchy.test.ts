@@ -1189,5 +1189,94 @@ contract Unrelated {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }
     });
+
+    it("ignores call-shaped text inside comments and string literals", async () => {
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "call-hierarchy-comment-test-"));
+      try {
+        const files = {
+          "A.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract A {
+    function transfer() external {}
+}
+`,
+          "UseA.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "./A.sol";
+
+contract UseA {
+    function run(A a) external pure returns (string memory) {
+        // a.transfer();
+        /* a.transfer(); */
+        /*
+            a.transfer();
+        */
+        return "a.transfer()";
+    }
+}
+`,
+        };
+
+        const uris: string[] = [];
+        for (const [name, contents] of Object.entries(files)) {
+          const filePath = path.join(tmpDir, name);
+          fs.writeFileSync(filePath, contents, "utf-8");
+          uris.push(URI.file(filePath).toString());
+        }
+
+        const workspace: Pick<WorkspaceManager, "getAllFileUris" | "uriToPath" | "resolveImport"> =
+          {
+            getAllFileUris: () => uris.slice(),
+            uriToPath: (uri: string) => URI.parse(uri).fsPath,
+            resolveImport: (importPath: string, fromFile: string) => {
+              if (!importPath.startsWith(".")) return null;
+              const target = path.resolve(path.dirname(fromFile), importPath);
+              return fs.existsSync(target) ? target : null;
+            },
+          };
+
+        const parser = new SolidityParser();
+        const symbolIndex = new SymbolIndex(parser, workspace as WorkspaceManager);
+        for (const uri of uris) {
+          const text = fs.readFileSync(URI.parse(uri).fsPath, "utf-8");
+          parser.parse(uri, text);
+          symbolIndex.updateFile(uri);
+        }
+
+        const provider = new CallHierarchyProvider(
+          symbolIndex,
+          workspace as WorkspaceManager,
+          parser,
+        );
+        const useAUri = URI.file(path.join(tmpDir, "UseA.sol")).toString();
+        const outgoing = await provider.getOutgoingCalls({
+          name: "run",
+          kind: SymbolKind.Function,
+          uri: useAUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "UseA",
+        });
+
+        assert.deepEqual(
+          outgoing.map((call) => call.to.name),
+          [],
+          "comment and string literals must not produce call hierarchy edges",
+        );
+
+        const incoming = await provider.getIncomingCalls(
+          transferItem(URI.file(path.join(tmpDir, "A.sol")).toString(), "A"),
+        );
+        assert.deepEqual(
+          incoming.map((call) => call.from.name),
+          [],
+          "comment and string literals must not produce incoming call hierarchy edges",
+        );
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
   });
 });
