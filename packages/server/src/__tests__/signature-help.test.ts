@@ -56,6 +56,34 @@ function setupFiles(files: Record<string, string>) {
   };
 }
 
+function setupFilesParserOnly(files: Record<string, string>) {
+  const parser = new SolidityParser();
+  const filePaths = new Set(Object.keys(files).map((name) => path.join("/w", name)));
+  const uris = Object.keys(files).map((name) => URI.file(path.join("/w", name)).toString());
+  const workspace = {
+    getAllFileUris: () => uris.slice(),
+    uriToPath: (uri: string) => URI.parse(uri).fsPath,
+    resolveImport: (importPath: string, fromFile: string) => {
+      const target = path.resolve(path.dirname(fromFile), importPath);
+      return filePaths.has(target) ? target : null;
+    },
+  } as unknown as WorkspaceManager;
+  const idx = new SymbolIndex(parser, workspace);
+  const docs: Record<string, TextDocument> = {};
+
+  for (const [name, text] of Object.entries(files)) {
+    const uri = URI.file(path.join("/w", name)).toString();
+    parser.parse(uri, text);
+    idx.updateFile(uri);
+    docs[name] = TextDocument.create(uri, "solidity", 1, text);
+  }
+
+  return {
+    docs,
+    provider: new SignatureHelpProvider(idx, parser, undefined, workspace),
+  };
+}
+
 describe("SignatureHelpProvider", () => {
   describe("built-in functions", () => {
     it("returns a signature for `require(` open paren", () => {
@@ -359,6 +387,77 @@ contract Pool {
         kind: "markdown",
         value: "Source shares documentation.",
       });
+    });
+
+    it("resolves parser-only receiver signatures through visible imports before duplicate globals", () => {
+      const files = {
+        "src/IVault.sol": `pragma solidity ^0.8.24;
+interface IVault {
+    function convertToAssets(uint256 shares) external view returns (uint256 assets);
+}`,
+        "src/Pool.sol": `pragma solidity ^0.8.24;
+import { IVault } from "./IVault.sol";
+contract Pool {
+    function f(IVault vault, uint256 shares) external view {
+        vault.convertToAssets(shares);
+    }
+}`,
+        "test/IVault.sol": `pragma solidity ^0.8.24;
+interface IVault {
+    function convertToAssets(address account) external view returns (uint256 assets);
+}`,
+      };
+      const { docs, provider } = setupFilesParserOnly(files);
+      const text = files["src/Pool.sol"];
+      const lines = text.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("convertToAssets"));
+      const col = lines[callLine].indexOf("convertToAssets(") + "convertToAssets(".length;
+
+      const sig = provider.provideSignatureHelp(docs["src/Pool.sol"], {
+        line: callLine,
+        character: col,
+      });
+
+      assert.ok(sig, "expected parser-only signature help for imported receiver type");
+      assert.equal(sig!.signatures.length, 1);
+      assert.match(sig!.signatures[0].label, /convertToAssets\(uint256 shares\)/);
+      assert.doesNotMatch(sig!.signatures[0].label, /address account/);
+    });
+
+    it("resolves parser-only unqualified calls from the enclosing contract before duplicate globals", () => {
+      const files = {
+        "src/Local.sol": `pragma solidity ^0.8.24;
+contract Local {
+    function shared(uint256 amount) internal pure returns (uint256) {
+        return amount;
+    }
+
+    function f() external pure {
+        shared(1);
+    }
+}`,
+        "test/Local.sol": `pragma solidity ^0.8.24;
+contract Local {
+    function shared(address account) internal pure returns (address) {
+        return account;
+    }
+}`,
+      };
+      const { docs, provider } = setupFilesParserOnly(files);
+      const text = files["src/Local.sol"];
+      const lines = text.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("shared(1"));
+      const col = lines[callLine].indexOf("shared(") + "shared(".length;
+
+      const sig = provider.provideSignatureHelp(docs["src/Local.sol"], {
+        line: callLine,
+        character: col,
+      });
+
+      assert.ok(sig, "expected parser-only signature help for local internal call");
+      assert.equal(sig!.signatures.length, 1);
+      assert.match(sig!.signatures[0].label, /shared\(uint256 amount\)/);
+      assert.doesNotMatch(sig!.signatures[0].label, /address account/);
     });
   });
 

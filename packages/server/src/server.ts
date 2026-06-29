@@ -389,7 +389,12 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   formattingProvider = new FormattingProvider(workspaceManager);
   documentSymbolProvider = new DocumentSymbolProvider(parser);
   inlayHintsProvider = new InlayHintsProvider(symbolIndex, parser, semanticResolver);
-  signatureHelpProvider = new SignatureHelpProvider(symbolIndex, parser, semanticResolver);
+  signatureHelpProvider = new SignatureHelpProvider(
+    symbolIndex,
+    parser,
+    semanticResolver,
+    workspaceManager,
+  );
   renameProvider = new RenameProvider(symbolIndex, workspaceManager, documents, semanticResolver);
   codeLensProvider = new CodeLensProvider(symbolIndex, parser, workspaceManager, semanticResolver);
   referencesProvider = new ReferencesProvider(

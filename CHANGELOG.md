@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parser-only dotted hovers now keep receiver inheritance and final member
   lookup scoped to the visible declaration file, so duplicate test contracts
   cannot replace source member documentation.
+- Parser-only Signature Help now resolves receiver and enclosing-contract
+  inheritance through visible imports, preventing same-named test contracts
+  from replacing source call signatures.
 
 ## [0.8.8] - 2026-06-29
 

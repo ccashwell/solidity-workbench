@@ -14,6 +14,8 @@ import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { ResolvedContract, SemanticResolver } from "../analyzer/semantic-resolver.js";
 import { resolveEffectiveNatspec } from "../utils/natspec.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
+import type { WorkspaceManager } from "../workspace/workspace-manager.js";
+import { URI } from "vscode-uri";
 import { resolveDottedReceiverTypeName } from "../utils/receiver-type.js";
 import { findUsingForFunction } from "../utils/using-for.js";
 
@@ -35,6 +37,7 @@ export class SignatureHelpProvider {
     private symbolIndex: SymbolIndex,
     private parser: SolidityParser,
     private resolver?: SemanticResolver,
+    private workspace?: WorkspaceManager,
   ) {}
 
   provideSignatureHelp(document: TextDocument, position: Position): SignatureHelp | null {
@@ -168,11 +171,13 @@ export class SignatureHelpProvider {
         return signatures;
       }
 
-      const chain = this.symbolIndex.getInheritanceChain(receiverTypeName);
-      for (const contract of chain) {
-        for (const func of contract.functions) {
+      const chain = this.getParserInheritanceChain(receiverTypeName, documentUri);
+      for (const entry of chain) {
+        for (const func of entry.contract.functions) {
           if (func.name === funcName) {
-            signatures.push(this.buildSignature(func, contract.name));
+            signatures.push(
+              this.buildSignature(func, entry.contract.name, { containerUri: entry.uri }),
+            );
           }
         }
       }
@@ -270,8 +275,8 @@ export class SignatureHelpProvider {
           this.addContractCallableSignatures(signatures, entry.contract, funcName, entry.uri);
         }
       } else {
-        for (const entry of this.symbolIndex.getInheritanceChain(contract.name)) {
-          this.addContractCallableSignatures(signatures, entry, funcName);
+        for (const entry of this.getParserInheritanceChain(contract.name, documentUri)) {
+          this.addContractCallableSignatures(signatures, entry.contract, funcName, entry.uri);
         }
       }
     }
@@ -372,6 +377,89 @@ export class SignatureHelpProvider {
     );
     const sym = symbols.find((candidate) => candidate.filePath === documentUri) ?? symbols[0];
     return sym ? this.resolver.getInheritanceChain(sym.name, sym.filePath) : [];
+  }
+
+  private getParserInheritanceChain(
+    typeName: string,
+    documentUri: string,
+  ): Array<{ uri: string; contract: ContractDefinition }> {
+    const root = this.resolveParserVisibleContract(typeName, documentUri);
+    if (!root) return [];
+
+    const chain: Array<{ uri: string; contract: ContractDefinition }> = [];
+    const visited = new Set<string>();
+
+    const walk = (entry: { uri: string; contract: ContractDefinition }): void => {
+      const key = `${entry.uri}#${entry.contract.name}`;
+      if (visited.has(key)) return;
+      visited.add(key);
+      chain.push(entry);
+
+      for (const base of entry.contract.baseContracts) {
+        const baseEntry = this.resolveParserVisibleContract(base.baseName, entry.uri);
+        if (baseEntry) walk(baseEntry);
+      }
+    };
+
+    walk(root);
+    return chain;
+  }
+
+  private resolveParserVisibleContract(
+    typeName: string,
+    documentUri: string,
+  ): { uri: string; contract: ContractDefinition } | undefined {
+    const local = this.symbolIndex.getContract(typeName, documentUri);
+    if (local) return local;
+
+    return this.resolveParserImportedContract(typeName, documentUri);
+  }
+
+  private resolveParserImportedContract(
+    typeName: string,
+    documentUri: string,
+  ): { uri: string; contract: ContractDefinition } | undefined {
+    if (!this.workspace) return undefined;
+
+    const sourceUnit = this.parser.get(documentUri)?.sourceUnit;
+    if (!sourceUnit) return undefined;
+
+    let fromPath: string;
+    try {
+      fromPath = this.workspace.uriToPath(documentUri);
+    } catch {
+      return undefined;
+    }
+
+    const scoped = typeName.includes(".") ? typeName.split(".") : null;
+    for (const imp of sourceUnit.imports) {
+      let targetPath: string | null;
+      try {
+        targetPath = this.workspace.resolveImport(imp.path, fromPath);
+      } catch {
+        targetPath = null;
+      }
+      if (!targetPath) continue;
+      const targetUri = URI.file(targetPath).toString();
+
+      if (scoped && imp.unitAlias === scoped[0] && scoped[1]) {
+        return this.symbolIndex.getContract(scoped[1], targetUri);
+      }
+
+      if (scoped) continue;
+      for (const alias of imp.symbolAliases ?? []) {
+        const visibleName = alias.alias ?? alias.symbol;
+        if (visibleName !== typeName) continue;
+        return this.symbolIndex.getContract(alias.symbol, targetUri);
+      }
+
+      if (!imp.unitAlias && (imp.symbolAliases ?? []).length === 0) {
+        const imported = this.symbolIndex.getContract(typeName, targetUri);
+        if (imported) return imported;
+      }
+    }
+
+    return undefined;
   }
 
   private addContractSignatures(
