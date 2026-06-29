@@ -71,7 +71,9 @@ export class DocumentLinksProvider {
       const fromSymbol = this.findDocumentedSymbol(document.uri, comment.endLine);
       for (let line = comment.startLine; line <= comment.endLine; line++) {
         const text = lines[line] ?? "";
-        for (const match of text.matchAll(/\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\}/g)) {
+        for (const match of text.matchAll(
+          /\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?(?:\([^{}]*\))?)\}/g,
+        )) {
           const ref = match[1];
           const start = match.index ?? 0;
           const target = resolveNatspecReference(

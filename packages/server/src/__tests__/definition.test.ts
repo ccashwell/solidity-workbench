@@ -672,6 +672,31 @@ library InventoryLib {
       assert.equal(loc.uri, "file:///w/InventoryLib.sol");
       assert.equal(loc.range.start.line, 8);
     });
+
+    it("uses braced NatSpec signatures to jump to the matching overload", () => {
+      const { docs, provider } = setup({
+        "file:///w/Router.sol": `pragma solidity ^0.8.24;
+
+/// Routes via {execute(address,uint256)}.
+contract Router {
+    function execute(bytes32 id) external {}
+    function execute(address target, uint256 amount) external {}
+}`,
+      });
+      const document = docs["file:///w/Router.sol"];
+      const lines = document.getText().split("\n");
+      const commentLine = lines.findIndex((line) => line.includes("{execute(address,uint256)}"));
+      const def = provider.provideDefinition(document, {
+        line: commentLine,
+        character: lines[commentLine].indexOf("address"),
+      });
+
+      assert.ok(def, "expected definition for braced overload reference");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc);
+      assert.equal(loc.uri, "file:///w/Router.sol");
+      assert.equal(loc.range.start.line, 5);
+    });
   });
 
   describe("go-to-type-definition", () => {

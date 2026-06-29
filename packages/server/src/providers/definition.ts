@@ -299,7 +299,9 @@ export class DefinitionProvider {
     if (!comment) return null;
     const fromSymbol = this.findDocumentedSymbol(documentUri, comment.endLine);
     const line = text.split("\n")[position.line] ?? "";
-    for (const match of line.matchAll(/\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)\}/g)) {
+    for (const match of line.matchAll(
+      /\{([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?(?:\([^{}]*\))?)\}/g,
+    )) {
       const start = match.index ?? 0;
       const end = start + match[0].length;
       if (position.character < start || position.character > end) continue;

@@ -10,7 +10,8 @@ export function resolveNatspecReference(
   resolver?: SemanticResolver,
   fromSymbol?: SolSymbol,
 ): SolSymbol | undefined {
-  const parts = ref.split(".");
+  const parsed = parseNatspecReference(ref);
+  const parts = parsed.name.split(".");
   const symbolName = parts[parts.length - 1];
   let implicitContainerName = fromSymbol?.containerName;
   if (
@@ -30,6 +31,11 @@ export function resolveNatspecReference(
   }
   if (resolver) candidates = resolver.filterVisibleSymbols(documentUri, candidates);
   candidates = candidates.filter(isNatspecReferenceTarget);
+  if (parsed.parameterTypes) {
+    candidates = candidates.filter((candidate) =>
+      matchesSignatureParameters(candidate, parsed.parameterTypes ?? []),
+    );
+  }
   candidates = filterReferenceScope(
     candidates,
     documentUri,
@@ -106,6 +112,82 @@ function matchesImportedTopLevel(
     candidate.name === importedTopLevel.name &&
     candidate.filePath === importedTopLevel.uri
   );
+}
+
+interface ParsedNatspecReference {
+  name: string;
+  parameterTypes?: string[];
+}
+
+function parseNatspecReference(ref: string): ParsedNatspecReference {
+  const signature = /^(.+)\((.*)\)$/.exec(ref);
+  if (!signature) return { name: ref };
+
+  return {
+    name: signature[1],
+    parameterTypes: splitParameters(signature[2]).map(normalizeParameterType),
+  };
+}
+
+function matchesSignatureParameters(candidate: SolSymbol, expected: string[]): boolean {
+  const actual = signatureParameterTypes(candidate.detail);
+  if (!actual) return false;
+  if (actual.length !== expected.length) return false;
+  return actual.every((typeName, index) => typeName === expected[index]);
+}
+
+function signatureParameterTypes(detail: string | undefined): string[] | undefined {
+  if (!detail?.startsWith("(")) return undefined;
+
+  let depth = 0;
+  for (let index = 0; index < detail.length; index++) {
+    const char = detail[index];
+    if (char === "(") depth++;
+    if (char === ")") {
+      depth--;
+      if (depth === 0) {
+        return splitParameters(detail.slice(1, index)).map(normalizeParameterType);
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function splitParameters(input: string): string[] {
+  const trimmed = input.trim();
+  if (!trimmed) return [];
+
+  const parts: string[] = [];
+  let start = 0;
+  let depth = 0;
+  for (let index = 0; index < input.length; index++) {
+    const char = input[index];
+    if (char === "(" || char === "[" || char === "{") depth++;
+    if (char === ")" || char === "]" || char === "}") depth = Math.max(0, depth - 1);
+    if (char !== "," || depth !== 0) continue;
+
+    parts.push(input.slice(start, index).trim());
+    start = index + 1;
+  }
+  parts.push(input.slice(start).trim());
+  return parts;
+}
+
+function normalizeParameterType(input: string): string {
+  let normalized = input
+    .replace(/\b(indexed|memory|calldata|storage)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const named = /^(.*)\s+([A-Za-z_$][\w$]*)$/.exec(normalized);
+  if (named && !isTypeSuffixKeyword(named[2])) normalized = named[1].trim();
+
+  return normalized.replace(/\s+/g, "");
+}
+
+function isTypeSuffixKeyword(value: string): boolean {
+  return value === "payable";
 }
 
 export function isNatspecReferenceTarget(sym: SolSymbol): boolean {

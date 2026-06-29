@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Braced NatSpec references now support signature-qualified overload links such
+  as `{execute(address,uint256)}` and `{Router.execute(bytes32)}` for document
+  links and go-to-definition, while unmatched signatures stay unresolved instead
+  of drifting to a different overload.
+
 ## [0.8.8] - 2026-06-29
 
 ### Fixed

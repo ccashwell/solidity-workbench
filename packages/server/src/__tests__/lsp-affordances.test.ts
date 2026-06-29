@@ -221,6 +221,51 @@ library InventoryLib {
     );
   });
 
+  it("uses braced NatSpec signatures to disambiguate overloaded document links", () => {
+    const files = {
+      "src/Router.sol": `pragma solidity ^0.8.24;
+
+/// @notice Routes via {execute(address,uint256)} and {execute(bytes32)}.
+/// Unknown overloads like {execute(bool)} stay plain text.
+contract Router {
+    function execute(bytes32 id) external {}
+    function execute(address target, uint256 amount) external {}
+}
+`,
+    };
+    const { docs, parser, idx, resolver, workspace } = setupFiles(files);
+
+    const links = new DocumentLinksProvider(parser, workspace, idx, resolver).provideDocumentLinks(
+      docs["src/Router.sol"],
+    );
+    const addressOverload = links.find(
+      (link) =>
+        link.tooltip === "Open Router.execute" &&
+        link.range.start.character ===
+          files["src/Router.sol"].split("\n")[2].indexOf("{execute(address,uint256)}"),
+    );
+    const bytes32Overload = links.find(
+      (link) =>
+        link.tooltip === "Open Router.execute" &&
+        link.range.start.character ===
+          files["src/Router.sol"].split("\n")[2].indexOf("{execute(bytes32)}"),
+    );
+
+    assert.ok(addressOverload, "expected address,uint256 overload link");
+    assert.equal(addressOverload.target, "file:///w/src/Router.sol#L7,14");
+    assert.ok(bytes32Overload, "expected bytes32 overload link");
+    assert.equal(bytes32Overload.target, "file:///w/src/Router.sol#L6,14");
+    assert.equal(
+      links.some(
+        (link) =>
+          link.range.start.character ===
+          files["src/Router.sol"].split("\n")[3].indexOf("{execute(bool)}"),
+      ),
+      false,
+      "unknown overload signature should not link to a different overload",
+    );
+  });
+
   it("prefers the documented contract for unqualified braced NatSpec member links", () => {
     const files = {
       "src/InventoryLib.sol": `pragma solidity ^0.8.24;
