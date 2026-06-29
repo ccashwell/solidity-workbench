@@ -358,7 +358,10 @@ export class InlayHintsProvider {
 
     const contract = getEnclosingContract(sourceUnit, lineNum);
     if (contract) {
-      const chain = this.symbolIndex.getInheritanceChain(contract.name);
+      const resolved = this.resolver?.resolveContract(contract.name, uri);
+      const chain = resolved
+        ? (this.resolver?.getInheritanceChainFor(resolved).map((entry) => entry.contract) ?? [])
+        : this.symbolIndex.getInheritanceChain(contract.name);
       for (const c of chain) {
         const fn = c.functions.find((f) => f.name === funcName);
         if (fn) {

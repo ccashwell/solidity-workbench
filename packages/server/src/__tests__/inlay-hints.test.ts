@@ -181,6 +181,48 @@ contract MarginRouter {
     );
   });
 
+  it("resolves unqualified inherited calls through the imported base contract", () => {
+    const baseUri = "file:///w/src/Base.sol";
+    const childUri = "file:///w/src/Child.sol";
+    const testBaseUri = "file:///w/test/Base.sol";
+    const files = {
+      [baseUri]: `pragma solidity ^0.8.24;
+contract Base {
+    function sourceOpen(uint256 sourceAmount) internal pure returns (uint256) {
+        return sourceAmount;
+    }
+}`,
+      [childUri]: `pragma solidity ^0.8.24;
+import "./Base.sol";
+contract Child is Base {
+    function run() external pure returns (uint256) {
+        return sourceOpen(1);
+    }
+}`,
+      [testBaseUri]: `pragma solidity ^0.8.24;
+contract Base {
+    function sourceOpen(address wrongAccount) internal pure returns (address) {
+        return wrongAccount;
+    }
+}`,
+    };
+    const { doc, provider } = setupFiles(childUri, files);
+    const hints = provider.provideInlayHints(doc, {
+      start: { line: 0, character: 0 },
+      end: { line: files[childUri].split("\n").length, character: 0 },
+    });
+
+    const labels = hints.map((h) => h.label);
+    assert.ok(
+      labels.includes("sourceAmount:"),
+      `expected source Base.sourceOpen parameter, got ${JSON.stringify(labels)}`,
+    );
+    assert.ok(
+      !labels.includes("wrongAccount:"),
+      `must not use same-name test Base.sourceOpen parameter, got ${JSON.stringify(labels)}`,
+    );
+  });
+
   describe("comment handling", () => {
     it("does not emit hints for the `event Bootstrap` NatSpec example", () => {
       // Exact prose from a real-world report: a vault contract whose
