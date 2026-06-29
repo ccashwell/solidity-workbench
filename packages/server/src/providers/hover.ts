@@ -117,7 +117,9 @@ export class HoverProvider {
       }
     }
     if (!sym) {
-      const visibleSymbols = this.filterVisibleSymbols(document.uri, symbols);
+      const visibleSymbols = this.filterVisibleSymbols(document.uri, symbols, {
+        includeNamespaceImports: false,
+      });
       if (visibleSymbols.length === 0) return null;
       sym = visibleSymbols.find((s) => s.filePath === document.uri) ?? visibleSymbols[0];
     }
@@ -250,8 +252,12 @@ export class HoverProvider {
     };
   }
 
-  private filterVisibleSymbols(currentUri: string, symbols: SolSymbol[]): SolSymbol[] {
-    if (this.resolver) return this.resolver.filterVisibleSymbols(currentUri, symbols);
+  private filterVisibleSymbols(
+    currentUri: string,
+    symbols: SolSymbol[],
+    options?: { includeNamespaceImports?: boolean },
+  ): SolSymbol[] {
+    if (this.resolver) return this.resolver.filterVisibleSymbols(currentUri, symbols, options);
     const reachable = this.collectReachableUris(currentUri);
     return symbols.filter((sym) => reachable.has(sym.filePath));
   }

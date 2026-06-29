@@ -70,6 +70,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   visibility instead of returning sole global or project-tier candidates,
   preventing resolver-backed providers from binding unresolved source types to
   unrelated project or test declarations.
+- Parser-only visible symbol filtering now respects named, plain, and namespace
+  import exposure for top-level declarations, preventing named-import siblings
+  and transitive imports from leaking into bare symbol lookups.
 
 ## [0.8.8] - 2026-06-29
 

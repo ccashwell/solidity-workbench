@@ -50,8 +50,9 @@ export function resolveNatspecReference(
   let candidates = symbolIndex.findSymbols(importedTopLevel?.name ?? symbolName);
   if (importedTopLevel) {
     candidates = candidates.filter((candidate) => candidate.filePath === importedTopLevel.uri);
+  } else if (resolver) {
+    candidates = resolver.filterVisibleSymbols(documentUri, candidates);
   }
-  if (resolver) candidates = resolver.filterVisibleSymbols(documentUri, candidates);
   candidates = candidates.filter(isNatspecReferenceTarget);
   if (parsed.parameterTypes) {
     candidates = candidates.filter((candidate) =>

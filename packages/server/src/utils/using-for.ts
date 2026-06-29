@@ -32,14 +32,38 @@ export function collectUsingForDirectivesInScope(
   contract: ContractDefinition | undefined,
   resolver?: SemanticResolver,
 ): UsingForDirective[] {
-  const directives = collectUsingForDirectives(sourceUnit, contract);
+  return collectUsingForDirectiveEntriesInScope(parser, uri, sourceUnit, contract, resolver).map(
+    (entry) => entry.directive,
+  );
+}
+
+interface ScopedUsingForDirective {
+  directive: UsingForDirective;
+  uri: string;
+}
+
+function collectUsingForDirectiveEntriesInScope(
+  parser: SolidityParser,
+  uri: string,
+  sourceUnit: SoliditySourceUnit,
+  contract: ContractDefinition | undefined,
+  resolver?: SemanticResolver,
+): ScopedUsingForDirective[] {
+  const directives = collectUsingForDirectives(sourceUnit, contract).map((directive) => ({
+    directive,
+    uri,
+  }));
   if (!resolver) return directives;
 
   for (const reachableUri of resolver.collectReachableUris(uri)) {
     if (reachableUri === uri) continue;
     const reachableSourceUnit = parser.get(reachableUri)?.sourceUnit;
     if (!reachableSourceUnit) continue;
-    directives.push(...reachableSourceUnit.usingFor.filter((directive) => directive.isGlobal));
+    directives.push(
+      ...reachableSourceUnit.usingFor
+        .filter((directive) => directive.isGlobal)
+        .map((directive) => ({ directive, uri: reachableUri })),
+    );
   }
 
   return directives;
@@ -63,7 +87,7 @@ export function findUsingForFunction(
   const sourceUnit = parser.get(uri)?.sourceUnit;
   if (!sourceUnit) return null;
 
-  for (const directive of collectUsingForDirectivesInScope(
+  for (const { directive, uri: directiveUri } of collectUsingForDirectiveEntriesInScope(
     parser,
     uri,
     sourceUnit,
@@ -98,15 +122,24 @@ export function findUsingForFunction(
       continue;
     }
 
-    const hit = selectVisibleFreeFunction(
-      parser,
-      symbolIndex,
-      uri,
+    const directiveSourceUnit = parser.get(directiveUri)?.sourceUnit;
+    const directiveSourceMatch = selectUsingForFunction(
+      directiveSourceUnit?.freeFunctions ?? [],
       functionName,
       argumentCount,
-      resolver,
       argumentTypes,
     );
+    const hit = directiveSourceMatch
+      ? { fn: directiveSourceMatch, filePath: directiveUri }
+      : selectVisibleFreeFunction(
+          parser,
+          symbolIndex,
+          uri,
+          functionName,
+          argumentCount,
+          resolver,
+          argumentTypes,
+        );
     const fn = hit?.fn;
     if (!fn || fn.parameters.length === 0) continue;
     if (!isSameTypeName(fn.parameters[0].typeName, receiverType)) continue;

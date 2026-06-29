@@ -17,6 +17,10 @@ export interface ResolvedContract {
   tier: "project" | "tests" | "deps" | "unknown";
 }
 
+export interface VisibleSymbolFilterOptions {
+  includeNamespaceImports?: boolean;
+}
+
 /**
  * Shared semantic resolver for parser-backed, import-aware lookups.
  *
@@ -302,9 +306,27 @@ export class SemanticResolver {
     return null;
   }
 
-  filterVisibleSymbols<T extends { filePath: string }>(currentUri: string, symbols: T[]): T[] {
+  filterVisibleSymbols<T extends { filePath: string }>(
+    currentUri: string,
+    symbols: T[],
+    options: VisibleSymbolFilterOptions = {},
+  ): T[] {
     const reachable = this.collectReachableUris(currentUri);
-    return symbols.filter((sym) => reachable.has(sym.filePath));
+    const includeNamespaceImports = options.includeNamespaceImports ?? true;
+    return symbols.filter((sym) => {
+      if (sym.filePath === currentUri) return true;
+      if (!reachable.has(sym.filePath)) return false;
+
+      const symbol = sym as T & { containerName?: string; name?: string };
+      if (symbol.containerName || !symbol.name) return true;
+
+      const imported = this.resolveImportedSymbol(symbol.name, currentUri);
+      if (imported?.name === symbol.name && imported.uri === sym.filePath) return true;
+      return (
+        includeNamespaceImports &&
+        this.hasNamespaceImportedTopLevelSymbol(currentUri, sym.filePath, symbol.name)
+      );
+    });
   }
 
   collectReachableUris(uri: string): Set<string> {
@@ -342,6 +364,51 @@ export class SemanticResolver {
     }
 
     return visited;
+  }
+
+  private hasNamespaceImportedTopLevelSymbol(
+    currentUri: string,
+    symbolUri: string,
+    symbolName: string,
+  ): boolean {
+    const result = this.parser.get(currentUri);
+    if (!result) return false;
+
+    let fsPath: string;
+    try {
+      fsPath = this.workspace.uriToPath(currentUri);
+    } catch {
+      return false;
+    }
+
+    for (const imp of result.sourceUnit.imports) {
+      if (!imp.unitAlias) continue;
+
+      let targetPath: string | null;
+      try {
+        targetPath = this.workspace.resolveImport(imp.path, fsPath);
+      } catch {
+        targetPath = null;
+      }
+      if (!targetPath) continue;
+      const targetUri = URI.file(targetPath).toString();
+      if (targetUri !== symbolUri) continue;
+
+      const unit = this.parser.get(targetUri)?.sourceUnit;
+      return (
+        unit?.contracts.some((contract) => contract.name === symbolName) ||
+        unit?.freeFunctions.some((fn) => fn.name === symbolName) ||
+        unit?.events.some((event) => event.name === symbolName) ||
+        unit?.errors.some((error) => error.name === symbolName) ||
+        unit?.structs.some((struct) => struct.name === symbolName) ||
+        unit?.enums.some((en) => en.name === symbolName) ||
+        unit?.userDefinedValueTypes.some((udvt) => udvt.name === symbolName) ||
+        unit?.fileConstants.some((constant) => constant.name === symbolName) ||
+        false
+      );
+    }
+
+    return false;
   }
 
   stripTypeDecorations(typeName: string | undefined): string | undefined {

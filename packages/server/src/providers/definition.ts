@@ -118,7 +118,9 @@ export class DefinitionProvider {
     }
 
     // Look up in symbol index
-    const symbols = this.filterVisibleSymbols(document.uri, this.symbolIndex.findSymbols(word));
+    const symbols = this.filterVisibleSymbols(document.uri, this.symbolIndex.findSymbols(word), {
+      includeNamespaceImports: false,
+    });
     if (symbols.length === 0) return null;
 
     // If there's only one definition, go directly
@@ -190,7 +192,9 @@ export class DefinitionProvider {
       if (resolved) return resolved;
     }
 
-    const symbols = this.filterVisibleSymbols(document.uri, this.symbolIndex.findSymbols(word));
+    const symbols = this.filterVisibleSymbols(document.uri, this.symbolIndex.findSymbols(word), {
+      includeNamespaceImports: false,
+    });
     const selected = this.selectTypeCarrierSymbol(document, position, symbols);
     if (selected?.detail) {
       const resolved = this.resolveTypeDefinition(selected.detail, document.uri);
@@ -308,7 +312,9 @@ export class DefinitionProvider {
     }
 
     const visible = this.resolver
-      ? this.resolver.filterVisibleSymbols(fromUri, candidates)
+      ? this.resolver.filterVisibleSymbols(fromUri, candidates, {
+          includeNamespaceImports: normalized.includes("."),
+        })
       : candidates;
     if (visible.length === 0) return null;
     const sameFile = visible.filter((sym) => sym.filePath === fromUri);
@@ -328,8 +334,12 @@ export class DefinitionProvider {
     return symbols.map((sym) => Location.create(sym.filePath, sym.nameRange));
   }
 
-  private filterVisibleSymbols<T extends { filePath: string }>(fromUri: string, symbols: T[]): T[] {
-    return this.resolver ? this.resolver.filterVisibleSymbols(fromUri, symbols) : symbols;
+  private filterVisibleSymbols<T extends { filePath: string }>(
+    fromUri: string,
+    symbols: T[],
+    options?: { includeNamespaceImports?: boolean },
+  ): T[] {
+    return this.resolver ? this.resolver.filterVisibleSymbols(fromUri, symbols, options) : symbols;
   }
 
   private resolveNatspecReferenceAtPosition(
