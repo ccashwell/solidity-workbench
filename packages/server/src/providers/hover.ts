@@ -296,9 +296,9 @@ export class HoverProvider {
       return null;
     }
 
-    const chain = this.symbolIndex.getInheritanceChain(receiver);
-    for (const contract of chain) {
-      const sym = this.lookupMember(contract.name, contract, member);
+    const chain = this.getParserInheritanceChain(receiver, fromUri);
+    for (const entry of chain) {
+      const sym = this.lookupMember(entry.contract.name, entry.contract, member, entry.uri);
       if (sym) return sym;
     }
     return null;
@@ -314,9 +314,94 @@ export class HoverProvider {
       return resolvedContract ? this.resolver.findMemberInContract(resolvedContract, member) : null;
     }
 
-    const entry = this.symbolIndex.getContract(receiver);
+    const entry = this.resolveParserVisibleContract(receiver, fromUri);
     if (!entry) return null;
-    return this.lookupMember(entry.contract.name, entry.contract, member);
+    return this.lookupMember(entry.contract.name, entry.contract, member, entry.uri);
+  }
+
+  private getParserInheritanceChain(
+    receiver: string,
+    fromUri?: string,
+  ): Array<{ uri: string; contract: ContractDefinition }> {
+    const root = this.resolveParserVisibleContract(receiver, fromUri);
+    if (!root) return [];
+
+    const chain: Array<{ uri: string; contract: ContractDefinition }> = [];
+    const visited = new Set<string>();
+
+    const walk = (entry: { uri: string; contract: ContractDefinition }): void => {
+      const key = `${entry.uri}#${entry.contract.name}`;
+      if (visited.has(key)) return;
+      visited.add(key);
+      chain.push(entry);
+
+      for (const base of entry.contract.baseContracts) {
+        const baseEntry = this.resolveParserVisibleContract(base.baseName, entry.uri);
+        if (baseEntry) walk(baseEntry);
+      }
+    };
+
+    walk(root);
+    return chain;
+  }
+
+  private resolveParserVisibleContract(
+    receiver: string,
+    fromUri?: string,
+  ): { uri: string; contract: ContractDefinition } | undefined {
+    if (!fromUri) return this.symbolIndex.getContract(receiver);
+
+    const local = this.symbolIndex.getContract(receiver, fromUri);
+    if (local) return local;
+
+    return this.resolveParserImportedContract(receiver, fromUri);
+  }
+
+  private resolveParserImportedContract(
+    receiver: string,
+    fromUri: string,
+  ): { uri: string; contract: ContractDefinition } | undefined {
+    if (!this.workspace) return undefined;
+
+    const sourceUnit = this.parser.get(fromUri)?.sourceUnit;
+    if (!sourceUnit) return undefined;
+
+    let fromPath: string;
+    try {
+      fromPath = this.workspace.uriToPath(fromUri);
+    } catch {
+      return undefined;
+    }
+
+    const scoped = receiver.includes(".") ? receiver.split(".") : null;
+    for (const imp of sourceUnit.imports) {
+      let targetPath: string | null;
+      try {
+        targetPath = this.workspace.resolveImport(imp.path, fromPath);
+      } catch {
+        targetPath = null;
+      }
+      if (!targetPath) continue;
+      const targetUri = URI.file(targetPath).toString();
+
+      if (scoped && imp.unitAlias === scoped[0] && scoped[1]) {
+        return this.symbolIndex.getContract(scoped[1], targetUri);
+      }
+
+      if (scoped) continue;
+      for (const alias of imp.symbolAliases ?? []) {
+        const visibleName = alias.alias ?? alias.symbol;
+        if (visibleName !== receiver) continue;
+        return this.symbolIndex.getContract(alias.symbol, targetUri);
+      }
+
+      if (!imp.unitAlias && (imp.symbolAliases ?? []).length === 0) {
+        const imported = this.symbolIndex.getContract(receiver, targetUri);
+        if (imported) return imported;
+      }
+    }
+
+    return undefined;
   }
 
   private resolveVisibleContract(receiver: string, fromUri: string): ResolvedContract | null {
@@ -354,6 +439,7 @@ export class HoverProvider {
       enums: { name: string }[];
     },
     member: string,
+    containerUri?: string,
   ): SolSymbol | null {
     const hasMember =
       contract.functions.some((f) => f.name === member) ||
@@ -365,7 +451,11 @@ export class HoverProvider {
     if (!hasMember) return null;
 
     const candidates = this.symbolIndex.findSymbols(member);
-    return candidates.find((s) => s.containerName === containerName) ?? null;
+    return (
+      candidates.find(
+        (s) => s.containerName === containerName && (!containerUri || s.filePath === containerUri),
+      ) ?? null
+    );
   }
 
   private findStructMember(structSym: SolSymbol, member: string): Hover | null {

@@ -45,6 +45,36 @@ function setupFiles(
   };
 }
 
+function setupFilesParserOnly(
+  currentUri: string,
+  files: Record<string, string>,
+  workspace: WorkspaceManager,
+) {
+  const parser = new SolidityParser();
+  const idx = new SymbolIndex(parser, workspace);
+  for (const [uri, text] of Object.entries(files)) {
+    parser.parse(uri, text);
+    idx.updateFile(uri);
+  }
+  return {
+    doc: TextDocument.create(currentUri, "solidity", 1, files[currentUri]),
+    provider: new HoverProvider(idx, parser, workspace),
+  };
+}
+
+function makeWorkspace(uris: string[]): WorkspaceManager {
+  return {
+    getAllFileUris: () => uris.slice(),
+    uriToPath: (uri: string) => URI.parse(uri).fsPath,
+    resolveImport: (importPath: string, fromFile: string) => {
+      const slash = fromFile.lastIndexOf("/");
+      const base = slash >= 0 ? fromFile.slice(0, slash + 1) : "";
+      const normalized = new URL(importPath, URI.file(base).toString()).toString();
+      return uris.includes(normalized) ? URI.parse(normalized).fsPath : null;
+    },
+  } as unknown as WorkspaceManager;
+}
+
 type HoverResult = NonNullable<ReturnType<HoverProvider["provideHover"]>>;
 
 function hoverValue(hover: HoverResult): string {
@@ -492,6 +522,84 @@ interface Ghost {
         resolveImport: () => null,
       } as unknown as WorkspaceManager;
       const { doc, provider } = setupFiles(currentUri, files, workspace);
+      const lines = current.split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("ghost.ping"));
+      const hover = provider.provideHover(doc, {
+        line,
+        character: lines[line].indexOf("ping") + 1,
+      });
+
+      assert.equal(hover, null);
+    });
+
+    it("resolves parser-only dotted hovers through visible imports before duplicate globals", () => {
+      const currentUri = "file:///w/src/Pool.sol";
+      const current = `pragma solidity ^0.8.24;
+import {IVault} from "./IVault.sol";
+
+contract Pool {
+    IVault internal vault;
+
+    function f() external view {
+        vault.convertToAssets(1);
+    }
+}`;
+      const files = {
+        "file:///w/src/IVault.sol": `pragma solidity ^0.8.24;
+interface IVault {
+    /// @notice Source conversion docs.
+    function convertToAssets(uint256 shares) external view returns (uint256 assets);
+}
+`,
+        [currentUri]: current,
+        "file:///w/test/IVault.sol": `pragma solidity ^0.8.24;
+interface IVault {
+    /// @notice Test-only conversion docs.
+    function convertToAssets(uint256 shares) external view returns (uint256 assets);
+}
+`,
+      };
+      const { doc, provider } = setupFilesParserOnly(
+        currentUri,
+        files,
+        makeWorkspace(Object.keys(files)),
+      );
+      const lines = current.split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("vault.convertToAssets"));
+      const hover = provider.provideHover(doc, {
+        line,
+        character: lines[line].indexOf("convertToAssets") + 1,
+      });
+
+      assert.ok(hover, "expected parser-only hover on imported source receiver member");
+      const value = hoverValue(hover);
+      assert.match(value, /Source conversion docs/);
+      assert.doesNotMatch(value, /Test-only conversion docs/);
+    });
+
+    it("does not resolve parser-only dotted hovers through unimported test-only receiver types", () => {
+      const currentUri = "file:///w/src/UsesGhost.sol";
+      const current = `pragma solidity ^0.8.24;
+contract UsesGhost {
+    Ghost internal ghost;
+
+    function f() external view {
+        ghost.ping();
+    }
+}`;
+      const files = {
+        [currentUri]: current,
+        "file:///w/test/Ghost.sol": `pragma solidity ^0.8.24;
+interface Ghost {
+    function ping() external view returns (uint256);
+}
+`,
+      };
+      const { doc, provider } = setupFilesParserOnly(
+        currentUri,
+        files,
+        makeWorkspace(Object.keys(files)),
+      );
       const lines = current.split("\n");
       const line = lines.findIndex((candidate) => candidate.includes("ghost.ping"));
       const hover = provider.provideHover(doc, {
