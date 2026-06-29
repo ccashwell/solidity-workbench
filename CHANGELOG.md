@@ -73,6 +73,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parser-only visible symbol filtering now respects named, plain, and namespace
   import exposure for top-level declarations, preventing named-import siblings
   and transitive imports from leaking into bare symbol lookups.
+- Parser-only References and Rename now use strict bare-symbol import exposure,
+  preventing namespace-only declarations from producing workspace-wide
+  reference results or text fallback renames from unresolved bare identifiers.
 
 ## [0.8.8] - 2026-06-29
 

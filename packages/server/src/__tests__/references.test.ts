@@ -188,4 +188,47 @@ contract Use {
       "unrelated same-name test helper must not be returned",
     );
   });
+
+  it("does not return bare references to namespace-only imports", () => {
+    const typesUri = "file:///w/src/Types.sol";
+    const useUri = "file:///w/src/Use.sol";
+    const files = {
+      [typesUri]: `contract Hidden {}`,
+      [useUri]: `import * as Types from "./Types.sol";
+contract Use {
+    Types.Hidden namespaced;
+    Hidden bare;
+}`,
+    };
+    const parser = new SolidityParser();
+    const workspace = makeFakeWorkspace(Object.keys(files), (importPath, from) =>
+      importPath === "./Types.sol" && from.endsWith("/src/Use.sol")
+        ? URI.parse(typesUri).fsPath
+        : null,
+    );
+    const index = new SymbolIndex(parser, workspace);
+    const docs: TextDocument[] = [];
+    for (const [uri, text] of Object.entries(files)) {
+      parser.parse(uri, text);
+      index.updateFile(uri);
+      docs.push(TextDocument.create(uri, "solidity", 1, text));
+    }
+    const resolver = new SemanticResolver(parser, workspace, index);
+    const doc = docs.find((candidate) => candidate.uri === useUri);
+    assert.ok(doc);
+    const provider = new ReferencesProvider(
+      index,
+      workspace,
+      parser,
+      makeFakeDocuments(docs),
+      resolver,
+    );
+
+    const bareOffset = files[useUri].lastIndexOf("Hidden bare");
+    const refs = provider.provideReferences(doc, doc.positionAt(bareOffset + 1), {
+      includeDeclaration: true,
+    });
+
+    assert.deepEqual(refs, []);
+  });
 });

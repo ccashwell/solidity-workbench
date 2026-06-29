@@ -57,8 +57,10 @@ export class ReferencesProvider {
     token?: CancellationToken,
   ): Location[] {
     const text = document.getText();
-    const word = getWordAtPosition(text, position)?.text ?? null;
-    if (!word) return [];
+    const wordResult = getWordAtPosition(text, position);
+    const word = wordResult?.text ?? null;
+    if (!word || !wordResult) return [];
+    const includeNamespaceImports = this.isQualifiedIdentifier(text, wordResult.range);
 
     const seen = new Set<string>(); // Deduplicate by "uri:line:char"
     const results: Location[] = [];
@@ -76,7 +78,17 @@ export class ReferencesProvider {
     const semantic = this.provideSemanticReferences(document, position, context);
     if (semantic) return semantic;
 
-    const scopeUris = this.referenceScopeUris(document.uri, position, word);
+    const visible = this.visibleSymbols(word, document.uri, includeNamespaceImports);
+    if (this.resolver && visible.length === 0 && this.symbolIndex.findSymbols(word).length > 0) {
+      return [];
+    }
+
+    const scopeUris = this.referenceScopeUris(
+      document.uri,
+      position,
+      word,
+      includeNamespaceImports,
+    );
 
     // 1. Fast path: inverted index
     if (this.symbolIndex.hasReferences(word)) {
@@ -114,9 +126,7 @@ export class ReferencesProvider {
     if (token?.isCancellationRequested) return [];
 
     // 2. Handle the declaration flag.
-    const declarations = this.visibleSymbols(word, document.uri).filter(
-      (sym) => !scopeUris || scopeUris.has(sym.filePath),
-    );
+    const declarations = visible.filter((sym) => !scopeUris || scopeUris.has(sym.filePath));
 
     if (context.includeDeclaration) {
       // Merge in declarations (using nameRange). Dedup against what the
@@ -148,9 +158,15 @@ export class ReferencesProvider {
     currentUri: string,
     position: Position,
     word: string,
+    includeNamespaceImports: boolean,
   ): Set<string> | null {
     if (!this.resolver) return null;
-    const selected = this.selectReferenceSymbol(currentUri, position, word);
+    const selected = this.selectReferenceSymbol(
+      currentUri,
+      position,
+      word,
+      includeNamespaceImports,
+    );
     if (!selected) return null;
 
     const uris = new Set<string>([selected.filePath, currentUri]);
@@ -166,8 +182,9 @@ export class ReferencesProvider {
     currentUri: string,
     position: Position,
     word: string,
+    includeNamespaceImports: boolean,
   ): SolSymbol | undefined {
-    const visible = this.visibleSymbols(word, currentUri);
+    const visible = this.visibleSymbols(word, currentUri, includeNamespaceImports);
 
     const declarationAtCursor = visible.find(
       (sym) => sym.filePath === currentUri && this.rangeContains(sym.nameRange, position),
@@ -187,9 +204,20 @@ export class ReferencesProvider {
     return undefined;
   }
 
-  private visibleSymbols(name: string, fromUri: string): SolSymbol[] {
+  private visibleSymbols(
+    name: string,
+    fromUri: string,
+    includeNamespaceImports: boolean,
+  ): SolSymbol[] {
     const symbols = this.symbolIndex.findSymbols(name);
-    return this.resolver ? this.resolver.filterVisibleSymbols(fromUri, symbols) : symbols;
+    return this.resolver
+      ? this.resolver.filterVisibleSymbols(fromUri, symbols, { includeNamespaceImports })
+      : symbols;
+  }
+
+  private isQualifiedIdentifier(text: string, range: SourceRange): boolean {
+    const line = text.split("\n")[range.start.line] ?? "";
+    return range.start.character > 0 && line[range.start.character - 1] === ".";
   }
 
   private rangeContains(range: SourceRange, position: Position): boolean {

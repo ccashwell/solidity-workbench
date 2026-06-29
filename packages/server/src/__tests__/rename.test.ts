@@ -324,5 +324,41 @@ describe("RenameProvider", () => {
       );
       assert.deepEqual(Object.keys(result.changes).sort(), [helperUri, useUri].sort());
     });
+
+    it("does not rename bare identifiers that are only visible through a namespace import", async () => {
+      const typesFile: TestFile = {
+        path: path.join(SRC_DIR, "Types.sol"),
+        text: "contract Hidden {}\n",
+      };
+      const useFile: TestFile = {
+        path: path.join(SRC_DIR, "Use.sol"),
+        text:
+          'import * as Types from "./Types.sol";\n' +
+          "contract Use {\n" +
+          "    Types.Hidden namespaced;\n" +
+          "    Hidden bare;\n" +
+          "}\n",
+      };
+      const h = setupHarness([typesFile, useFile], [], {
+        useResolver: true,
+        resolveImport: (importPath, from) =>
+          importPath === "./Types.sol" && from.endsWith(`${path.sep}src${path.sep}Use.sol`)
+            ? typesFile.path
+            : null,
+      });
+      const doc = h.docForPath(useFile.path);
+      const bareOffset = useFile.text.lastIndexOf("Hidden bare");
+
+      assert.throws(
+        () => h.provider.prepareRename(doc, doc.positionAt(bareOffset + 1)),
+        /not in the workspace symbol index|no type-resolved AST/i,
+      );
+      const result = await h.provider.provideRename(
+        doc,
+        doc.positionAt(bareOffset + 1),
+        "RenamedHidden",
+      );
+      assert.equal(result, null);
+    });
   });
 });

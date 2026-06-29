@@ -84,7 +84,8 @@ export class RenameProvider {
 
     if (SOLIDITY_KEYWORDS.has(word.text)) return null;
 
-    const symbols = this.visibleSymbols(word.text, document.uri);
+    const includeNamespaceImports = this.isQualifiedIdentifier(text, word.range);
+    const symbols = this.visibleSymbols(word.text, document.uri, includeNamespaceImports);
 
     if (symbols.length > 0) {
       const uniqueKinds = Array.from(new Set(symbols.map((s) => s.kind))).sort();
@@ -151,7 +152,8 @@ export class RenameProvider {
     // Prefer the solc path for identifiers that aren't in the global
     // symbol index — those are locals / parameters / block-scoped
     // bindings.
-    const symbols = this.visibleSymbols(oldName, document.uri);
+    const includeNamespaceImports = this.isQualifiedIdentifier(text, wordResult.range);
+    const symbols = this.visibleSymbols(oldName, document.uri, includeNamespaceImports);
     if (symbols.length === 0) {
       return this.provideLocalRename(document, position, newName);
     }
@@ -204,9 +206,15 @@ export class RenameProvider {
     return { changes };
   }
 
-  private visibleSymbols(name: string, fromUri: string): SolSymbol[] {
+  private visibleSymbols(
+    name: string,
+    fromUri: string,
+    includeNamespaceImports: boolean,
+  ): SolSymbol[] {
     const symbols = this.symbolIndex.findSymbols(name);
-    return this.resolver ? this.resolver.filterVisibleSymbols(fromUri, symbols) : symbols;
+    return this.resolver
+      ? this.resolver.filterVisibleSymbols(fromUri, symbols, { includeNamespaceImports })
+      : symbols;
   }
 
   private renameScanUris(
@@ -264,6 +272,11 @@ export class RenameProvider {
       return false;
     }
     return true;
+  }
+
+  private isQualifiedIdentifier(text: string, range: Range): boolean {
+    const line = text.split("\n")[range.start.line] ?? "";
+    return range.start.character > 0 && line[range.start.character - 1] === ".";
   }
 
   /**
