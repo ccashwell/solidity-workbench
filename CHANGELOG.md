@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Parser-only Type Hierarchy supertypes and subtypes now resolve imported
+  bases before falling back to same-named contracts from other files.
 - Parser-only Type Hierarchy preparation now keeps the contract under the
   cursor when same-named contracts exist in other files.
 - Signature Help now treats modifier invocations in function declarations as

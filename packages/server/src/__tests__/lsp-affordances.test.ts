@@ -589,20 +589,41 @@ contract Base {}`,
     const files = {
       "src/Base.sol": `pragma solidity ^0.8.24;
 contract Base {}`,
+      "src/Child.sol": `pragma solidity ^0.8.24;
+import { Base } from "./Base.sol";
+contract Child is Base {}`,
       "test/Base.sol": `pragma solidity ^0.8.24;
 contract Base {}`,
     };
     const { docs, parser, idx } = setupFiles(files);
     const provider = new TypeHierarchyProvider(idx, parser);
-    const doc = docs["src/Base.sol"];
-    const line = files["src/Base.sol"].split("\n")[1];
-    const col = line.indexOf("Base");
+    const baseDoc = docs["src/Base.sol"];
+    const baseLine = files["src/Base.sol"].split("\n")[1];
+    const baseCol = baseLine.indexOf("Base");
 
-    const prepared = provider.prepareTypeHierarchy(doc, { line: 1, character: col });
+    const prepared = provider.prepareTypeHierarchy(baseDoc, { line: 1, character: baseCol });
 
     assert.equal(prepared.length, 1);
     assert.equal(prepared[0].name, "Base");
     assert.equal(prepared[0].uri, URI.file("/w/src/Base.sol").toString());
+
+    const subtypes = provider.getSubtypes(prepared[0]);
+    assert.deepEqual(
+      subtypes.map((item) => `${item.uri}#${item.name}`),
+      [`${URI.file("/w/src/Child.sol").toString()}#Child`],
+    );
+
+    const childDoc = docs["src/Child.sol"];
+    const childLine = files["src/Child.sol"].split("\n")[2];
+    const childCol = childLine.indexOf("Child");
+    const child = provider.prepareTypeHierarchy(childDoc, { line: 2, character: childCol });
+
+    assert.equal(child.length, 1);
+    const supertypes = provider.getSupertypes(child[0]);
+    assert.deepEqual(
+      supertypes.map((item) => `${item.uri}#${item.name}`),
+      [`${URI.file("/w/src/Base.sol").toString()}#Base`],
+    );
   });
 
   it("does not prepare type hierarchy for unimported test-only symbols in source files", () => {

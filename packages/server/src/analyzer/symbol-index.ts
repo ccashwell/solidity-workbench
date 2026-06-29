@@ -585,9 +585,33 @@ export class SymbolIndex {
   ): { uri: string; contract: ContractDefinition } | undefined {
     if (uri) {
       const contract = this.parser.get(uri)?.sourceUnit.contracts.find((c) => c.name === name);
-      if (contract) return { uri, contract };
+      return contract ? { uri, contract } : undefined;
     }
     return this.contractsByName.get(name);
+  }
+
+  /**
+   * Resolve a contract-like type name as it is visible from a specific file.
+   *
+   * This is a lightweight parser-only companion to SemanticResolver for
+   * providers that still need useful behavior before full semantic resolution
+   * is available. It prefers same-file declarations and import aliases before
+   * falling back to the legacy global contract map.
+   */
+  getVisibleContract(
+    name: string,
+    fromUri: string,
+  ): { uri: string; contract: ContractDefinition } | undefined {
+    const local = this.getContract(name, fromUri);
+    if (local) return local;
+
+    const imported = this.resolveImportedContractName(fromUri, name);
+    if (imported) {
+      const entry = this.getContract(imported.name, imported.uri);
+      if (entry) return entry;
+    }
+
+    return this.getContract(name);
   }
 
   /**
@@ -603,6 +627,53 @@ export class SymbolIndex {
     const imported = this.resolveImportedSymbolName(uri, structName);
     if (imported) {
       return this.findStructInSourceUnit(imported.uri, imported.name);
+    }
+
+    return undefined;
+  }
+
+  private resolveImportedContractName(
+    fromUri: string,
+    name: string,
+  ): { name: string; uri: string } | undefined {
+    const su = this.parser.get(fromUri)?.sourceUnit;
+    if (!su) return undefined;
+
+    let fromPath: string;
+    try {
+      fromPath = this.workspace.uriToPath(fromUri);
+    } catch {
+      return undefined;
+    }
+
+    const scoped = name.includes(".") ? name.split(".") : null;
+    for (const imp of su.imports) {
+      let targetPath: string | null;
+      try {
+        targetPath = this.workspace.resolveImport(imp.path, fromPath);
+      } catch {
+        targetPath = null;
+      }
+      if (!targetPath) continue;
+      const targetUri = URI.file(targetPath).toString();
+
+      if (scoped && imp.unitAlias === scoped[0] && scoped[1]) {
+        const contract = this.getContract(scoped[1], targetUri);
+        if (contract) return { name: scoped[1], uri: targetUri };
+      }
+
+      if (scoped) continue;
+      for (const alias of imp.symbolAliases ?? []) {
+        const visibleName = alias.alias ?? alias.symbol;
+        if (visibleName !== name) continue;
+        const contract = this.getContract(alias.symbol, targetUri);
+        if (contract) return { name: alias.symbol, uri: targetUri };
+      }
+
+      if (!imp.unitAlias && (imp.symbolAliases ?? []).length === 0) {
+        const contract = this.getContract(name, targetUri);
+        if (contract) return { name, uri: targetUri };
+      }
     }
 
     return undefined;

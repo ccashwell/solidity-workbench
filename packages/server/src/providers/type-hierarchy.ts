@@ -107,7 +107,7 @@ export class TypeHierarchyProvider {
     const supertypes: TypeHierarchyItem[] = [];
 
     for (const base of entry.contract.baseContracts) {
-      const baseEntry = this.symbolIndex.getContract(base.baseName);
+      const baseEntry = this.symbolIndex.getVisibleContract(base.baseName, entry.uri);
       if (baseEntry) {
         supertypes.push(this.contractToItem(baseEntry.contract, baseEntry.uri));
       }
@@ -132,7 +132,8 @@ export class TypeHierarchyProvider {
 
     for (const [, entry] of this.symbolIndex.getAllContracts()) {
       for (const base of entry.contract.baseContracts) {
-        if (base.baseName === item.name) {
+        const baseEntry = this.symbolIndex.getVisibleContract(base.baseName, entry.uri);
+        if (baseEntry?.contract.name === item.name && baseEntry.uri === item.uri) {
           subtypes.push(this.contractToItem(entry.contract, entry.uri));
           break;
         }
