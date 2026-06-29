@@ -190,24 +190,48 @@ export class DefinitionProvider {
       if (resolved) return resolved;
     }
 
-    // Look up the symbol to find its type
-    const symbols = this.symbolIndex.findSymbols(word);
-    for (const sym of symbols) {
-      if (
-        sym.kind === "stateVariable" ||
-        sym.kind === "fileConstant" ||
-        sym.kind === "parameter" ||
-        sym.kind === "localVariable"
-      ) {
-        // The detail field contains the type name for variables
-        if (sym.detail) {
-          const resolved = this.resolveTypeDefinition(sym.detail, document.uri);
-          if (resolved) return resolved;
-        }
-      }
+    const symbols = this.filterVisibleSymbols(document.uri, this.symbolIndex.findSymbols(word));
+    const selected = this.selectTypeCarrierSymbol(document, position, symbols);
+    if (selected?.detail) {
+      const resolved = this.resolveTypeDefinition(selected.detail, document.uri);
+      if (resolved) return resolved;
     }
 
     return null;
+  }
+
+  private selectTypeCarrierSymbol(
+    document: TextDocument,
+    position: Position,
+    symbols: SolSymbol[],
+  ): SolSymbol | undefined {
+    const typeCarriers = symbols.filter((sym) => this.isTypeCarrierSymbol(sym));
+    const atCursor = typeCarriers
+      .filter((sym) => sym.filePath === document.uri && this.rangeContains(sym.nameRange, position))
+      .sort((a, b) => this.rangeSize(a.nameRange) - this.rangeSize(b.nameRange));
+    if (atCursor[0]) return atCursor[0];
+
+    const sourceUnit = this.parser.get(document.uri)?.sourceUnit;
+    const scope = sourceUnit ? getEnclosingFunctionScope(sourceUnit, position) : undefined;
+    const contract =
+      scope?.contract ?? (sourceUnit ? getEnclosingContract(sourceUnit, position.line) : undefined);
+    if (contract) {
+      const sameContainer = typeCarriers.find(
+        (sym) => sym.filePath === document.uri && sym.containerName === contract.name,
+      );
+      if (sameContainer) return sameContainer;
+    }
+
+    return typeCarriers.find((sym) => sym.filePath === document.uri) ?? typeCarriers[0];
+  }
+
+  private isTypeCarrierSymbol(sym: SolSymbol): boolean {
+    return (
+      sym.kind === "stateVariable" ||
+      sym.kind === "fileConstant" ||
+      sym.kind === "parameter" ||
+      sym.kind === "localVariable"
+    );
   }
 
   private resolveScopedVariableType(
@@ -244,7 +268,24 @@ export class DefinitionProvider {
         position.character >= scope.fn.range.start.character);
     if (!inFunctionBody) return undefined;
 
-    return params.find((param) => param.name === word)?.typeName;
+    const paramType = params.find((param) => param.name === word)?.typeName;
+    if (paramType) return paramType;
+
+    if (scope.contract) {
+      const directState = scope.contract.stateVariables.find((variable) => variable.name === word);
+      if (directState) return directState.typeName;
+
+      const inherited = this.resolver?.findMemberInInheritanceChain(
+        scope.contract.name,
+        word,
+        document.uri,
+      );
+      if (inherited?.kind === "stateVariable") {
+        return inherited.detail;
+      }
+    }
+
+    return undefined;
   }
 
   private resolveTypeDefinition(typeName: string, fromUri: string): Definition | null {

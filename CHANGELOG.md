@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Graph-backed Call Hierarchy now includes modifier-use edges with precise
   source ranges, keeping modifier callers/callees consistent with fallback
   indexing once Project Graph relationships are available.
+- Go-to-type-definition now prefers the variable under the cursor and the
+  enclosing contract's state over unrelated same-name variables, preventing
+  source references from jumping to test-only type declarations.
 
 ## [0.8.8] - 2026-06-29
 

@@ -818,6 +818,63 @@ contract C {
       assert.ok("uri" in loc);
       assert.equal(loc.range.start.line, 2);
     });
+
+    it("prefers the state variable under the cursor over unrelated same-name variables", () => {
+      const sourceUri = "file:///w/src/Vault.sol";
+      const testUri = "file:///w/test/Vault.t.sol";
+      const files = {
+        [testUri]: `pragma solidity ^0.8.24;
+
+struct MockAsset {
+    uint256 value;
+}
+
+contract MockVault {
+    MockAsset internal asset;
+}
+`,
+        [sourceUri]: `pragma solidity ^0.8.24;
+
+struct RealAsset {
+    uint256 value;
+}
+
+contract Vault {
+    RealAsset internal asset;
+
+    function read() external view returns (uint256) {
+        return asset.value;
+    }
+}
+`,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: () => null,
+      } as unknown as WorkspaceManager;
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, workspace);
+      const docs: Record<string, TextDocument> = {};
+      for (const [uri, text] of Object.entries(files)) {
+        parser.parse(uri, text);
+        idx.updateFile(uri);
+        docs[uri] = doc(uri, text);
+      }
+      const provider = new DefinitionProvider(idx, parser, workspace);
+      const lines = files[sourceUri].split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("asset.value"));
+      const def = provider.provideTypeDefinition(docs[sourceUri], {
+        line,
+        character: lines[line].indexOf("asset"),
+      });
+
+      assert.ok(def, "expected type definition for source state variable");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc);
+      assert.equal(loc.uri, sourceUri);
+      assert.equal(loc.range.start.line, 2);
+    });
   });
 
   describe("robustness", () => {
