@@ -284,6 +284,48 @@ library InventoryLib {}
     assert.notEqual(foo.target, "file:///w/test/IFoo.sol#L4,14");
   });
 
+  it("does not link NatSpec refs to unimported symbols from a named import target", () => {
+    const files = {
+      "src/Helpers.sol": `pragma solidity ^0.8.24;
+function selected() pure returns (uint256) {
+    return 1;
+}
+function hidden() pure returns (uint256) {
+    return 2;
+}
+contract Ghost {
+    function trap() external {}
+}
+`,
+      "src/InventoryLib.sol": `pragma solidity ^0.8.24;
+import { selected } from "./Helpers.sol";
+
+/// @notice See {selected}; ignore {hidden} and {Ghost.trap}.
+library InventoryLib {}
+`,
+    };
+    const { docs, parser, idx, resolver, workspace } = setupFiles(files);
+
+    const links = new DocumentLinksProvider(parser, workspace, idx, resolver).provideDocumentLinks(
+      docs["src/InventoryLib.sol"],
+    );
+
+    assert.ok(
+      links.some((link) => link.tooltip === "Open selected"),
+      "expected imported selected() to be linked",
+    );
+    assert.equal(
+      links.some((link) => link.tooltip === "Open hidden"),
+      false,
+      "named import target must not expose unimported hidden()",
+    );
+    assert.equal(
+      links.some((link) => link.tooltip === "Open Ghost.trap"),
+      false,
+      "named import target must not expose unimported Ghost.trap",
+    );
+  });
+
   it("turns braced references in block NatSpec into document links", () => {
     const text = `pragma solidity ^0.8.24;
 

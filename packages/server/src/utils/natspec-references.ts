@@ -22,22 +22,18 @@ export function resolveNatspecReference(
   }
   const containerName = parts.length > 1 ? parts.slice(0, -1).join(".") : implicitContainerName;
 
-  let candidates = symbolIndex.findSymbols(symbolName);
+  const importedTopLevel =
+    parts.length === 1 ? resolver?.resolveImportedSymbol(symbolName, documentUri) : undefined;
+  let candidates = symbolIndex.findSymbols(importedTopLevel?.name ?? symbolName);
+  if (importedTopLevel) {
+    candidates = candidates.filter((candidate) => candidate.filePath === importedTopLevel.uri);
+  }
   if (resolver) candidates = resolver.filterVisibleSymbols(documentUri, candidates);
   candidates = candidates.filter(isNatspecReferenceTarget);
+  candidates = filterReferenceScope(candidates, documentUri, containerName, resolver, fromSymbol);
   if (candidates.length === 0) return undefined;
 
   if (containerName) {
-    const resolvedContainer = resolver?.resolveContract(containerName, documentUri);
-    const importedContainer = resolvedContainer
-      ? candidates.find(
-          (candidate) =>
-            candidate.containerName === resolvedContainer.contract.name &&
-            candidate.filePath === resolvedContainer.uri,
-        )
-      : undefined;
-    if (importedContainer) return importedContainer;
-
     const sameContainer = candidates.find(
       (candidate) =>
         candidate.containerName === containerName &&
@@ -54,6 +50,41 @@ export function resolveNatspecReference(
     candidates.find((candidate) => candidate.filePath === documentUri) ??
     candidates[0]
   );
+}
+
+function filterReferenceScope(
+  candidates: SolSymbol[],
+  documentUri: string,
+  containerName: string | undefined,
+  resolver: SemanticResolver | undefined,
+  fromSymbol: SolSymbol | undefined,
+): SolSymbol[] {
+  if (!resolver) return candidates;
+
+  return candidates.filter((candidate) => {
+    if (candidate.filePath === documentUri || candidate.filePath === fromSymbol?.filePath) {
+      return true;
+    }
+
+    if (containerName) {
+      if (!candidate.containerName) {
+        const imported = resolver.resolveImportedSymbol(candidate.name, documentUri);
+        return imported?.name === candidate.name && imported.uri === candidate.filePath;
+      }
+
+      const importedContainer = resolver.resolveImportedSymbol(containerName, documentUri);
+      return (
+        importedContainer !== undefined &&
+        candidate.containerName === importedContainer.name &&
+        candidate.filePath === importedContainer.uri
+      );
+    }
+
+    if (candidate.containerName) return false;
+
+    const imported = resolver.resolveImportedSymbol(candidate.name, documentUri);
+    return imported?.name === candidate.name && imported.uri === candidate.filePath;
+  });
 }
 
 export function isNatspecReferenceTarget(sym: SolSymbol): boolean {
