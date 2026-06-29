@@ -594,6 +594,9 @@ import { Base } from "./Base.sol";
 contract Child is Base {}`,
       "test/Base.sol": `pragma solidity ^0.8.24;
 contract Base {}`,
+      "test/Child.sol": `pragma solidity ^0.8.24;
+import { Base } from "./Base.sol";
+contract Child is Base {}`,
     };
     const { docs, parser, idx } = setupFiles(files);
     const provider = new TypeHierarchyProvider(idx, parser);

@@ -862,6 +862,21 @@ export class SymbolIndex {
   }
 
   /**
+   * Get every indexed contract without collapsing same-named declarations.
+   */
+  getAllContractEntries(): Array<{ uri: string; contract: ContractDefinition }> {
+    const entries: Array<{ uri: string; contract: ContractDefinition }> = [];
+    for (const uri of this.symbolsByFile.keys()) {
+      const sourceUnit = this.parser.get(uri)?.sourceUnit;
+      if (!sourceUnit) continue;
+      for (const contract of sourceUnit.contracts) {
+        entries.push({ uri, contract });
+      }
+    }
+    return entries;
+  }
+
+  /**
    * Resolve the full inheritance chain for a contract.
    */
   getInheritanceChain(contractName: string): ContractDefinition[] {

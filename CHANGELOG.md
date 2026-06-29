@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Parser-only Type Hierarchy subtype scans no longer collapse same-named
+  contracts from different files before checking inheritance.
 - Parser-only Type Hierarchy supertypes and subtypes now resolve imported
   bases before falling back to same-named contracts from other files.
 - Parser-only Type Hierarchy preparation now keeps the contract under the
