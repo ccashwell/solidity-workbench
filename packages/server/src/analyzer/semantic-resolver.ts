@@ -105,7 +105,6 @@ export class SemanticResolver {
 
     const candidates = this.getContractsByName(name);
     if (candidates.length === 0) return undefined;
-    if (candidates.length === 1) return candidates[0];
 
     if (fromUri) {
       const sameFile = candidates.find((entry) => entry.uri === fromUri);
@@ -115,10 +114,10 @@ export class SemanticResolver {
       const imported = candidates.find((entry) => reachable.has(entry.uri));
       if (imported) return imported;
 
-      const project = candidates.find((entry) => entry.tier === "project");
-      if (project) return project;
+      return undefined;
     }
 
+    if (candidates.length === 1) return candidates[0];
     return candidates[0];
   }
 

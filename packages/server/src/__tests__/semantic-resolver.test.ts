@@ -86,4 +86,61 @@ contract Base {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("does not resolve contracts that are not visible from the current file", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "semantic-resolver-visibility-test-"));
+    try {
+      const files = {
+        "src/Current.sol": `pragma solidity ^0.8.24;
+contract Current {
+    Ghost ghost;
+    ProjectOnly projectOnly;
+}
+`,
+        "src/ProjectOnly.sol": `pragma solidity ^0.8.24;
+contract ProjectOnly {}
+`,
+        "test/Ghost.sol": `pragma solidity ^0.8.24;
+contract Ghost {}
+`,
+      };
+
+      const uris: string[] = [];
+      const parser = new SolidityParser();
+      for (const [name, contents] of Object.entries(files)) {
+        const filePath = path.join(tmpDir, name);
+        fs.mkdirSync(path.dirname(filePath), { recursive: true });
+        fs.writeFileSync(filePath, contents, "utf-8");
+        const uri = URI.file(filePath).toString();
+        uris.push(uri);
+        parser.parse(uri, contents);
+      }
+
+      const workspace: Pick<
+        WorkspaceManager,
+        "getAllFileUris" | "getFileTier" | "resolveImport" | "uriToPath"
+      > = {
+        getAllFileUris: () => uris.slice(),
+        getFileTier: (uri: string) =>
+          URI.parse(uri).fsPath.includes("/test/") ? "tests" : "project",
+        resolveImport: (importPath: string, fromFile: string) => {
+          const target = path.resolve(path.dirname(fromFile), importPath);
+          return fs.existsSync(target) ? target : null;
+        },
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+      };
+      const index = new SymbolIndex(parser, workspace as WorkspaceManager);
+      for (const uri of uris) index.updateFile(uri);
+
+      const resolver = new SemanticResolver(parser, workspace as WorkspaceManager, index);
+      const currentUri = URI.file(path.join(tmpDir, "src/Current.sol")).toString();
+
+      assert.equal(resolver.resolveContract("Ghost", currentUri), undefined);
+      assert.equal(resolver.resolveContract("ProjectOnly", currentUri), undefined);
+      assert.equal(resolver.resolveBaseContract(currentUri, "Ghost"), undefined);
+      assert.equal(resolver.resolveBaseContract(currentUri, "ProjectOnly"), undefined);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });

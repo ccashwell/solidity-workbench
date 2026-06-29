@@ -66,6 +66,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same-named declarations instead of falling back to the global contract map,
   preventing Type Hierarchy and implementation walks from inventing test-only
   bases in source files.
+- URI-scoped semantic contract resolution now requires same-file or import-graph
+  visibility instead of returning sole global or project-tier candidates,
+  preventing resolver-backed providers from binding unresolved source types to
+  unrelated project or test declarations.
 
 ## [0.8.8] - 2026-06-29
 
