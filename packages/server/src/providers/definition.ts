@@ -7,7 +7,7 @@ import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolcBridge } from "../compiler/solc-bridge.js";
 import type { ResolvedContract, SemanticResolver } from "../analyzer/semantic-resolver.js";
-import type { SolSymbol, SourceRange } from "@solidity-workbench/common";
+import type { ContractDefinition, SolSymbol, SourceRange } from "@solidity-workbench/common";
 import { resolveDottedReceiverTypeName } from "../utils/receiver-type.js";
 import {
   getWordAtPosition,
@@ -564,23 +564,26 @@ export class DefinitionProvider {
         if (resolved) return Location.create(resolved.filePath, resolved.nameRange);
       }
     } else {
-      const chain = this.symbolIndex.getInheritanceChain(typeName);
-      for (const contract of chain) {
+      const chain = fromUri
+        ? this.getParserInheritanceChain(typeName, fromUri)
+        : this.symbolIndex.getInheritanceChain(typeName).flatMap((contract) => {
+            const entry = this.symbolIndex.getContract(contract.name);
+            return entry ? [entry] : [];
+          });
+      for (const entry of chain) {
+        const contract = entry.contract;
         const func = contract.functions.find((f) => f.name === memberName);
         if (func) {
-          const entry = this.symbolIndex.getContract(contract.name);
           if (entry) return Location.create(entry.uri, func.nameRange);
         }
 
         const svar = contract.stateVariables.find((v) => v.name === memberName);
         if (svar) {
-          const entry = this.symbolIndex.getContract(contract.name);
           if (entry) return Location.create(entry.uri, svar.nameRange);
         }
 
         const event = contract.events.find((e) => e.name === memberName);
         if (event) {
-          const entry = this.symbolIndex.getContract(contract.name);
           if (entry) return Location.create(entry.uri, event.nameRange);
         }
       }
@@ -607,6 +610,80 @@ export class DefinitionProvider {
     }
 
     return null;
+  }
+
+  private getParserInheritanceChain(
+    typeName: string,
+    fromUri: string,
+  ): Array<{ uri: string; contract: ContractDefinition }> {
+    const root = this.resolveParserVisibleContract(typeName, fromUri);
+    if (!root) return [];
+
+    const chain: Array<{ uri: string; contract: ContractDefinition }> = [];
+    const visited = new Set<string>();
+
+    const walk = (entry: { uri: string; contract: ContractDefinition }): void => {
+      const key = `${entry.uri}#${entry.contract.name}`;
+      if (visited.has(key)) return;
+      visited.add(key);
+      chain.push(entry);
+
+      for (const base of entry.contract.baseContracts) {
+        const baseEntry = this.resolveParserVisibleContract(base.baseName, entry.uri);
+        if (baseEntry) walk(baseEntry);
+      }
+    };
+
+    walk(root);
+    return chain;
+  }
+
+  private resolveParserVisibleContract(
+    typeName: string,
+    fromUri: string,
+  ): { uri: string; contract: ContractDefinition } | undefined {
+    const local = this.symbolIndex.getContract(typeName, fromUri);
+    if (local) return local;
+
+    const sourceUnit = this.parser.get(fromUri)?.sourceUnit;
+    if (!sourceUnit) return undefined;
+
+    let fromPath: string;
+    try {
+      fromPath = this.workspace.uriToPath(fromUri);
+    } catch {
+      return undefined;
+    }
+
+    const scoped = typeName.includes(".") ? typeName.split(".") : null;
+    for (const imp of sourceUnit.imports) {
+      let targetPath: string | null;
+      try {
+        targetPath = this.workspace.resolveImport(imp.path, fromPath);
+      } catch {
+        targetPath = null;
+      }
+      if (!targetPath) continue;
+      const targetUri = URI.file(targetPath).toString();
+
+      if (scoped && imp.unitAlias === scoped[0] && scoped[1]) {
+        return this.symbolIndex.getContract(scoped[1], targetUri);
+      }
+
+      if (scoped) continue;
+      for (const alias of imp.symbolAliases ?? []) {
+        const visibleName = alias.alias ?? alias.symbol;
+        if (visibleName !== typeName) continue;
+        return this.symbolIndex.getContract(alias.symbol, targetUri);
+      }
+
+      if (!imp.unitAlias && (imp.symbolAliases ?? []).length === 0) {
+        const imported = this.symbolIndex.getContract(typeName, targetUri);
+        if (imported) return imported;
+      }
+    }
+
+    return undefined;
   }
 
   private resolveVisibleInheritanceChain(typeName: string, fromUri: string): ResolvedContract[] {

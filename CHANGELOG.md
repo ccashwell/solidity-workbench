@@ -53,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parser-only implement-interface code actions now resolve base interfaces
   through same-file or imported declarations, preventing unrelated test
   interfaces from generating source stubs.
+- Parser-only go-to-definition for dotted members now preserves the resolved
+  declaration file while walking receiver inheritance, preventing same-named
+  test contracts from hijacking source member jumps.
 
 ## [0.8.8] - 2026-06-29
 

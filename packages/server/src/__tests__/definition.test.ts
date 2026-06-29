@@ -349,6 +349,56 @@ contract Use {
       assert.equal(loc.uri, srcBaseUri);
     });
 
+    it("uses parser-only imports to disambiguate duplicate receiver contracts", () => {
+      const currentUri = "file:///w/src/Use.sol";
+      const srcBaseUri = "file:///w/src/Base.sol";
+      const testBaseUri = "file:///w/test/Base.sol";
+      const files = {
+        [srcBaseUri]: `pragma solidity ^0.8.0;
+contract Base {
+    function ping(uint256 amount) public {}
+}`,
+        [testBaseUri]: `pragma solidity ^0.8.0;
+contract Base {
+    function ping(address account) public {}
+}`,
+        [currentUri]: `pragma solidity ^0.8.0;
+import "./Base.sol";
+contract Use {
+    function f() external { Base.ping(1); }
+}`,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: (importPath: string, from: string) =>
+          importPath === "./Base.sol" && from.endsWith("/src/Use.sol")
+            ? URI.parse(srcBaseUri).fsPath
+            : null,
+      } as unknown as WorkspaceManager;
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, workspace);
+      const docs: Record<string, TextDocument> = {};
+      for (const [uri, text] of Object.entries(files)) {
+        parser.parse(uri, text);
+        idx.updateFile(uri);
+        docs[uri] = doc(uri, text);
+      }
+
+      const provider = new DefinitionProvider(idx, parser, workspace);
+      const line = files[currentUri].split("\n")[3];
+      const def = provider.provideDefinition(docs[currentUri], {
+        line: 3,
+        character: line.indexOf("ping") + 1,
+      });
+
+      assert.ok(def, "expected imported parser-only member definition");
+      const loc = Array.isArray(def) ? def[0] : def;
+      assert.ok("uri" in loc, "expected a Location result");
+      assert.equal(loc.uri, srcBaseUri);
+      assert.equal(loc.range.start.line, 2);
+    });
+
     it("jumps to a struct member through a typed receiver variable", () => {
       const { docs, provider } = setup({
         "file:///w/struct-member.sol": `pragma solidity ^0.8.24;
@@ -486,6 +536,48 @@ contract UsesGhost {
       }
       const resolver = new SemanticResolver(parser, workspace, idx);
       const provider = new DefinitionProvider(idx, parser, workspace, resolver);
+      const lines = files[currentUri].split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("ghost.ping"));
+
+      const def = provider.provideDefinition(docs[currentUri], {
+        line,
+        character: lines[line].indexOf("ping") + 1,
+      });
+
+      assert.equal(def, null);
+    });
+
+    it("does not resolve parser-only dotted definitions through unimported test-only receiver types", () => {
+      const currentUri = "file:///w/src/UsesGhost.sol";
+      const files = {
+        [currentUri]: `pragma solidity ^0.8.24;
+contract UsesGhost {
+    Ghost internal ghost;
+
+    function f() external view {
+        ghost.ping();
+    }
+}`,
+        "file:///w/test/Ghost.sol": `pragma solidity ^0.8.24;
+interface Ghost {
+    function ping() external view returns (uint256);
+}
+`,
+      };
+      const workspace = {
+        getAllFileUris: () => Object.keys(files),
+        uriToPath: (uri: string) => URI.parse(uri).fsPath,
+        resolveImport: () => null,
+      } as unknown as WorkspaceManager;
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, workspace);
+      const docs: Record<string, TextDocument> = {};
+      for (const [uri, text] of Object.entries(files)) {
+        parser.parse(uri, text);
+        idx.updateFile(uri);
+        docs[uri] = doc(uri, text);
+      }
+      const provider = new DefinitionProvider(idx, parser, workspace);
       const lines = files[currentUri].split("\n");
       const line = lines.findIndex((candidate) => candidate.includes("ghost.ping"));
 
