@@ -7,6 +7,7 @@ import type {
   NatspecComment,
   EventDefinition,
   ErrorDefinition,
+  SoliditySourceUnit,
 } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { ResolvedContract, SemanticResolver } from "../analyzer/semantic-resolver.js";
@@ -177,55 +178,38 @@ export class SignatureHelpProvider {
       return signatures;
     }
 
-    // Otherwise search globally
-    let symbols = this.symbolIndex.findSymbols(funcName);
-    if (this.resolver) {
-      symbols = this.resolver.filterVisibleSymbols(documentUri, symbols);
-    }
+    const scopedSignatures = this.findUnqualifiedSignatures(funcName, documentUri, position);
+    if (scopedSignatures.length > 0) return scopedSignatures;
+
+    // Otherwise search globally. This is intentionally only a legacy
+    // parser-only fallback for setups without an import-aware resolver;
+    // resolver-backed workspaces should prefer no result over an
+    // unrelated same-named declaration from a reachable file.
+    if (this.resolver) return signatures;
+
+    const symbols = this.symbolIndex.findSymbols(funcName);
     for (const sym of symbols) {
       if (sym.kind === "function" || sym.kind === "event" || sym.kind === "error") {
         if (sym.containerName) {
-          const resolved = this.resolver?.resolveContract(sym.containerName, sym.filePath);
-          if (resolved) {
-            const func = resolved.contract.functions.find((f) => f.name === funcName);
+          const entry = this.symbolIndex.getContract(sym.containerName);
+          if (entry) {
+            const func = entry.contract.functions.find((f) => f.name === funcName);
             if (func) {
               signatures.push(
-                this.buildSignature(func, resolved.contract.name, {
-                  containerUri: resolved.uri,
+                this.buildSignature(func, sym.containerName, {
+                  containerUri: entry.uri,
                 }),
               );
               continue;
             }
-            const event = resolved.contract.events.find((e) => e.name === funcName);
+            const event = entry.contract.events.find((e) => e.name === funcName);
             if (event) {
               signatures.push(this.buildEventSignature(event));
               continue;
             }
-            const error = resolved.contract.errors.find((e) => e.name === funcName);
+            const error = entry.contract.errors.find((e) => e.name === funcName);
             if (error) {
               signatures.push(this.buildErrorSignature(error));
-            }
-          } else {
-            const entry = this.symbolIndex.getContract(sym.containerName);
-            if (entry) {
-              const func = entry.contract.functions.find((f) => f.name === funcName);
-              if (func) {
-                signatures.push(
-                  this.buildSignature(func, sym.containerName, {
-                    containerUri: entry.uri,
-                  }),
-                );
-                continue;
-              }
-              const event = entry.contract.events.find((e) => e.name === funcName);
-              if (event) {
-                signatures.push(this.buildEventSignature(event));
-                continue;
-              }
-              const error = entry.contract.errors.find((e) => e.name === funcName);
-              if (error) {
-                signatures.push(this.buildErrorSignature(error));
-              }
             }
           }
         } else if (sym.kind === "function") {
@@ -251,6 +235,100 @@ export class SignatureHelpProvider {
     }
 
     return signatures;
+  }
+
+  private findUnqualifiedSignatures(
+    funcName: string,
+    documentUri: string,
+    position: Position,
+  ): SignatureInformation[] {
+    const sourceUnit = this.parser.get(documentUri)?.sourceUnit;
+    if (!sourceUnit) return [];
+
+    const signatures: SignatureInformation[] = [];
+    const contract = this.findEnclosingContract(documentUri, position);
+    if (contract) {
+      const resolver = this.resolver;
+      const resolved = resolver?.resolveContract(contract.name, documentUri);
+      if (resolver && resolved) {
+        for (const entry of resolver.getInheritanceChainFor(resolved)) {
+          this.addContractCallableSignatures(signatures, entry.contract, funcName, entry.uri);
+        }
+      } else {
+        for (const entry of this.symbolIndex.getInheritanceChain(contract.name)) {
+          this.addContractCallableSignatures(signatures, entry, funcName);
+        }
+      }
+    }
+
+    this.addSourceUnitCallableSignatures(signatures, sourceUnit, funcName, documentUri);
+    this.addImportedCallableSignatures(signatures, funcName, documentUri);
+    return this.dedupeSignatures(signatures);
+  }
+
+  private addContractCallableSignatures(
+    signatures: SignatureInformation[],
+    contract: ContractDefinition,
+    funcName: string,
+    uri?: string,
+  ): void {
+    for (const func of contract.functions) {
+      if (func.name === funcName) {
+        signatures.push(this.buildSignature(func, contract.name, uri ? { containerUri: uri } : {}));
+      }
+    }
+    for (const event of contract.events) {
+      if (event.name === funcName) signatures.push(this.buildEventSignature(event));
+    }
+    for (const error of contract.errors) {
+      if (error.name === funcName) signatures.push(this.buildErrorSignature(error));
+    }
+  }
+
+  private addSourceUnitCallableSignatures(
+    signatures: SignatureInformation[],
+    sourceUnit: SoliditySourceUnit,
+    funcName: string,
+    uri: string,
+  ): void {
+    for (const fn of sourceUnit.freeFunctions) {
+      if (fn.name === funcName) signatures.push(this.buildSignature(fn, "", { containerUri: uri }));
+    }
+    for (const event of sourceUnit.events) {
+      if (event.name === funcName) signatures.push(this.buildEventSignature(event));
+    }
+    for (const error of sourceUnit.errors) {
+      if (error.name === funcName) signatures.push(this.buildErrorSignature(error));
+    }
+  }
+
+  private addImportedCallableSignatures(
+    signatures: SignatureInformation[],
+    funcName: string,
+    documentUri: string,
+  ): void {
+    if (!this.resolver) return;
+
+    const imported = this.resolver.resolveImportedSymbol(funcName, documentUri);
+    if (imported) {
+      const importedUnit = this.parser.get(imported.uri)?.sourceUnit;
+      if (importedUnit) {
+        this.addSourceUnitCallableSignatures(signatures, importedUnit, imported.name, imported.uri);
+      }
+      return;
+    }
+  }
+
+  private dedupeSignatures(signatures: SignatureInformation[]): SignatureInformation[] {
+    const seen = new Set<string>();
+    const deduped: SignatureInformation[] = [];
+    for (const sig of signatures) {
+      const key = sig.label;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push(sig);
+    }
+    return deduped;
   }
 
   private resolveVisibleInheritanceChain(

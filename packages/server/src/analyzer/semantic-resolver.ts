@@ -179,7 +179,16 @@ export class SemanticResolver {
       const isPlainImport = !imp.unitAlias && (imp.symbolAliases ?? []).length === 0;
       if (isPlainImport) {
         const targetUnit = this.parser.get(targetUri)?.sourceUnit;
-        if (targetUnit?.contracts.some((contract) => contract.name === name)) {
+        if (
+          targetUnit?.contracts.some((contract) => contract.name === name) ||
+          targetUnit?.freeFunctions.some((fn) => fn.name === name) ||
+          targetUnit?.events.some((event) => event.name === name) ||
+          targetUnit?.errors.some((error) => error.name === name) ||
+          targetUnit?.structs.some((struct) => struct.name === name) ||
+          targetUnit?.enums.some((en) => en.name === name) ||
+          targetUnit?.userDefinedValueTypes.some((udvt) => udvt.name === name) ||
+          targetUnit?.fileConstants.some((constant) => constant.name === name)
+        ) {
           const resolved = { name, uri: targetUri };
           this.importedSymbolCache.set(cacheKey, resolved);
           return resolved;

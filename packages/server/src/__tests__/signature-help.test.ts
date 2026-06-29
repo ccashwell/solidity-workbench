@@ -165,6 +165,103 @@ contract C {
       );
     });
 
+    it("resolves unqualified internal calls from the enclosing contract before imported same-name functions", () => {
+      const files = {
+        "src/Other.sol": `pragma solidity ^0.8.24;
+contract Other {
+    function shared(address account) internal pure returns (address) {
+        return account;
+    }
+}`,
+        "src/Local.sol": `pragma solidity ^0.8.24;
+import { Other } from "./Other.sol";
+contract Local {
+    function shared(uint256 amount) internal pure returns (uint256) {
+        return amount;
+    }
+
+    function f() external pure {
+        shared(1);
+    }
+}`,
+      };
+      const { docs, provider } = setupFiles(files);
+      const text = files["src/Local.sol"];
+      const lines = text.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("shared(1"));
+      const col = lines[callLine].indexOf("shared(") + "shared(".length;
+
+      const sig = provider.provideSignatureHelp(docs["src/Local.sol"], {
+        line: callLine,
+        character: col,
+      });
+
+      assert.ok(sig, "expected signature help for local internal call");
+      assert.equal(sig!.signatures.length, 1);
+      assert.match(sig!.signatures[0].label, /shared\(uint256 amount\)/);
+    });
+
+    it("does not expose non-imported free functions from a named import file", () => {
+      const files = {
+        "src/Helpers.sol": `pragma solidity ^0.8.24;
+function selected(uint256 value) pure returns (uint256) {
+    return value;
+}
+function hidden(address account) pure returns (address) {
+    return account;
+}`,
+        "src/Uses.sol": `pragma solidity ^0.8.24;
+import { selected } from "./Helpers.sol";
+contract Uses {
+    function f() external pure {
+        hidden(address(0));
+    }
+}`,
+      };
+      const { docs, provider } = setupFiles(files);
+      const text = files["src/Uses.sol"];
+      const lines = text.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("hidden(address"));
+      const col = lines[callLine].indexOf("hidden(") + "hidden(".length;
+
+      const sig = provider.provideSignatureHelp(docs["src/Uses.sol"], {
+        line: callLine,
+        character: col,
+      });
+
+      assert.equal(sig, null);
+    });
+
+    it("returns signatures for named imported free functions", () => {
+      const files = {
+        "src/Helpers.sol": `pragma solidity ^0.8.24;
+function selected(uint256 value) pure returns (uint256) {
+    return value;
+}`,
+        "src/Uses.sol": `pragma solidity ^0.8.24;
+import { selected } from "./Helpers.sol";
+contract Uses {
+    function f() external pure {
+        selected(1);
+    }
+}`,
+      };
+      const { docs, provider } = setupFiles(files);
+      const text = files["src/Uses.sol"];
+      const lines = text.split("\n");
+      const callLine = lines.findIndex((line) => line.includes("selected(1"));
+      const col = lines[callLine].indexOf("selected(") + "selected(".length;
+
+      const sig = provider.provideSignatureHelp(docs["src/Uses.sol"], {
+        line: callLine,
+        character: col,
+      });
+
+      assert.ok(sig, "expected signature help for imported free function");
+      assert.equal(sig!.signatures.length, 1);
+      assert.match(sig!.signatures[0].label, /selected\(uint256 value\)/);
+    });
+
     it("resolves receiver variables declared with imported interface aliases", () => {
       const files = {
         "src/IVault.sol": `pragma solidity ^0.8.24;
