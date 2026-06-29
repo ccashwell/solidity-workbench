@@ -2,6 +2,7 @@ import type { CompletionItem, Position } from "vscode-languageserver/node.js";
 import { CompletionItemKind, InsertTextFormat, MarkupKind } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
 import type { ContractDefinition, SolSymbol, SymbolKind } from "@solidity-workbench/common";
+import { URI } from "vscode-uri";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
 import type { FileTier, WorkspaceManager } from "../workspace/workspace-manager.js";
@@ -297,12 +298,7 @@ export class CompletionProvider {
   private contractMemberCompletions(contractName: string, fromUri?: string): CompletionItem[] {
     const items: CompletionItem[] = [];
     const chain = this.resolver?.getInheritanceChain(contractName, fromUri) ?? null;
-    const entries =
-      chain ??
-      this.symbolIndex.getInheritanceChain(contractName).map((contract) => ({
-        uri: this.symbolIndex.getContract(contract.name)?.uri,
-        contract,
-      }));
+    const entries = chain ?? this.getParserInheritanceChain(contractName, fromUri);
     for (const entry of entries) {
       const c = entry.contract;
       for (const func of c.functions) {
@@ -344,6 +340,32 @@ export class CompletionProvider {
       }
     }
     return items;
+  }
+
+  private getParserInheritanceChain(
+    contractName: string,
+    fromUri?: string,
+  ): Array<{ uri: string; contract: ContractDefinition }> {
+    const root = this.resolveParserVisibleContract(contractName, fromUri);
+    if (!root) return [];
+
+    const chain: Array<{ uri: string; contract: ContractDefinition }> = [];
+    const visited = new Set<string>();
+
+    const walk = (entry: { uri: string; contract: ContractDefinition }): void => {
+      const key = `${entry.uri}#${entry.contract.name}`;
+      if (visited.has(key)) return;
+      visited.add(key);
+      chain.push(entry);
+
+      for (const base of entry.contract.baseContracts) {
+        const baseEntry = this.resolveParserVisibleContract(base.baseName, entry.uri);
+        if (baseEntry) walk(baseEntry);
+      }
+    };
+
+    walk(root);
+    return chain;
   }
 
   private structMemberCompletions(structName: string, fromUri?: string): CompletionItem[] {
@@ -409,7 +431,65 @@ export class CompletionProvider {
 
     const resolved = this.resolver?.resolveContract(contractName, fromUri);
     if (resolved) return resolved;
+    if (fromUri) return this.resolveParserVisibleContract(contractName, fromUri);
     return this.symbolIndex.getContract(contractName);
+  }
+
+  private resolveParserVisibleContract(
+    contractName: string,
+    fromUri?: string,
+  ): { uri: string; contract: ContractDefinition } | undefined {
+    if (!fromUri) return this.symbolIndex.getContract(contractName);
+
+    const local = this.symbolIndex.getContract(contractName, fromUri);
+    if (local) return local;
+
+    return this.resolveParserImportedContract(contractName, fromUri);
+  }
+
+  private resolveParserImportedContract(
+    contractName: string,
+    fromUri: string,
+  ): { uri: string; contract: ContractDefinition } | undefined {
+    const sourceUnit = this.parser.get(fromUri)?.sourceUnit;
+    if (!sourceUnit) return undefined;
+
+    let fromPath: string;
+    try {
+      fromPath = this.workspace.uriToPath(fromUri);
+    } catch {
+      return undefined;
+    }
+
+    const scoped = contractName.includes(".") ? contractName.split(".") : null;
+    for (const imp of sourceUnit.imports) {
+      let targetPath: string | null;
+      try {
+        targetPath = this.workspace.resolveImport(imp.path, fromPath);
+      } catch {
+        targetPath = null;
+      }
+      if (!targetPath) continue;
+      const targetUri = URI.file(targetPath).toString();
+
+      if (scoped && imp.unitAlias === scoped[0] && scoped[1]) {
+        return this.symbolIndex.getContract(scoped[1], targetUri);
+      }
+
+      if (scoped) continue;
+      for (const alias of imp.symbolAliases ?? []) {
+        const visibleName = alias.alias ?? alias.symbol;
+        if (visibleName !== contractName) continue;
+        return this.symbolIndex.getContract(alias.symbol, targetUri);
+      }
+
+      if (!imp.unitAlias && (imp.symbolAliases ?? []).length === 0) {
+        const imported = this.symbolIndex.getContract(contractName, targetUri);
+        if (imported) return imported;
+      }
+    }
+
+    return undefined;
   }
 
   private usingForMemberCompletions(

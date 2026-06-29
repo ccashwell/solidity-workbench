@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Go-to-type-definition now prefers the variable under the cursor and the
   enclosing contract's state over unrelated same-name variables, preventing
   source references from jumping to test-only type declarations.
+- Parser-only member completions now resolve receiver inheritance through
+  visible imports, preventing same-named test contracts from replacing source
+  receiver members.
 
 ## [0.8.8] - 2026-06-29
 

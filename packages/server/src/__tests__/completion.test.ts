@@ -47,6 +47,21 @@ function setupFiles(currentUri: string, files: Record<string, string>) {
   };
 }
 
+function setupFilesParserOnly(currentUri: string, files: Record<string, string>) {
+  const uris = Object.keys(files);
+  const workspace = makeWorkspace(uris);
+  const parser = new SolidityParser();
+  const idx = new SymbolIndex(parser, workspace);
+  for (const [uri, text] of Object.entries(files)) {
+    parser.parse(uri, text);
+    idx.updateFile(uri);
+  }
+  return {
+    doc: TextDocument.create(currentUri, "solidity", 1, files[currentUri]),
+    provider: new CompletionProvider(idx, parser, workspace),
+  };
+}
+
 function makeWorkspace(uris: string[]): WorkspaceManager {
   return {
     getAllFileUris: () => uris.slice(),
@@ -492,6 +507,45 @@ interface IVault {
       assert.doesNotMatch(resolved.documentation.value, /Test-only conversion docs/);
     });
 
+    it("resolves parser-only member completions through visible imports before duplicate globals", () => {
+      const currentUri = "file:///w/src/Pool.sol";
+      const current = `pragma solidity ^0.8.24;
+import {IVault} from "./IVault.sol";
+
+contract Pool {
+    IVault internal vault;
+
+    function f() external view {
+        vault.convertToAssets(1);
+    }
+}`;
+      const { doc, provider } = setupFilesParserOnly(currentUri, {
+        "file:///w/src/IVault.sol": `pragma solidity ^0.8.24;
+interface IVault {
+    function convertToAssets(uint256 shares) external view returns (uint256 assets);
+}
+`,
+        [currentUri]: current,
+        "file:///w/test/IVault.sol": `pragma solidity ^0.8.24;
+interface IVault {
+    function previewMint(uint256 assets) external view returns (uint256 shares);
+}
+`,
+      });
+
+      const lines = current.split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("vault.convertToAssets"));
+      const character = lines[line].indexOf("vault.") + "vault.".length;
+      const ls = labels(provider.provideCompletions(doc, { line, character }));
+
+      assert.ok(ls.has("convertToAssets"), "expected imported source receiver member");
+      assert.equal(
+        ls.has("previewMint"),
+        false,
+        "test-only duplicate must not replace receiver type",
+      );
+    });
+
     it("does not resolve member completions from unimported test-only receiver types", () => {
       const currentUri = "file:///w/src/UsesGhost.sol";
       const current = `pragma solidity ^0.8.24;
@@ -517,6 +571,33 @@ interface Ghost {
       const ls = labels(provider.provideCompletions(doc, { line, character }));
 
       assert.equal(ls.has("ping"), false, "unimported test-only receiver must not complete");
+    });
+
+    it("does not resolve parser-only member completions from unimported test-only receiver types", () => {
+      const currentUri = "file:///w/src/UsesGhost.sol";
+      const current = `pragma solidity ^0.8.24;
+contract UsesGhost {
+    Ghost internal ghost;
+
+    function f() external view {
+        ghost.ping();
+    }
+}`;
+      const { doc, provider } = setupFilesParserOnly(currentUri, {
+        [currentUri]: current,
+        "file:///w/test/Ghost.sol": `pragma solidity ^0.8.24;
+interface Ghost {
+    function ping() external view returns (uint256);
+}
+`,
+      });
+
+      const lines = current.split("\n");
+      const line = lines.findIndex((candidate) => candidate.includes("ghost.ping"));
+      const character = lines[line].indexOf("ghost.") + "ghost.".length;
+      const ls = labels(provider.provideCompletions(doc, { line, character }));
+
+      assert.equal(ls.has("ping"), false, "parser-only completions must not use test globals");
     });
 
     it("resolves using-for completions through imported library aliases", () => {
