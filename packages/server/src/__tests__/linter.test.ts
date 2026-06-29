@@ -774,6 +774,56 @@ contract A {
       assert.equal(flags.length, 1);
     });
 
+    it("flags a parameter that shadows an inherited state variable", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract Base {
+    address owner;
+}
+contract Child is Base {
+    function setOwner(address owner) external {
+        owner;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "shadowing-state");
+      assert.equal(flags.length, 1);
+    });
+
+    it("flags a local variable that shadows a transitive inherited state variable", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract GrandBase {
+    uint256 total;
+}
+contract Base is GrandBase {}
+contract Child is Base {
+    function f() external pure returns (uint256) {
+        uint256 total = 1;
+        return total;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "shadowing-state");
+      assert.equal(flags.length, 1);
+    });
+
+    it("does NOT flag same-name state variables from non-inherited sibling contracts", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+contract Sibling {
+    uint256 total;
+}
+contract Child {
+    function f(uint256 total) external pure returns (uint256) {
+        return total;
+    }
+}
+`);
+      const flags = diags.filter((d) => d.code === "shadowing-state");
+      assert.equal(flags.length, 0);
+    });
+
     it("does NOT flag the conventional underscore-prefixed parameter", () => {
       const diags = lint(`
 pragma solidity ^0.8.24;

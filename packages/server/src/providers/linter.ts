@@ -92,7 +92,7 @@ export class SolidityLinter {
           ...this.checkWeakPrngAst(rawContract),
           ...this.checkEcrecoverZeroCheckAst(rawContract),
           ...this.checkUnsafeErc20CallAst(rawContract),
-          ...this.checkShadowingStateAst(contract, rawContract),
+          ...this.checkShadowingStateAst(contract, rawContract, sourceUnit.contracts),
           ...this.checkStateOptimizableAst(rawContract),
         );
       }
@@ -409,23 +409,19 @@ export class SolidityLinter {
 
   /**
    * Flag function parameters or locally-declared variables whose name
-   * collides with a state variable of the same contract. Shadowed
-   * names are confusing at best (the local wins, the state var becomes
-   * inaccessible without `this.`) and a real bug source — typos can
-   * silently shift writes from state to a stack variable.
-   *
-   * Inherited state-var shadowing is not yet detected (would need an
-   * inheritance walk). The immediate-contract case catches the common
-   * footgun.
+   * collides with a state variable of the same contract or a same-file
+   * base contract. Shadowed names are confusing at best (the local wins,
+   * the state var becomes inaccessible without `this.`) and a real bug
+   * source — typos can silently shift writes from state to a stack
+   * variable.
    */
   private checkShadowingStateAst(
     contract: ContractDefinition,
     rawContract: RawContract,
+    contracts: ContractDefinition[],
   ): Diagnostic[] {
     const diagnostics: Diagnostic[] = [];
-    const stateVarNames = new Set(
-      contract.stateVariables.map((v) => v.name).filter((n): n is string => !!n),
-    );
+    const stateVarNames = this.collectInheritedStateVarNames(contract, contracts);
     if (stateVarNames.size === 0) return diagnostics;
 
     for (const sub of rawContract.subNodes ?? []) {
@@ -466,6 +462,29 @@ export class SolidityLinter {
     }
 
     return diagnostics;
+  }
+
+  private collectInheritedStateVarNames(
+    contract: ContractDefinition,
+    contracts: ContractDefinition[],
+  ): Set<string> {
+    const names = new Set<string>();
+    const contractsByName = new Map(contracts.map((c) => [c.name, c]));
+    const visit = (current: ContractDefinition, seen: Set<string>): void => {
+      if (seen.has(current.name)) return;
+      seen.add(current.name);
+
+      for (const stateVar of current.stateVariables) {
+        if (stateVar.name) names.add(stateVar.name);
+      }
+      for (const base of current.baseContracts) {
+        const baseContract = contractsByName.get(base.baseName);
+        if (baseContract) visit(baseContract, seen);
+      }
+    };
+
+    visit(contract, new Set());
+    return names;
   }
 
   // ── Unsafe ERC-20 call ─────────────────────────────────────────────
