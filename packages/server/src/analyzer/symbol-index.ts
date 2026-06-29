@@ -595,8 +595,8 @@ export class SymbolIndex {
    *
    * This is a lightweight parser-only companion to SemanticResolver for
    * providers that still need useful behavior before full semantic resolution
-   * is available. It prefers same-file declarations and import aliases before
-   * falling back to the legacy global contract map.
+   * is available. It prefers same-file declarations and import aliases, and
+   * intentionally returns no result for unimported same-named declarations.
    */
   getVisibleContract(
     name: string,
@@ -611,7 +611,7 @@ export class SymbolIndex {
       if (entry) return entry;
     }
 
-    return this.getContract(name);
+    return undefined;
   }
 
   /**

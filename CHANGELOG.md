@@ -62,6 +62,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parser-only Signature Help now resolves imported file-level functions,
   events, and errors through the current file's import list, preventing hidden
   helpers or duplicate test declarations from surfacing as call signatures.
+- Parser-only visible-contract lookups now return no result for unimported
+  same-named declarations instead of falling back to the global contract map,
+  preventing Type Hierarchy and implementation walks from inventing test-only
+  bases in source files.
 
 ## [0.8.8] - 2026-06-29
 

@@ -642,6 +642,26 @@ contract Child is Base {}`,
     );
   });
 
+  it("does not resolve parser-only type hierarchy supertypes through unimported test contracts", () => {
+    const files = {
+      "src/Child.sol": `pragma solidity ^0.8.24;
+contract Child is Ghost {}`,
+      "test/Ghost.sol": `pragma solidity ^0.8.24;
+contract Ghost {}`,
+    };
+    const { docs, parser, idx } = setupFiles(files);
+    const provider = new TypeHierarchyProvider(idx, parser);
+    const doc = docs["src/Child.sol"];
+    const line = files["src/Child.sol"].split("\n")[1];
+    const col = line.indexOf("Child");
+
+    const prepared = provider.prepareTypeHierarchy(doc, { line: 1, character: col });
+    assert.equal(prepared.length, 1);
+
+    const supertypes = provider.getSupertypes(prepared[0]);
+    assert.deepEqual(supertypes, []);
+  });
+
   it("does not prepare type hierarchy for unimported test-only symbols in source files", () => {
     const files = {
       "src/Current.sol": `pragma solidity ^0.8.24;
