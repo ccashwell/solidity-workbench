@@ -593,12 +593,86 @@ export class CallHierarchyProvider {
         if (base.contract.name) allowed.add(base.contract.name);
       }
     } else {
-      for (const base of this.symbolIndex.getInheritanceChain(containerName)) {
-        if (base.name) allowed.add(base.name);
+      for (const entry of this.getParserInheritanceChain(containerName, fromUri)) {
+        if (entry.contract.name) allowed.add(entry.contract.name);
       }
     }
     this.qualifierCache.set(cacheKey, allowed);
     return allowed;
+  }
+
+  private getParserInheritanceChain(
+    typeName: string,
+    fromUri: string,
+  ): Array<{ uri: string; contract: ContractDefinition }> {
+    const root = this.resolveParserVisibleContract(typeName, fromUri);
+    if (!root) return [];
+
+    const chain: Array<{ uri: string; contract: ContractDefinition }> = [];
+    const visited = new Set<string>();
+
+    const walk = (entry: { uri: string; contract: ContractDefinition }): void => {
+      const key = `${entry.uri}#${entry.contract.name}`;
+      if (visited.has(key)) return;
+      visited.add(key);
+      chain.push(entry);
+
+      for (const base of entry.contract.baseContracts) {
+        const resolved = this.resolveParserVisibleContract(base.baseName, entry.uri);
+        if (resolved) walk(resolved);
+      }
+    };
+
+    walk(root);
+    return chain;
+  }
+
+  private resolveParserVisibleContract(
+    typeName: string,
+    fromUri: string,
+  ): { uri: string; contract: ContractDefinition } | undefined {
+    const local = this.symbolIndex.getContract(typeName, fromUri);
+    if (local) return local;
+
+    const sourceUnit = this.parser.get(fromUri)?.sourceUnit;
+    if (!sourceUnit) return undefined;
+
+    let fromPath: string;
+    try {
+      fromPath = this.workspace.uriToPath(fromUri);
+    } catch {
+      return undefined;
+    }
+
+    const scoped = typeName.includes(".") ? typeName.split(".") : null;
+    for (const imp of sourceUnit.imports) {
+      let targetPath: string | null;
+      try {
+        targetPath = this.workspace.resolveImport(imp.path, fromPath);
+      } catch {
+        targetPath = null;
+      }
+      if (!targetPath) continue;
+      const targetUri = URI.file(targetPath).toString();
+
+      if (scoped && imp.unitAlias === scoped[0] && scoped[1]) {
+        return this.symbolIndex.getContract(scoped[1], targetUri);
+      }
+
+      if (scoped) continue;
+      for (const alias of imp.symbolAliases ?? []) {
+        const visibleName = alias.alias ?? alias.symbol;
+        if (visibleName !== typeName) continue;
+        return this.symbolIndex.getContract(alias.symbol, targetUri);
+      }
+
+      if (!imp.unitAlias && (imp.symbolAliases ?? []).length === 0) {
+        const imported = this.symbolIndex.getContract(typeName, targetUri);
+        if (imported) return imported;
+      }
+    }
+
+    return undefined;
   }
 
   /**

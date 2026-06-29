@@ -341,6 +341,61 @@ contract Base is SourceParent {
       }
     });
 
+    it("does not use same-named test inheritance chains in parser-only incoming calls", async () => {
+      const scoped = setupFixture({
+        "src/Base.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract SourceParent {}
+
+contract Base is SourceParent {
+    function foo() external {}
+}
+`,
+        "test/Base.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract TestParent {
+    function foo() external {}
+}
+
+contract Base is TestParent {}
+`,
+        "test/UseTestParent.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+import "./Base.sol";
+
+contract UseTestParent {
+    function run(TestParent parent) external {
+        parent.foo();
+    }
+}
+`,
+      });
+      try {
+        const srcBaseUri = URI.file(path.join(scoped.tmpDir, "src/Base.sol")).toString();
+
+        const calls = await scoped.provider.getIncomingCalls({
+          name: "foo",
+          kind: SymbolKind.Function,
+          uri: srcBaseUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "Base",
+        });
+
+        assert.ok(
+          calls.every((call) => call.from.name !== "run"),
+          `parser-only source Base.foo must not inherit callers through test/Base.sol; got ${calls
+            .map((call) => call.from.name)
+            .join(", ")}`,
+        );
+      } finally {
+        teardownFixture(scoped);
+      }
+    });
+
     it("associates each caller with the exact source range of the call", async () => {
       const calls = await fixture.provider.getIncomingCalls(transferItem(fixture.aUri, "A"));
       const useB = calls.find((c) => c.from.name === "useB");
