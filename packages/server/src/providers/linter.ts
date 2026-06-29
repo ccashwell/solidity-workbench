@@ -1297,10 +1297,9 @@ export class SolidityLinter {
    * Warn when a state-variable Identifier appears inside a For / While
    * / DoWhile body. AST walking means:
    *   - Comments never fire
-   *   - Loops that iterate over a function parameter `p` with the same
-   *     name as a state var are NOT flagged (we only count Identifier
-   *     nodes whose name is in the state-var set; parameter shadows
-   *     would need scope analysis, which we defer to SolcBridge).
+   *   - Loops that iterate over a function parameter or loop-local
+   *     declaration with the same name as a state var are not flagged,
+   *     because those identifiers do not read storage.
    *
    * We dedupe by (line, state-var) so a single loop that reads one
    * state var 3 times on the same line emits a single hint.
@@ -1318,28 +1317,61 @@ export class SolidityLinter {
       if (!func.body || !func.name) continue;
       const raw = this.findRawFunction(rawContract, func.name);
       if (!raw?.body) continue;
+      const shadowedStateVarNames = this.collectFunctionShadowedStateVarNames(raw, stateVarNames);
 
       this.visitRaw(raw.body, {
-        ForStatement: (n) => this.emitStorageInLoopHints(n, stateVarNames, diagnostics, lines),
-        WhileStatement: (n) => this.emitStorageInLoopHints(n, stateVarNames, diagnostics, lines),
-        DoWhileStatement: (n) => this.emitStorageInLoopHints(n, stateVarNames, diagnostics, lines),
+        ForStatement: (n) =>
+          this.emitStorageInLoopHints(n, stateVarNames, shadowedStateVarNames, diagnostics, lines),
+        WhileStatement: (n) =>
+          this.emitStorageInLoopHints(n, stateVarNames, shadowedStateVarNames, diagnostics, lines),
+        DoWhileStatement: (n) =>
+          this.emitStorageInLoopHints(n, stateVarNames, shadowedStateVarNames, diagnostics, lines),
       });
     }
 
     return diagnostics;
   }
 
+  private collectFunctionShadowedStateVarNames(
+    func: RawFunction,
+    stateVarNames: Set<string>,
+  ): Set<string> {
+    const shadowed = new Set<string>();
+    const collect = (param: RawNode | null | undefined): void => {
+      const name = (param as { name?: string | null } | null | undefined)?.name;
+      if (name && stateVarNames.has(name)) shadowed.add(name);
+    };
+
+    for (const param of func.parameters ?? []) collect(param);
+    for (const param of func.returnParameters ?? []) collect(param);
+    return shadowed;
+  }
+
   private emitStorageInLoopHints(
     loop: RawNode,
     stateVarNames: Set<string>,
+    shadowedStateVarNames: Set<string>,
     diagnostics: Diagnostic[],
     lines: string[],
   ): undefined {
     const seen = new Set<string>();
+    const loopShadowedStateVarNames = new Set(shadowedStateVarNames);
+    this.visitRaw(loop, {
+      VariableDeclarationStatement: (stmt) => {
+        for (const variable of stmt.variables ?? []) {
+          if (variable?.name && stateVarNames.has(variable.name)) {
+            loopShadowedStateVarNames.add(variable.name);
+          }
+        }
+        return undefined;
+      },
+    });
+
     this.visitRaw(loop, {
       Identifier: (n) => {
         if (!n.name) return undefined;
         if (!stateVarNames.has(n.name)) return undefined;
+        if (loopShadowedStateVarNames.has(n.name)) return undefined;
         const range = this.nodeRange(n);
         const key = `${range.start.line}:${n.name}`;
         if (seen.has(key)) return undefined;
@@ -1675,6 +1707,8 @@ interface RawFunction extends RawNode {
   type: "FunctionDefinition";
   name?: string | null;
   body?: RawNode & { statements?: RawNode[] };
+  parameters?: RawNode[];
+  returnParameters?: RawNode[];
   isConstructor?: boolean;
   isReceiveEther?: boolean;
   isFallback?: boolean;

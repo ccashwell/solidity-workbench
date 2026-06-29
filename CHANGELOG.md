@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `shadowing-state` linter rule now detects parameters and local variables
   that shadow same-file inherited state variables, including transitive bases,
   without flagging same-name members from unrelated sibling contracts.
+- The `storage-in-loop` linter rule no longer reports gas hints for loop
+  identifiers that resolve to same-name function parameters, return
+  parameters, or loop-local declarations instead of storage.
 
 ## [0.8.7] - 2026-06-29
 

@@ -172,7 +172,7 @@ contract Safe {
       assert.equal(dc.length, 0, "comment mention of delegatecall must not trigger the rule");
     });
 
-    it("storage-in-loop: fires only on the real state-variable read, not a same-named parameter", () => {
+    it("storage-in-loop: does NOT fire on a same-named parameter", () => {
       const diags = lint(`
 pragma solidity ^0.8.24;
 
@@ -181,9 +181,7 @@ contract C {
 
     function pure_param(uint256 cap) external pure returns (uint256) {
         // The parameter shadows state variable \`cap\`; the loop reads
-        // the parameter, not storage. We don't yet do full scope
-        // analysis, but the AST rule at worst reports one hint — the
-        // regex version would match the identifier on every loop line.
+        // the parameter, not storage.
         uint256 s;
         for (uint256 i; i < cap; ++i) { s += i; }
         return s;
@@ -191,11 +189,28 @@ contract C {
 }
 `);
       const loop = diags.filter((d) => d.code === "storage-in-loop");
-      // Scope-aware suppression is a future SolcBridge-backed feature;
-      // for now assert the rule emits at most one hint per loop line
-      // rather than duplicating per occurrence as the regex did.
-      const loopLines = new Set(loop.map((d) => d.range.start.line));
-      assert.ok(loop.length <= loopLines.size, "no duplicate hints on the same line");
+      assert.equal(loop.length, 0);
+    });
+
+    it("storage-in-loop: does NOT fire on a same-named loop-local declaration", () => {
+      const diags = lint(`
+pragma solidity ^0.8.24;
+
+contract C {
+    uint256 public cap;
+
+    function local_shadow() external pure returns (uint256) {
+        uint256 s;
+        for (uint256 i; i < 3; ++i) {
+            uint256 cap = i;
+            s += cap;
+        }
+        return s;
+    }
+}
+`);
+      const loop = diags.filter((d) => d.code === "storage-in-loop");
+      assert.equal(loop.length, 0);
     });
 
     it("missing-event: does NOT fire when the function emits but from a helper", () => {
