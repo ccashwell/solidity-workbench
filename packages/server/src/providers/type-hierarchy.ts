@@ -30,8 +30,10 @@ export class TypeHierarchyProvider {
    */
   prepareTypeHierarchy(document: TextDocument, position: Position): TypeHierarchyItem[] {
     const text = document.getText();
-    const word = getWordAtPosition(text, position)?.text ?? null;
-    if (!word) return [];
+    const wordResult = getWordAtPosition(text, position);
+    const word = wordResult?.text ?? null;
+    if (!word || !wordResult) return [];
+    const includeNamespaceImports = this.isQualifiedIdentifier(text, wordResult.range);
 
     const symbols = this.symbolIndex.findSymbols(word).filter((sym) => this.isTypeSymbol(sym));
     const underCursor = symbols.find(
@@ -51,7 +53,7 @@ export class TypeHierarchyProvider {
     }
 
     const visibleSymbols = this.resolver
-      ? this.resolver.filterVisibleSymbols(document.uri, symbols)
+      ? this.resolver.filterVisibleSymbols(document.uri, symbols, { includeNamespaceImports })
       : symbols;
     if (visibleSymbols.length > 0) {
       const sym =
@@ -82,6 +84,11 @@ export class TypeHierarchyProvider {
       return false;
     }
     return true;
+  }
+
+  private isQualifiedIdentifier(text: string, range: ContractDefinition["nameRange"]): boolean {
+    const line = text.split("\n")[range.start.line] ?? "";
+    return range.start.character > 0 && line[range.start.character - 1] === ".";
   }
 
   /**

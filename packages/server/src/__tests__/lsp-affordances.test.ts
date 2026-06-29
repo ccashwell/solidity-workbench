@@ -570,6 +570,37 @@ contract MockGhost is Ghost {
     assert.equal(impl, null);
   });
 
+  it("does not resolve implementations for bare namespace-only interfaces", () => {
+    const files = {
+      "src/I.sol": `pragma solidity ^0.8.24;
+interface Hidden {
+    function ping() external;
+}`,
+      "src/Impl.sol": `pragma solidity ^0.8.24;
+import { Hidden } from "./I.sol";
+contract Impl is Hidden {
+    function ping() external {}
+}`,
+      "src/Consumer.sol": `pragma solidity ^0.8.24;
+import * as Types from "./I.sol";
+contract Consumer {
+    Types.Hidden namespaced;
+    Hidden bare;
+}`,
+    };
+    const { docs, idx, resolver } = setupFiles(files);
+    const doc = docs["src/Consumer.sol"];
+    const line = files["src/Consumer.sol"].split("\n")[4];
+    const col = line.indexOf("Hidden");
+
+    const impl = new ImplementationProvider(idx, resolver).provideImplementation(doc, {
+      line: 4,
+      character: col,
+    });
+
+    assert.equal(impl, null);
+  });
+
   it("prepares type hierarchy items through imported base aliases", () => {
     const files = {
       "src/Base.sol": `pragma solidity ^0.8.24;
@@ -678,6 +709,27 @@ contract Ghost {}`,
     const col = line.indexOf("Ghost");
 
     const prepared = provider.prepareTypeHierarchy(doc, { line: 2, character: col });
+    assert.deepEqual(prepared, []);
+  });
+
+  it("does not prepare type hierarchy for bare namespace-only types", () => {
+    const files = {
+      "src/Types.sol": `pragma solidity ^0.8.24;
+contract Hidden {}`,
+      "src/Current.sol": `pragma solidity ^0.8.24;
+import * as Types from "./Types.sol";
+contract Current {
+    Types.Hidden namespaced;
+    Hidden bare;
+}`,
+    };
+    const { docs, parser, idx, resolver } = setupFiles(files);
+    const provider = new TypeHierarchyProvider(idx, parser, resolver);
+    const doc = docs["src/Current.sol"];
+    const line = files["src/Current.sol"].split("\n")[4];
+    const col = line.indexOf("Hidden");
+
+    const prepared = provider.prepareTypeHierarchy(doc, { line: 4, character: col });
     assert.deepEqual(prepared, []);
   });
 });

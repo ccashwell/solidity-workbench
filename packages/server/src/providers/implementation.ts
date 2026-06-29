@@ -24,9 +24,11 @@ export class ImplementationProvider {
   ) {}
 
   provideImplementation(document: TextDocument, position: Position): Definition | null {
-    const wordAtPosition = getWordAtPosition(document.getText(), position);
+    const text = document.getText();
+    const wordAtPosition = getWordAtPosition(text, position);
     const word = wordAtPosition?.text ?? null;
-    if (!word) return null;
+    if (!word || !wordAtPosition) return null;
+    const includeNamespaceImports = this.isQualifiedIdentifier(text, wordAtPosition.range);
 
     const locations: Location[] = [];
 
@@ -35,7 +37,7 @@ export class ImplementationProvider {
       locations.push(...this.contractImplementationsForResolved(importedContract));
     }
 
-    const symbols = this.selectSymbols(word, document.uri, position);
+    const symbols = this.selectSymbols(word, document.uri, position, includeNamespaceImports);
 
     for (const sym of symbols) {
       if (sym.kind === "contract" || sym.kind === "interface") {
@@ -79,7 +81,12 @@ export class ImplementationProvider {
     return this.resolver.resolveContract(word, documentUri) ?? null;
   }
 
-  private selectSymbols(word: string, documentUri: string, position: Position): SolSymbol[] {
+  private selectSymbols(
+    word: string,
+    documentUri: string,
+    position: Position,
+    includeNamespaceImports: boolean,
+  ): SolSymbol[] {
     let symbols = this.symbolIndex.findSymbols(word);
     const underCursor = symbols.filter(
       (sym) => sym.filePath === documentUri && this.rangeContains(sym.nameRange, position),
@@ -87,7 +94,9 @@ export class ImplementationProvider {
     if (underCursor.length > 0) return underCursor;
 
     if (this.resolver) {
-      symbols = this.resolver.filterVisibleSymbols(documentUri, symbols);
+      symbols = this.resolver.filterVisibleSymbols(documentUri, symbols, {
+        includeNamespaceImports,
+      });
     }
     return symbols;
   }
@@ -220,6 +229,11 @@ export class ImplementationProvider {
       return false;
     }
     return true;
+  }
+
+  private isQualifiedIdentifier(text: string, range: FunctionDefinition["nameRange"]): boolean {
+    const line = text.split("\n")[range.start.line] ?? "";
+    return range.start.character > 0 && line[range.start.character - 1] === ".";
   }
 
   private dedupe(locations: Location[]): Location[] {

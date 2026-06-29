@@ -76,6 +76,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parser-only References and Rename now use strict bare-symbol import exposure,
   preventing namespace-only declarations from producing workspace-wide
   reference results or text fallback renames from unresolved bare identifiers.
+- Parser-only Type Hierarchy and Go To Implementation now use strict bare-symbol
+  import exposure, preventing namespace-only contracts and interfaces from
+  surfacing for unresolved bare type names.
 
 ## [0.8.8] - 2026-06-29
 
