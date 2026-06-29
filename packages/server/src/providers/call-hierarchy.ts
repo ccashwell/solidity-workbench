@@ -11,7 +11,11 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { URI } from "vscode-uri";
-import type { ContractDefinition, FunctionDefinition } from "@solidity-workbench/common";
+import type {
+  ContractDefinition,
+  FunctionDefinition,
+  ModifierDefinition,
+} from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
@@ -630,6 +634,20 @@ export class CallHierarchyProvider {
           fileOutgoingKeys,
         });
       }
+
+      for (const mod of contract.modifiers) {
+        this.indexCallsInFunction({
+          uri,
+          text,
+          lines,
+          commentRanges,
+          func: mod,
+          callerContainer: contract.name,
+          contract,
+          fileIncomingNames,
+          fileOutgoingKeys,
+        });
+      }
     }
 
     for (const func of result.sourceUnit.freeFunctions) {
@@ -662,17 +680,31 @@ export class CallHierarchyProvider {
     text: string;
     lines: string[];
     commentRanges: Map<number, Array<[number, number]>>;
-    func: FunctionDefinition;
+    func: FunctionDefinition | ModifierDefinition;
     callerContainer: string | undefined;
     contract: ContractDefinition | undefined;
     fileIncomingNames: Set<string>;
     fileOutgoingKeys: Set<string>;
   }): void {
-    const callerName = func.name ?? func.kind;
-    const callerKey = this.makeKey(uri, callerName, callerContainer);
+    const callerName = this.callableName(func);
 
     const bodyRange = this.getFunctionBodyRange(text, func.range.start.line, commentRanges);
     if (!bodyRange) return;
+
+    if (func.type === "FunctionDefinition" && contract) {
+      this.indexModifierInvocations({
+        uri,
+        lines,
+        commentRanges,
+        func,
+        bodyRange,
+        contract,
+        callerName,
+        callerContainer,
+        fileIncomingNames,
+        fileOutgoingKeys,
+      });
+    }
 
     // Start *after* the opening brace so the function's own signature
     // (which naturally contains `name(`) isn't mistaken for a recursive
@@ -732,8 +764,7 @@ export class CallHierarchyProvider {
       const qualifier = this.resolveQualifier(rawQualifier, uri, contract, callRange.start);
       const target = this.resolveSemanticCallTarget(uri, text, callRange);
 
-      const outgoing = this.outgoingCalls.get(callerKey) ?? [];
-      outgoing.push({
+      this.recordCallSite({
         calleeName,
         qualifier,
         callRange,
@@ -741,23 +772,145 @@ export class CallHierarchyProvider {
         callerName,
         callerContainer,
         target,
+        fileIncomingNames,
+        fileOutgoingKeys,
       });
-      this.outgoingCalls.set(callerKey, outgoing);
-      fileOutgoingKeys.add(callerKey);
-
-      const incoming = this.incomingCalls.get(calleeName) ?? [];
-      incoming.push({
-        calleeName,
-        qualifier,
-        callRange,
-        callerUri: uri,
-        callerName,
-        callerContainer,
-        target,
-      });
-      this.incomingCalls.set(calleeName, incoming);
-      fileIncomingNames.add(calleeName);
     }
+  }
+
+  private callableName(func: FunctionDefinition | ModifierDefinition): string {
+    return func.type === "FunctionDefinition" ? (func.name ?? func.kind) : func.name;
+  }
+
+  private indexModifierInvocations({
+    uri,
+    lines,
+    commentRanges,
+    func,
+    bodyRange,
+    contract,
+    callerName,
+    callerContainer,
+    fileIncomingNames,
+    fileOutgoingKeys,
+  }: {
+    uri: string;
+    lines: string[];
+    commentRanges: Map<number, Array<[number, number]>>;
+    func: FunctionDefinition;
+    bodyRange: { bodyStartLine: number; bodyStartChar: number; bodyEndLine: number };
+    contract: ContractDefinition;
+    callerName: string;
+    callerContainer: string | undefined;
+    fileIncomingNames: Set<string>;
+    fileOutgoingKeys: Set<string>;
+  }): void {
+    for (const modifierName of func.modifiers) {
+      const callRange = this.findModifierInvocationRange(
+        modifierName,
+        func.range.start.line,
+        bodyRange.bodyStartLine,
+        bodyRange.bodyStartChar,
+        lines,
+        commentRanges,
+      );
+      if (!callRange) continue;
+
+      this.recordCallSite({
+        calleeName: modifierName,
+        qualifier: undefined,
+        callRange,
+        callerUri: uri,
+        callerName,
+        callerContainer,
+        target: this.resolveModifierTarget(uri, contract, modifierName),
+        fileIncomingNames,
+        fileOutgoingKeys,
+      });
+    }
+  }
+
+  private findModifierInvocationRange(
+    modifierName: string,
+    startLine: number,
+    bodyStartLine: number,
+    bodyStartChar: number,
+    lines: string[],
+    commentRanges: Map<number, Array<[number, number]>>,
+  ): Range | undefined {
+    const pattern = new RegExp(`\\b${escapeRegExp(modifierName)}\\b`, "g");
+    for (let line = startLine; line <= bodyStartLine; line++) {
+      const text =
+        line === bodyStartLine ? (lines[line] ?? "").slice(0, bodyStartChar) : (lines[line] ?? "");
+      let match: RegExpExecArray | null;
+      while ((match = pattern.exec(text)) !== null) {
+        const col = match.index;
+        if (isPositionInCommentRanges(commentRanges, line, col)) continue;
+        if (isInsideString(lines[line] ?? "", col)) continue;
+        return {
+          start: { line, character: col },
+          end: { line, character: col + modifierName.length },
+        };
+      }
+    }
+    return undefined;
+  }
+
+  private resolveModifierTarget(
+    uri: string,
+    contract: ContractDefinition,
+    modifierName: string,
+  ): CallTarget | undefined {
+    const resolved = this.resolver?.findMemberInInheritanceChain(contract.name, modifierName, uri);
+    if (resolved?.kind === "modifier") return this.symbolToTarget(resolved);
+
+    const candidates = this.filterVisibleSymbols(
+      uri,
+      this.symbolIndex
+        .findSymbols(modifierName)
+        .filter((sym) => sym.kind === "modifier" && sym.containerName === contract.name),
+    );
+    return candidates[0] ? this.symbolToTarget(candidates[0]) : undefined;
+  }
+
+  private recordCallSite({
+    calleeName,
+    qualifier,
+    callRange,
+    callerUri,
+    callerName,
+    callerContainer,
+    target,
+    fileIncomingNames,
+    fileOutgoingKeys,
+  }: CallSite & { fileIncomingNames: Set<string>; fileOutgoingKeys: Set<string> }): void {
+    const callerKey = this.makeKey(callerUri, callerName, callerContainer);
+
+    const outgoing = this.outgoingCalls.get(callerKey) ?? [];
+    outgoing.push({
+      calleeName,
+      qualifier,
+      callRange,
+      callerUri,
+      callerName,
+      callerContainer,
+      target,
+    });
+    this.outgoingCalls.set(callerKey, outgoing);
+    fileOutgoingKeys.add(callerKey);
+
+    const incoming = this.incomingCalls.get(calleeName) ?? [];
+    incoming.push({
+      calleeName,
+      qualifier,
+      callRange,
+      callerUri,
+      callerName,
+      callerContainer,
+      target,
+    });
+    this.incomingCalls.set(calleeName, incoming);
+    fileIncomingNames.add(calleeName);
   }
 
   private resolveSemanticCallTarget(
@@ -1213,4 +1366,8 @@ function countNewlinesBefore(sortedOffsets: number[], offset: number): number {
     else hi = mid;
   }
   return lo;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

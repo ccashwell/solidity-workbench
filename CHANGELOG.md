@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Call Hierarchy fallback indexing now scans file-level free-function bodies,
   so switching between outgoing callees and incoming callers works for free
   functions even when the graph index is unavailable.
+- Call Hierarchy fallback indexing now treats modifier invocations and calls
+  made inside modifier bodies as call edges, so modifier targets behave
+  consistently when graph relationships are unavailable.
 
 ## [0.8.8] - 2026-06-29
 

@@ -450,6 +450,68 @@ contract Caller {
       }
     });
 
+    it("indexes modifier invocations and calls made inside modifier bodies", async () => {
+      const modifierFixture = setupFixture({
+        "src/Modifiers.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+contract Guarded {
+    modifier onlyOwner() {
+        audit();
+        _;
+    }
+
+    function audit() internal {}
+
+    function work() internal {}
+
+    function run() external onlyOwner {
+        work();
+    }
+}
+`,
+      });
+
+      try {
+        const uri = URI.file(path.join(modifierFixture.tmpDir, "src/Modifiers.sol")).toString();
+        const runOutgoing = await modifierFixture.provider.getOutgoingCalls({
+          name: "run",
+          kind: SymbolKind.Function,
+          uri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: "Guarded",
+        });
+
+        const onlyOwner = runOutgoing.find((call) => call.to.name === "onlyOwner");
+        assert.ok(onlyOwner, "expected run outgoing calls to include onlyOwner modifier");
+        assert.equal(onlyOwner.to.kind, SymbolKind.Method);
+        assert.equal(onlyOwner.to.detail, "Guarded");
+        assert.ok(
+          runOutgoing.some((call) => call.to.name === "work"),
+          "expected normal body calls to remain indexed",
+        );
+
+        const modifierIncoming = await modifierFixture.provider.getIncomingCalls(onlyOwner.to);
+        assert.ok(
+          modifierIncoming.some((call) => call.from.name === "run"),
+          "expected switching to callers of onlyOwner to include Guarded.run",
+        );
+
+        const modifierOutgoing = await modifierFixture.provider.getOutgoingCalls(onlyOwner.to);
+        const audit = modifierOutgoing.find((call) => call.to.name === "audit");
+        assert.ok(audit, "expected modifier outgoing calls to include audit");
+
+        const auditIncoming = await modifierFixture.provider.getIncomingCalls(audit.to);
+        assert.ok(
+          auditIncoming.some((call) => call.from.name === "onlyOwner"),
+          "expected switching to callers of audit to include modifier body",
+        );
+      } finally {
+        teardownFixture(modifierFixture);
+      }
+    });
+
     it("serves outgoing calls from the graph index when available", async () => {
       const graphBacked = setupFixture({
         "A.sol": A_SOL,
