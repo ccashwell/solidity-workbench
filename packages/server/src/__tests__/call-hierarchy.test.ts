@@ -389,6 +389,67 @@ contract Base is SourceParent {
       );
     });
 
+    it("indexes outgoing calls from file-level free functions", async () => {
+      const freeFixture = setupFixture({
+        "src/Free.sol": `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+
+function leaf(uint256 value) pure returns (uint256) {
+    return value + 1;
+}
+
+function helper(uint256 value) pure returns (uint256) {
+    return leaf(value);
+}
+
+contract Caller {
+    function run(uint256 value) external pure returns (uint256) {
+        return helper(value);
+    }
+}
+`,
+      });
+
+      try {
+        const freeUri = URI.file(path.join(freeFixture.tmpDir, "src/Free.sol")).toString();
+        const outgoing = await freeFixture.provider.getOutgoingCalls({
+          name: "helper",
+          kind: SymbolKind.Function,
+          uri: freeUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: undefined,
+        });
+
+        const leaf = outgoing.find((call) => call.to.name === "leaf");
+        assert.ok(leaf, "expected helper outgoing call to file-level leaf");
+        assert.equal(leaf.to.detail, undefined);
+
+        const leafIncoming = await freeFixture.provider.getIncomingCalls(leaf.to);
+        assert.ok(
+          leafIncoming.some(
+            (call) => call.from.name === "helper" && call.from.detail === undefined,
+          ),
+          "expected switching to callers of leaf to include file-level helper",
+        );
+
+        const helperIncoming = await freeFixture.provider.getIncomingCalls({
+          name: "helper",
+          kind: SymbolKind.Function,
+          uri: freeUri,
+          range: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 0 } },
+          detail: undefined,
+        });
+        assert.ok(
+          helperIncoming.some((call) => call.from.name === "run" && call.from.detail === "Caller"),
+          "expected contract callers of file-level helper to remain indexed",
+        );
+      } finally {
+        teardownFixture(freeFixture);
+      }
+    });
+
     it("serves outgoing calls from the graph index when available", async () => {
       const graphBacked = setupFixture({
         "A.sol": A_SOL,

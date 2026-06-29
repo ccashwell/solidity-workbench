@@ -11,7 +11,7 @@ import { TextDocument } from "vscode-languageserver-textdocument";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { URI } from "vscode-uri";
-import type { ContractDefinition } from "@solidity-workbench/common";
+import type { ContractDefinition, FunctionDefinition } from "@solidity-workbench/common";
 import type { SymbolIndex } from "../analyzer/symbol-index.js";
 import type { WorkspaceManager } from "../workspace/workspace-manager.js";
 import type { SolidityParser } from "../parser/solidity-parser.js";
@@ -618,97 +618,145 @@ export class CallHierarchyProvider {
 
     for (const contract of result.sourceUnit.contracts) {
       for (const func of contract.functions) {
-        const callerName = func.name ?? func.kind;
-        const callerKey = this.makeKey(uri, callerName, contract.name);
-
-        const bodyRange = this.getFunctionBodyRange(text, func.range.start.line, commentRanges);
-        if (!bodyRange) continue;
-
-        // Start *after* the opening brace so the function's own signature
-        // (which naturally contains `name(`) isn't mistaken for a recursive
-        // self-call when the body lives on the same physical line as the
-        // declaration.
-        const firstLine = lines[bodyRange.bodyStartLine].slice(bodyRange.bodyStartChar);
-        const restLines = lines.slice(bodyRange.bodyStartLine + 1, bodyRange.bodyEndLine + 1);
-        const bodyText = restLines.length > 0 ? [firstLine, ...restLines].join("\n") : firstLine;
-
-        // Pre-compute the position of every newline in `bodyText` once,
-        // so each call match can resolve to (line, column) via a binary
-        // search instead of regex-scanning the prefix per match. The
-        // prior `bodyText.slice(0, idx).match(/\n/g)` pattern was
-        // O(call_sites × body_length), which dominated the file-index
-        // pass on dense bodies.
-        const newlineOffsets: number[] = [];
-        for (let i = 0; i < bodyText.length; i++) {
-          if (bodyText.charCodeAt(i) === 10) newlineOffsets.push(i);
-        }
-
-        // Capture group 1 = optional receiver identifier, group 2 = callee
-        // name. Chained expressions (`a.b.c()`) are only partially handled —
-        // the captured qualifier is the identifier immediately before the
-        // dot, which is fine for the 95% case but would need solc's AST for
-        // full accuracy.
-        const callRe = /(?:\b([a-zA-Z_$][\w$]*)\s*\.\s*)?\b([a-zA-Z_$][\w$]*)\s*\(/g;
-        let match: RegExpExecArray | null;
-
-        while ((match = callRe.exec(bodyText)) !== null) {
-          const rawQualifier = match[1];
-          const calleeName = match[2];
-
-          if (CALL_LIKE_KEYWORDS.has(calleeName)) continue;
-          if (isSolidityBuiltinType(calleeName)) continue;
-
-          const absoluteMatchStart = match.index + match[0].lastIndexOf(calleeName);
-          // Binary-search the precomputed newline offsets to locate
-          // (line, column) for `absoluteMatchStart`. `newlinesBefore`
-          // is the count of newlines strictly before the offset; the
-          // start-of-current-line is the offset just past the last
-          // newline (or 0 on the first line of the body).
-          const newlinesBefore = countNewlinesBefore(newlineOffsets, absoluteMatchStart);
-          const lineStartOffset = newlinesBefore === 0 ? 0 : newlineOffsets[newlinesBefore - 1] + 1;
-          const callLine = bodyRange.bodyStartLine + newlinesBefore;
-          const callCol =
-            newlinesBefore === 0
-              ? bodyRange.bodyStartChar + absoluteMatchStart
-              : absoluteMatchStart - lineStartOffset;
-
-          if (isPositionInCommentRanges(commentRanges, callLine, callCol)) continue;
-          if (isInsideString(lines[callLine] ?? "", callCol)) continue;
-
-          const callRange: Range = {
-            start: { line: callLine, character: Math.max(0, callCol) },
-            end: { line: callLine, character: Math.max(0, callCol) + calleeName.length },
-          };
-          const qualifier = this.resolveQualifier(rawQualifier, uri, contract, callRange.start);
-          const target = this.resolveSemanticCallTarget(uri, text, callRange);
-
-          const outgoing = this.outgoingCalls.get(callerKey) ?? [];
-          outgoing.push({
-            calleeName,
-            qualifier,
-            callRange,
-            callerUri: uri,
-            callerName,
-            callerContainer: contract.name,
-            target,
-          });
-          this.outgoingCalls.set(callerKey, outgoing);
-          fileOutgoingKeys.add(callerKey);
-
-          const incoming = this.incomingCalls.get(calleeName) ?? [];
-          incoming.push({
-            calleeName,
-            qualifier,
-            callRange,
-            callerUri: uri,
-            callerName,
-            callerContainer: contract.name,
-            target,
-          });
-          this.incomingCalls.set(calleeName, incoming);
-          fileIncomingNames.add(calleeName);
-        }
+        this.indexCallsInFunction({
+          uri,
+          text,
+          lines,
+          commentRanges,
+          func,
+          callerContainer: contract.name,
+          contract,
+          fileIncomingNames,
+          fileOutgoingKeys,
+        });
       }
+    }
+
+    for (const func of result.sourceUnit.freeFunctions) {
+      this.indexCallsInFunction({
+        uri,
+        text,
+        lines,
+        commentRanges,
+        func,
+        callerContainer: undefined,
+        contract: undefined,
+        fileIncomingNames,
+        fileOutgoingKeys,
+      });
+    }
+  }
+
+  private indexCallsInFunction({
+    uri,
+    text,
+    lines,
+    commentRanges,
+    func,
+    callerContainer,
+    contract,
+    fileIncomingNames,
+    fileOutgoingKeys,
+  }: {
+    uri: string;
+    text: string;
+    lines: string[];
+    commentRanges: Map<number, Array<[number, number]>>;
+    func: FunctionDefinition;
+    callerContainer: string | undefined;
+    contract: ContractDefinition | undefined;
+    fileIncomingNames: Set<string>;
+    fileOutgoingKeys: Set<string>;
+  }): void {
+    const callerName = func.name ?? func.kind;
+    const callerKey = this.makeKey(uri, callerName, callerContainer);
+
+    const bodyRange = this.getFunctionBodyRange(text, func.range.start.line, commentRanges);
+    if (!bodyRange) return;
+
+    // Start *after* the opening brace so the function's own signature
+    // (which naturally contains `name(`) isn't mistaken for a recursive
+    // self-call when the body lives on the same physical line as the
+    // declaration.
+    const firstLine = lines[bodyRange.bodyStartLine].slice(bodyRange.bodyStartChar);
+    const restLines = lines.slice(bodyRange.bodyStartLine + 1, bodyRange.bodyEndLine + 1);
+    const bodyText = restLines.length > 0 ? [firstLine, ...restLines].join("\n") : firstLine;
+
+    // Pre-compute the position of every newline in `bodyText` once,
+    // so each call match can resolve to (line, column) via a binary
+    // search instead of regex-scanning the prefix per match. The
+    // prior `bodyText.slice(0, idx).match(/\n/g)` pattern was
+    // O(call_sites × body_length), which dominated the file-index
+    // pass on dense bodies.
+    const newlineOffsets: number[] = [];
+    for (let i = 0; i < bodyText.length; i++) {
+      if (bodyText.charCodeAt(i) === 10) newlineOffsets.push(i);
+    }
+
+    // Capture group 1 = optional receiver identifier, group 2 = callee
+    // name. Chained expressions (`a.b.c()`) are only partially handled —
+    // the captured qualifier is the identifier immediately before the
+    // dot, which is fine for the 95% case but would need solc's AST for
+    // full accuracy.
+    const callRe = /(?:\b([a-zA-Z_$][\w$]*)\s*\.\s*)?\b([a-zA-Z_$][\w$]*)\s*\(/g;
+    let match: RegExpExecArray | null;
+
+    while ((match = callRe.exec(bodyText)) !== null) {
+      const rawQualifier = match[1];
+      const calleeName = match[2];
+
+      if (CALL_LIKE_KEYWORDS.has(calleeName)) continue;
+      if (isSolidityBuiltinType(calleeName)) continue;
+
+      const absoluteMatchStart = match.index + match[0].lastIndexOf(calleeName);
+      // Binary-search the precomputed newline offsets to locate
+      // (line, column) for `absoluteMatchStart`. `newlinesBefore`
+      // is the count of newlines strictly before the offset; the
+      // start-of-current-line is the offset just past the last
+      // newline (or 0 on the first line of the body).
+      const newlinesBefore = countNewlinesBefore(newlineOffsets, absoluteMatchStart);
+      const lineStartOffset = newlinesBefore === 0 ? 0 : newlineOffsets[newlinesBefore - 1] + 1;
+      const callLine = bodyRange.bodyStartLine + newlinesBefore;
+      const callCol =
+        newlinesBefore === 0
+          ? bodyRange.bodyStartChar + absoluteMatchStart
+          : absoluteMatchStart - lineStartOffset;
+
+      if (isPositionInCommentRanges(commentRanges, callLine, callCol)) continue;
+      if (isInsideString(lines[callLine] ?? "", callCol)) continue;
+
+      const callRange: Range = {
+        start: { line: callLine, character: Math.max(0, callCol) },
+        end: { line: callLine, character: Math.max(0, callCol) + calleeName.length },
+      };
+      const qualifier = this.resolveQualifier(rawQualifier, uri, contract, callRange.start);
+      const target = this.resolveSemanticCallTarget(uri, text, callRange);
+
+      const outgoing = this.outgoingCalls.get(callerKey) ?? [];
+      outgoing.push({
+        calleeName,
+        qualifier,
+        callRange,
+        callerUri: uri,
+        callerName,
+        callerContainer,
+        target,
+      });
+      this.outgoingCalls.set(callerKey, outgoing);
+      fileOutgoingKeys.add(callerKey);
+
+      const incoming = this.incomingCalls.get(calleeName) ?? [];
+      incoming.push({
+        calleeName,
+        qualifier,
+        callRange,
+        callerUri: uri,
+        callerName,
+        callerContainer,
+        target,
+      });
+      this.incomingCalls.set(calleeName, incoming);
+      fileIncomingNames.add(calleeName);
     }
   }
 
@@ -848,15 +896,15 @@ export class CallHierarchyProvider {
   private resolveQualifier(
     rawQualifier: string | undefined,
     uri: string,
-    contract: ContractDefinition,
+    contract: ContractDefinition | undefined,
     position: Position,
   ): string | undefined {
     if (!rawQualifier) return undefined;
 
-    if (rawQualifier === "this") {
+    if (rawQualifier === "this" && contract) {
       return contract.name.length > 0 ? contract.name : undefined;
     }
-    if (rawQualifier === "super") {
+    if (rawQualifier === "super" && contract) {
       const firstBase = contract.baseContracts[0]?.baseName;
       return firstBase && firstBase.length > 0 ? firstBase : undefined;
     }

@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   links, hover markdown, and go-to-definition, while unmatched signatures stay
   unresolved instead of drifting to a different overload.
 
+### Fixed
+
+- Call Hierarchy fallback indexing now scans file-level free-function bodies,
+  so switching between outgoing callees and incoming callers works for free
+  functions even when the graph index is unavailable.
+
 ## [0.8.8] - 2026-06-29
 
 ### Fixed
