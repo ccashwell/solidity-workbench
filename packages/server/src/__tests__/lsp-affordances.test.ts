@@ -466,7 +466,8 @@ contract C {}`;
   });
 
   it("finds concrete implementations for interface methods", () => {
-    const text = `pragma solidity ^0.8.0;
+    const files = {
+      "src/Main.sol": `pragma solidity ^0.8.0;
 interface IFoo {
     function ping(uint256 x) external returns (bool);
 }
@@ -474,9 +475,20 @@ contract Foo is IFoo {
     function ping(uint256 x) external override returns (bool) {
         return x > 0;
     }
-}`;
-    const { doc, idx } = setup(text);
-    const line = text.split("\n")[2];
+}`,
+      "test/Foo.sol": `pragma solidity ^0.8.0;
+interface IFoo {
+    function ping(uint256 x) external returns (bool);
+}
+contract Foo is IFoo {
+    function ping(uint256 x) external override returns (bool) {
+        return false;
+    }
+}`,
+    };
+    const { docs, idx } = setupFiles(files);
+    const doc = docs["src/Main.sol"];
+    const line = files["src/Main.sol"].split("\n")[2];
     const col = line.indexOf("ping");
     const impl = new ImplementationProvider(idx).provideImplementation(doc, {
       line: 2,
@@ -486,6 +498,7 @@ contract Foo is IFoo {
     assert.ok(impl, "expected implementation locations");
     const locs = Array.isArray(impl) ? impl : [impl];
     assert.equal(locs.length, 1);
+    assert.equal(locs[0].uri, URI.file("/w/src/Main.sol").toString());
     assert.equal(asTestLocation(locs[0]).range.start.line, 5);
   });
 

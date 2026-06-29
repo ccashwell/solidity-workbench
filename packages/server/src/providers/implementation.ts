@@ -43,9 +43,9 @@ export class ImplementationProvider {
         if (resolved) {
           locations.push(...this.contractImplementationsForResolved(resolved));
         } else {
-          const entry = this.symbolIndex.getContract(sym.name);
+          const entry = this.symbolIndex.getContract(sym.name, sym.filePath);
           if (entry) {
-            locations.push(...this.contractImplementations(entry.contract));
+            locations.push(...this.contractImplementations(entry));
           }
         }
       }
@@ -58,12 +58,12 @@ export class ImplementationProvider {
         if (resolved && sourceFn) {
           locations.push(...this.functionImplementationsForResolved(resolved, sourceFn));
         } else {
-          const container = this.symbolIndex.getContract(sym.containerName);
+          const container = this.symbolIndex.getContract(sym.containerName, sym.filePath);
           const fallbackFn = container?.contract.functions.find(
             (fn) => fn.name === sym.name && this.sameRange(fn.nameRange, sym.nameRange),
           );
           if (container && fallbackFn) {
-            locations.push(...this.functionImplementations(container.contract.name, fallbackFn));
+            locations.push(...this.functionImplementations(container, fallbackFn));
           }
         }
       }
@@ -101,22 +101,30 @@ export class ImplementationProvider {
     return out;
   }
 
-  private contractImplementations(contract: ContractDefinition): Location[] {
+  private contractImplementations(target: {
+    uri: string;
+    contract: ContractDefinition;
+  }): Location[] {
     const out: Location[] = [];
-    for (const [, entry] of this.symbolIndex.getAllContracts()) {
-      if (entry.contract.name === contract.name) continue;
-      if (!this.inheritsFrom(entry.contract.name, contract.name)) continue;
+    for (const entry of this.symbolIndex.getAllContractEntries()) {
+      if (entry.uri === target.uri && entry.contract.name === target.contract.name) continue;
+      if (!this.inheritsFrom(entry, target)) continue;
       if (entry.contract.kind === "interface") continue;
       out.push(LspLocation.create(entry.uri, entry.contract.nameRange));
     }
     return out;
   }
 
-  private functionImplementations(baseContract: string, sourceFn: FunctionDefinition): Location[] {
+  private functionImplementations(
+    baseContract: { uri: string; contract: ContractDefinition },
+    sourceFn: FunctionDefinition,
+  ): Location[] {
     const out: Location[] = [];
-    for (const [, entry] of this.symbolIndex.getAllContracts()) {
-      if (entry.contract.name === baseContract) continue;
-      if (!this.inheritsFrom(entry.contract.name, baseContract)) continue;
+    for (const entry of this.symbolIndex.getAllContractEntries()) {
+      if (entry.uri === baseContract.uri && entry.contract.name === baseContract.contract.name) {
+        continue;
+      }
+      if (!this.inheritsFrom(entry, baseContract)) continue;
       if (entry.contract.kind === "interface") continue;
 
       for (const candidate of entry.contract.functions) {
@@ -162,10 +170,28 @@ export class ImplementationProvider {
     return out;
   }
 
-  private inheritsFrom(contractName: string, baseName: string): boolean {
-    return this.symbolIndex
-      .getInheritanceChain(contractName)
-      .some((contract) => contract.name === baseName);
+  private inheritsFrom(
+    candidate: { uri: string; contract: ContractDefinition },
+    target: { uri: string; contract: ContractDefinition },
+  ): boolean {
+    const visited = new Set<string>();
+    const walk = (entry: { uri: string; contract: ContractDefinition }): boolean => {
+      const key = `${entry.uri}#${entry.contract.name}`;
+      if (visited.has(key)) return false;
+      visited.add(key);
+
+      for (const base of entry.contract.baseContracts) {
+        const baseEntry = this.symbolIndex.getVisibleContract(base.baseName, entry.uri);
+        if (!baseEntry) continue;
+        if (baseEntry.uri === target.uri && baseEntry.contract.name === target.contract.name) {
+          return true;
+        }
+        if (walk(baseEntry)) return true;
+      }
+      return false;
+    };
+
+    return walk(candidate);
   }
 
   private sameParameters(a: ParameterDeclaration[], b: ParameterDeclaration[]): boolean {
