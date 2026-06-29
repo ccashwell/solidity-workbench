@@ -683,18 +683,65 @@ interface BodyBounds {
  * Find the body of a function starting at `funcStartLine` and return its
  * char-level bounds (just inside the `{` through just before the `}`).
  *
- * This is a simple brace-depth scanner adapted from `call-hierarchy.ts`'s
- * `getFunctionBodyRange`. It does not treat braces inside strings/comments
- * specially, which matches the existing helper's behaviour.
+ * This is a brace-depth scanner over code tokens only. Comments and string
+ * literals in function headers are treated as whitespace, so commented
+ * delimiters before the opening brace do not hide the real body.
  */
 function getFunctionBodyBounds(lines: string[], funcStartLine: number): BodyBounds | null {
   let depth = 0;
   let open: { line: number; char: number } | null = null;
+  let inBlockComment = false;
+  let inSingle = false;
+  let inDouble = false;
 
   for (let i = funcStartLine; i < lines.length; i++) {
     const line = lines[i];
-    for (let col = 0; col < line.length; col++) {
+    let col = 0;
+    while (col < line.length) {
       const ch = line[col];
+      const next = col + 1 < line.length ? line[col + 1] : "";
+
+      if (inBlockComment) {
+        if (ch === "*" && next === "/") {
+          inBlockComment = false;
+          col += 2;
+        } else {
+          col++;
+        }
+        continue;
+      }
+
+      if (inSingle || inDouble) {
+        const quote = inSingle ? "'" : '"';
+        if (ch === "\\") {
+          col += 2;
+          continue;
+        }
+        if (ch === quote) {
+          inSingle = false;
+          inDouble = false;
+        }
+        col++;
+        continue;
+      }
+
+      if (ch === "/" && next === "*") {
+        inBlockComment = true;
+        col += 2;
+        continue;
+      }
+      if (ch === "/" && next === "/") break;
+      if (ch === "'") {
+        inSingle = true;
+        col++;
+        continue;
+      }
+      if (ch === '"') {
+        inDouble = true;
+        col++;
+        continue;
+      }
+
       if (ch === "{") {
         if (!open) open = { line: i, char: col };
         depth++;
@@ -708,9 +755,11 @@ function getFunctionBodyBounds(lines: string[], funcStartLine: number): BodyBoun
             endChar: col,
           };
         }
+      } else if (!open && ch === ";") {
+        return null;
       }
+      col++;
     }
-    if (!open && line.includes(";")) return null;
   }
   return null;
 }

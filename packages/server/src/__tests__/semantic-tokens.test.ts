@@ -131,6 +131,26 @@ describe("SemanticTokensProvider", () => {
       );
     });
 
+    it("finds function bodies when header comments contain braces or semicolons", () => {
+      const code = `contract C {
+    uint256 public x;
+    function f() external view /* ; { } */ returns (uint256) {
+        return x;
+    }
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+      const refLine = 3;
+      const refCol = code.split("\n")[refLine].indexOf("x");
+
+      assert.ok(
+        tokens.some(
+          (t) => t.line === refLine && t.char === refCol && t.length === 1 && t.type === "property",
+        ),
+        `expected body reference to x to be tokenized as property; got ${JSON.stringify(tokens)}`,
+      );
+    });
+
     it("does not let parameters from one function recolor same-named references in another", () => {
       const code = `contract C {
     address public owner;
