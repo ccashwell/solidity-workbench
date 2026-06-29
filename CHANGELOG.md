@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-06-29
+
 ### Added
 
 - Braced NatSpec references now support signature-qualified overload links such
