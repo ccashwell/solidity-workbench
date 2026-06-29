@@ -279,8 +279,9 @@ Press `F5` in VS Code to launch an Extension Development Host with the extension
 
 20 token types with 10 modifiers (`declaration`, `readonly`, `virtual`, `override`, `documentation`, `defaultLibrary`, etc.) for state variables, locals, parameters, functions, modifiers, events, errors, contracts, interfaces, libraries, structs, and enums.
 
-Reference-site tokens use a per-function text scan; collisions between identically-named
-identifiers in different functions are a known limitation.
+Reference-site tokens use a scoped per-function text scan: file-level declarations,
+the current contract's members, same-file inherited members, and function parameters
+are layered so sibling contract members do not recolor unrelated references.
 
 ### Inlay hints
 

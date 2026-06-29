@@ -191,6 +191,62 @@ describe("SemanticTokensProvider", () => {
       );
     });
 
+    it("does not let sibling contract members recolor unresolved references", () => {
+      const code = `contract A {
+    uint256 public shared;
+}
+
+contract B {
+    function read() external view returns (uint256) {
+        return shared;
+    }
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+
+      const readLine = 6;
+      const readCol = code.split("\n")[readLine].indexOf("shared");
+
+      assert.ok(
+        !tokens.some(
+          (t) =>
+            t.line === readLine &&
+            t.char === readCol &&
+            t.length === "shared".length &&
+            t.type === "property",
+        ),
+        "expected B.read() unresolved shared reference not to be colored as A.shared",
+      );
+    });
+
+    it("colors inherited same-file base members in derived contract bodies", () => {
+      const code = `contract Base {
+    uint256 public inheritedValue;
+}
+
+contract Child is Base {
+    function read() external view returns (uint256) {
+        return inheritedValue;
+    }
+}`;
+      const { provider, doc } = setup(code);
+      const tokens = decodeTokens(provider.provideSemanticTokens(doc).data);
+
+      const readLine = 6;
+      const readCol = code.split("\n")[readLine].indexOf("inheritedValue");
+
+      assert.ok(
+        tokens.some(
+          (t) =>
+            t.line === readLine &&
+            t.char === readCol &&
+            t.length === "inheritedValue".length &&
+            t.type === "property",
+        ),
+        "expected Child.read() inheritedValue reference to be colored as an inherited property",
+      );
+    });
+
     it("tokenizes file-level declaration references inside free functions and contracts", () => {
       const code = `type Bucket is bytes32;
 struct FileState { uint256 total; }

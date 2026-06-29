@@ -1,7 +1,11 @@
 import type { CancellationToken, SemanticTokens, Range } from "vscode-languageserver/node.js";
 import { SemanticTokensBuilder } from "vscode-languageserver/node.js";
 import type { TextDocument } from "vscode-languageserver-textdocument";
-import { SolSemanticTokenTypes, SolSemanticTokenModifiers } from "@solidity-workbench/common";
+import {
+  SolSemanticTokenTypes,
+  SolSemanticTokenModifiers,
+  type ContractDefinition,
+} from "@solidity-workbench/common";
 import type { SolidityParser, ParseResult } from "../parser/solidity-parser.js";
 
 const tokenTypeMap = new Map(SolSemanticTokenTypes.map((t, i) => [t, i]));
@@ -23,10 +27,9 @@ const tokenModifierMap = new Map(SolSemanticTokenModifiers.map((m, i) => [m, i])
  *   (line, char) order because the wire format uses relative deltas. We
  *   collect tokens into an array first and sort before pushing.
  * - Reference-site identifiers are discovered via a text-based scan of
- *   function bodies. This is not a full scope analysis: a parameter name
- *   declared in one function may colour identically-named identifiers in
- *   another function. We accept this cross-function collision as a known
- *   limitation — the win over TextMate-only highlighting is large.
+ *   function bodies. The scan is scoped to file-level declarations plus
+ *   the current contract's members and same-file bases, with parameter
+ *   names layered on per function.
  */
 export class SemanticTokensProvider {
   constructor(private parser: SolidityParser) {}
@@ -65,8 +68,8 @@ export class SemanticTokensProvider {
     this.collectUsingDirectiveKeywordTokens(lines, tokens);
     if (token?.isCancellationRequested) return tokens;
 
-    const nameKinds = this.buildGlobalNameKinds(result);
-    this.collectReferenceTokens(result, lines, nameKinds, tokens, token);
+    const fileNameKinds = this.buildFileNameKinds(result);
+    this.collectReferenceTokens(result, lines, fileNameKinds, tokens, token);
 
     return tokens;
   }
@@ -457,11 +460,11 @@ export class SemanticTokensProvider {
 
   // ── Reference-site tokens ───────────────────────────────────────────
 
-  private buildGlobalNameKinds(result: ParseResult): Map<string, string> {
-    // Map file/contract-scoped identifier text → semantic token type.
-    // Function parameters are intentionally added later per function body
-    // so a parameter named `owner` in one function does not recolor
-    // `owner` references in another function.
+  private buildFileNameKinds(result: ParseResult): Map<string, string> {
+    // Map file-scoped identifier text → semantic token type. Contract
+    // members are intentionally added later per enclosing contract so a
+    // member of one sibling contract does not recolor unresolved text in
+    // another sibling contract.
     const kinds = new Map<string, string>();
     const su = result.sourceUnit;
 
@@ -490,47 +493,66 @@ export class SemanticTokensProvider {
       if (contract.name) {
         kinds.set(contract.name, contract.kind === "interface" ? "interface" : "class");
       }
-      for (const struct of contract.structs) {
-        if (struct.name) kinds.set(struct.name, "struct");
-      }
-      for (const enumDef of contract.enums) {
-        if (enumDef.name) kinds.set(enumDef.name, "enum");
-      }
-      for (const err of contract.errors) {
-        if (err.name) kinds.set(err.name, "function");
-      }
     }
     for (const err of su.errors ?? []) {
       if (err.name) kinds.set(err.name, "function");
     }
 
-    for (const contract of su.contracts) {
-      for (const svar of contract.stateVariables) {
+    return kinds;
+  }
+
+  private buildContractNameKinds(
+    result: ParseResult,
+    contract: ContractDefinition,
+    fileNameKinds: Map<string, string>,
+  ): Map<string, string> {
+    const kinds = new Map(fileNameKinds);
+    const contractsByName = new Map(result.sourceUnit.contracts.map((c) => [c.name, c]));
+    const addContractMembers = (current: ContractDefinition, seen: Set<string>): void => {
+      if (seen.has(current.name)) return;
+      seen.add(current.name);
+
+      for (const base of current.baseContracts) {
+        const baseContract = contractsByName.get(base.baseName);
+        if (baseContract) addContractMembers(baseContract, seen);
+      }
+
+      for (const struct of current.structs) {
+        if (struct.name) kinds.set(struct.name, "struct");
+      }
+      for (const enumDef of current.enums) {
+        if (enumDef.name) kinds.set(enumDef.name, "enum");
+      }
+      for (const err of current.errors) {
+        if (err.name) kinds.set(err.name, "function");
+      }
+      for (const svar of current.stateVariables) {
         if (svar.name) kinds.set(svar.name, "property");
       }
-      for (const event of contract.events) {
+      for (const event of current.events) {
         if (event.name) kinds.set(event.name, "event");
       }
-      for (const mod of contract.modifiers) {
+      for (const mod of current.modifiers) {
         if (mod.name) kinds.set(mod.name, "macro");
       }
-      for (const func of contract.functions) {
+      for (const func of current.functions) {
         if (func.name) kinds.set(func.name, "function");
       }
-    }
+    };
 
+    addContractMembers(contract, new Set());
     return kinds;
   }
 
   private collectReferenceTokens(
     result: ParseResult,
     lines: string[],
-    nameKinds: Map<string, string>,
+    fileNameKinds: Map<string, string>,
     tokens: TokenInfo[],
     token?: CancellationToken,
   ): void {
-    // Mutate-and-restore the global `nameKinds` map per function instead
-    // of cloning it. Cloning a map of every name in the file (often
+    // Mutate-and-restore the active name-kind map per function instead
+    // of cloning it. Cloning a map of every name in scope (often
     // hundreds of entries) per function — and a file may have dozens of
     // functions — was the dominant cost of this provider on each
     // keystroke. We push parameter overrides, scan the body, then undo
@@ -539,12 +561,15 @@ export class SemanticTokensProvider {
     // Map(nameKinds)` was O(file_symbols) and ran once per function.
     const overrides: { name: string; prior: string | undefined; existed: boolean }[] = [];
 
-    const scanFunction = (func: {
-      body: boolean;
-      range: { start: { line: number } };
-      parameters: { name?: string }[];
-      returnParameters: { name?: string }[];
-    }): void => {
+    const scanFunction = (
+      func: {
+        body: boolean;
+        range: { start: { line: number } };
+        parameters: { name?: string }[];
+        returnParameters: { name?: string }[];
+      },
+      nameKinds: Map<string, string>,
+    ): void => {
       if (!func.body) return;
       const bounds = getFunctionBodyBounds(lines, func.range.start.line);
       if (!bounds) return;
@@ -587,14 +612,15 @@ export class SemanticTokensProvider {
 
     for (const func of result.sourceUnit.freeFunctions) {
       if (token?.isCancellationRequested) return;
-      scanFunction(func);
+      scanFunction(func, fileNameKinds);
     }
 
     for (const contract of result.sourceUnit.contracts) {
       if (token?.isCancellationRequested) return;
+      const contractNameKinds = this.buildContractNameKinds(result, contract, fileNameKinds);
       for (const func of contract.functions) {
         if (token?.isCancellationRequested) return;
-        scanFunction(func);
+        scanFunction(func, contractNameKinds);
       }
     }
   }
