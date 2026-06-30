@@ -67,6 +67,7 @@ import {
   generateFoundryTestSkeleton,
   hasForgeTestFailures,
   parseGambitMutantsLog,
+  resolveMutationForgeTestScope,
   summarizeMutationResults,
   type MutationResult,
 } from "../../mutation/mutation-provider";
@@ -458,6 +459,35 @@ describe("Feature coverage — mutation testing", () => {
         extraArgs: ["--match-path", "test/alf/**", "--isolate"],
       }),
       ["test", "--json", "-vvv", "--match-path", "test/alf/**", "--isolate"],
+    );
+  });
+
+  it("auto-scopes current-file mutation runs only when the target is a test file", () => {
+    assert.deepEqual(
+      resolveMutationForgeTestScope({
+        forgeRoot: "/project",
+        targetFile: "/project/test/Counter.t.sol",
+        configuredArgs: ["--isolate"],
+      }).args,
+      ["--isolate", "--match-path", "test/Counter.t.sol"],
+    );
+
+    assert.deepEqual(
+      resolveMutationForgeTestScope({
+        forgeRoot: "/project",
+        targetFile: "/project/src/Counter.sol",
+        configuredArgs: [],
+      }).args,
+      [],
+    );
+
+    assert.deepEqual(
+      resolveMutationForgeTestScope({
+        forgeRoot: "/project",
+        targetFile: "/project/test/Counter.t.sol",
+        configuredArgs: ["--match-path", "test/alf/**"],
+      }).args,
+      ["--match-path", "test/alf/**"],
     );
   });
 

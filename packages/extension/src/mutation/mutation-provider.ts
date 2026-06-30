@@ -134,7 +134,15 @@ export class MutationProvider {
     const maxMutants = clampPositiveInt(config.get<number>("mutation.maxMutants"), 25);
     const timeoutMs = clampPositiveInt(config.get<number>("mutation.timeoutMs"), 120_000);
     const includeTests = config.get<boolean>("mutation.includeTests") ?? false;
-    const forgeTestArgs = stringArraySetting(config.get<unknown>("mutation.forgeTestArgs"));
+    const configuredForgeTestArgs = stringArraySetting(
+      config.get<unknown>("mutation.forgeTestArgs"),
+    );
+    const scopedForgeTest = resolveMutationForgeTestScope({
+      forgeRoot,
+      targetFile: options.targetFile?.fsPath,
+      configuredArgs: configuredForgeTestArgs,
+    });
+    const forgeTestArgs = scopedForgeTest.args;
     const forgePath = config.get<string>("foundryPath") || "forge";
     const gambitPath = config.get<string>("mutation.gambitPath") || "gambit";
     const solcPath = config.get<string>("mutation.solcPath") || "";
@@ -149,6 +157,9 @@ export class MutationProvider {
     this.outputChannel.appendLine(`Per-mutant timeout: ${timeoutMs}ms`);
     if (forgeTestArgs.length > 0) {
       this.outputChannel.appendLine(`Extra forge test args: ${forgeTestArgs.join(" ")}`);
+    }
+    if (scopedForgeTest.note) {
+      this.outputChannel.appendLine(scopedForgeTest.note);
     }
     this.outputChannel.appendLine(
       `Baseline: ${formatCommand(
@@ -826,6 +837,46 @@ export function buildForgeMutationTestArgs(options: {
   if (verbosityFlag) args.push(verbosityFlag);
   args.push(...(options.extraArgs ?? []));
   return args;
+}
+
+export function resolveMutationForgeTestScope(options: {
+  forgeRoot: string;
+  targetFile?: string;
+  configuredArgs: string[];
+}): { args: string[]; note?: string } {
+  if (!options.targetFile || hasForgeTestSelector(options.configuredArgs)) {
+    return { args: options.configuredArgs };
+  }
+
+  const relativePath = path.relative(options.forgeRoot, options.targetFile);
+  if (isTestPath(relativePath)) {
+    const matchPath = toForgePath(relativePath);
+    return {
+      args: [...options.configuredArgs, "--match-path", matchPath],
+      note: `Scoped single-file mutation run to test file: ${matchPath}`,
+    };
+  }
+
+  return {
+    args: options.configuredArgs,
+    note: `Current mutation target is not a test file; set solidity-workbench.mutation.forgeTestArgs to narrow the covering test suite.`,
+  };
+}
+
+function hasForgeTestSelector(args: string[]): boolean {
+  return args.some(
+    (arg) =>
+      arg === "--match-path" ||
+      arg === "--match-contract" ||
+      arg === "--match-test" ||
+      arg.startsWith("--match-path=") ||
+      arg.startsWith("--match-contract=") ||
+      arg.startsWith("--match-test="),
+  );
+}
+
+function toForgePath(filePath: string): string {
+  return filePath.split(path.sep).join("/");
 }
 
 export function hasForgeTestFailures(stdout: string | undefined): boolean {

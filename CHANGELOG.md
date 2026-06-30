@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Mutation testing for the current file now automatically scopes `forge test`
+  with `--match-path` when the selected file is a Foundry test file, while
+  avoiding false source-file scoping for non-test contracts.
+
 ## [0.8.11] - 2026-06-30
 
 ### Added
