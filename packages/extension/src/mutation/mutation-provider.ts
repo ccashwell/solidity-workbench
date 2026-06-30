@@ -214,6 +214,9 @@ export class MutationProvider {
       },
       async (progress, token) => {
         const results: MutationResult[] = [];
+        const reusableSandboxRoot = canReuseMutationSandbox(candidates)
+          ? await createReusableMutationSandbox(forgeRoot, this.outputChannel)
+          : undefined;
         try {
           for (let i = 0; i < candidates.length; i++) {
             if (token.isCancellationRequested) break;
@@ -242,12 +245,16 @@ export class MutationProvider {
               timeoutMs,
               verbosity,
               extraArgs: forgeTestArgs,
+              sandboxRoot: reusableSandboxRoot,
             });
             results.push(result);
             this.outputChannel.appendLine(formatResultLine(result));
           }
         } finally {
           await cleanupMutationCandidates(candidates);
+          if (reusableSandboxRoot) {
+            await fs.promises.rm(reusableSandboxRoot, { recursive: true, force: true });
+          }
         }
 
         const scopeLabel = options.targetFile
@@ -714,17 +721,25 @@ async function runCandidate(options: {
   timeoutMs: number;
   verbosity: number;
   extraArgs?: string[];
+  sandboxRoot?: string;
 }): Promise<MutationResult> {
   const started = Date.now();
-  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "solidity-workbench-mutant-"));
+  const tempRoot =
+    options.sandboxRoot ??
+    (await fs.promises.mkdtemp(path.join(os.tmpdir(), "solidity-workbench-mutant-")));
+  const ownsTempRoot = !options.sandboxRoot;
+  let restoreFile: { filePath: string; text: string } | undefined;
   try {
-    await copyForgeProject(options.forgeRoot, tempRoot);
+    if (ownsTempRoot) {
+      await copyForgeProject(options.forgeRoot, tempRoot);
+    }
     if (options.candidate.engine === "gambit" && options.candidate.mutantDir) {
       await copyMutantOverlay(options.candidate.mutantDir, tempRoot);
     } else {
       const relativePath = path.relative(options.forgeRoot, options.candidate.filePath);
       const tempFile = path.join(tempRoot, relativePath);
       const originalText = await fs.promises.readFile(tempFile, "utf-8");
+      restoreFile = { filePath: tempFile, text: originalText };
       await fs.promises.writeFile(
         tempFile,
         applyMutation(originalText, options.candidate),
@@ -777,8 +792,29 @@ async function runCandidate(options: {
         : e.stderr?.trim() || e.message,
     };
   } finally {
-    await fs.promises.rm(tempRoot, { recursive: true, force: true });
+    if (restoreFile) {
+      await fs.promises.writeFile(restoreFile.filePath, restoreFile.text, "utf-8");
+    }
+    if (ownsTempRoot) {
+      await fs.promises.rm(tempRoot, { recursive: true, force: true });
+    }
   }
+}
+
+export function canReuseMutationSandbox(candidates: readonly MutationCandidate[]): boolean {
+  return candidates.length > 0 && candidates.every((candidate) => candidate.engine !== "gambit");
+}
+
+async function createReusableMutationSandbox(
+  forgeRoot: string,
+  outputChannel: vscode.OutputChannel,
+): Promise<string> {
+  const sandboxRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), "solidity-workbench-mutants-"),
+  );
+  outputChannel.appendLine(`Preparing reusable mutation sandbox: ${sandboxRoot}`);
+  await copyForgeProject(forgeRoot, sandboxRoot, { includeBuildArtifacts: true });
+  return sandboxRoot;
 }
 
 async function runBaselineTests(options: {
@@ -909,12 +945,19 @@ async function copyMutantOverlay(from: string, to: string): Promise<void> {
   });
 }
 
-async function copyForgeProject(from: string, to: string): Promise<void> {
+async function copyForgeProject(
+  from: string,
+  to: string,
+  options: { includeBuildArtifacts?: boolean } = {},
+): Promise<void> {
   await fs.promises.cp(from, to, {
     recursive: true,
     dereference: false,
     filter: (source) => {
       const name = path.basename(source);
+      if (options.includeBuildArtifacts && (name === "cache" || name === "out")) {
+        return true;
+      }
       return !EXCLUDED_COPY_ENTRIES.has(name);
     },
   });

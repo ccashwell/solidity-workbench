@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mutation testing for the current file now automatically scopes `forge test`
   with `--match-path` when the selected file is a Foundry test file, while
   avoiding false source-file scoping for non-test contracts.
+- Built-in mutation testing now reuses a warm sandbox for each run instead of
+  cold-copying and recompiling the project for every mutant.
 
 ## [0.8.11] - 2026-06-30
 

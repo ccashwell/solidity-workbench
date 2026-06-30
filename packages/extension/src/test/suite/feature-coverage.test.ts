@@ -63,12 +63,14 @@ import {
   buildMutationCandidates,
   buildForgeMutationTestArgs,
   buildGambitMutateArgs,
+  canReuseMutationSandbox,
   formatMutationReport,
   generateFoundryTestSkeleton,
   hasForgeTestFailures,
   parseGambitMutantsLog,
   resolveMutationForgeTestScope,
   summarizeMutationResults,
+  type MutationCandidate,
   type MutationResult,
 } from "../../mutation/mutation-provider";
 
@@ -489,6 +491,27 @@ describe("Feature coverage — mutation testing", () => {
       }).args,
       ["--match-path", "test/alf/**"],
     );
+  });
+
+  it("reuses a warm mutation sandbox for built-in mutants only", () => {
+    const builtin = buildMutationCandidates("contract C { function f() external { x == y; } }", {
+      uri: "file:///tmp/C.sol",
+      filePath: "/tmp/C.sol",
+      relativePath: "src/C.sol",
+      maxMutants: 1,
+    });
+    const gambit: MutationCandidate[] = [
+      {
+        ...builtin[0],
+        id: "gambit:1",
+        engine: "gambit",
+        mutantDir: "/tmp/gambit/mutants/1",
+      },
+    ];
+
+    assert.equal(canReuseMutationSandbox(builtin), true);
+    assert.equal(canReuseMutationSandbox(gambit), false);
+    assert.equal(canReuseMutationSandbox([]), false);
   });
 
   it("builds Gambit mutate args and parses common mutants.log formats", () => {
