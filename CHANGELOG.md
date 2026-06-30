@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-06-30
+
 ### Added
 
 - Mutation testing now logs baseline, active mutant, operator, and exact Forge
