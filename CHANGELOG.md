@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   avoiding false source-file scoping for non-test contracts.
 - Built-in mutation testing now reuses a warm sandbox for each run instead of
   cold-copying and recompiling the project for every mutant.
+- Built-in mutation sandboxes now run `forge build` once before the mutant loop
+  so per-mutant `forge test` calls start from prepared build artifacts.
+- Mutation reports now distinguish failing-test kills from non-test Forge
+  failures and include the failing test or Forge error summary.
 
 ## [0.8.11] - 2026-06-30
 

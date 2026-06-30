@@ -215,7 +215,12 @@ export class MutationProvider {
       async (progress, token) => {
         const results: MutationResult[] = [];
         const reusableSandboxRoot = canReuseMutationSandbox(candidates)
-          ? await createReusableMutationSandbox(forgeRoot, this.outputChannel)
+          ? await createReusableMutationSandbox({
+              forgeRoot,
+              forgePath,
+              timeoutMs,
+              outputChannel: this.outputChannel,
+            })
           : undefined;
         try {
           for (let i = 0; i < candidates.length; i++) {
@@ -756,12 +761,14 @@ async function runCandidate(options: {
       timeout: options.timeoutMs,
     });
     if (hasForgeTestFailures(result.stdout)) {
+      const message = describeForgeTestFailure(result.stdout);
       return {
         candidate: options.candidate,
         status: "killed",
         durationMs: Date.now() - started,
         stdout: result.stdout,
         stderr: result.stderr,
+        message,
       };
     }
     return {
@@ -781,15 +788,22 @@ async function runCandidate(options: {
       message?: string;
     };
     const timedOut = e.killed === true || e.signal === "SIGTERM";
+    const classification = timedOut
+      ? undefined
+      : classifyForgeMutationFailure({
+          stdout: e.stdout,
+          stderr: e.stderr,
+          message: e.message,
+        });
     return {
       candidate: options.candidate,
-      status: timedOut ? "timeout" : mutationFailureStatus(e),
+      status: timedOut ? "timeout" : (classification?.status ?? "error"),
       durationMs: Date.now() - started,
       stdout: e.stdout,
       stderr: e.stderr,
       message: timedOut
         ? `forge test did not complete within ${options.timeoutMs}ms; narrow solidity-workbench.mutation.forgeTestArgs or raise solidity-workbench.mutation.timeoutMs.`
-        : e.stderr?.trim() || e.message,
+        : classification?.message,
     };
   } finally {
     if (restoreFile) {
@@ -805,16 +819,31 @@ export function canReuseMutationSandbox(candidates: readonly MutationCandidate[]
   return candidates.length > 0 && candidates.every((candidate) => candidate.engine !== "gambit");
 }
 
-async function createReusableMutationSandbox(
-  forgeRoot: string,
-  outputChannel: vscode.OutputChannel,
-): Promise<string> {
+async function createReusableMutationSandbox(options: {
+  forgeRoot: string;
+  forgePath: string;
+  timeoutMs: number;
+  outputChannel: vscode.OutputChannel;
+}): Promise<string> {
   const sandboxRoot = await fs.promises.mkdtemp(
     path.join(os.tmpdir(), "solidity-workbench-mutants-"),
   );
-  outputChannel.appendLine(`Preparing reusable mutation sandbox: ${sandboxRoot}`);
-  await copyForgeProject(forgeRoot, sandboxRoot, { includeBuildArtifacts: true });
-  return sandboxRoot;
+  options.outputChannel.appendLine(`Preparing reusable mutation sandbox: ${sandboxRoot}`);
+  try {
+    await copyForgeProject(options.forgeRoot, sandboxRoot, { includeBuildArtifacts: true });
+    const args = buildForgeMutationBuildArgs();
+    options.outputChannel.appendLine(`  $ ${formatCommand(options.forgePath, args)}`);
+    await execFileAsync(options.forgePath, args, {
+      cwd: sandboxRoot,
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: options.timeoutMs,
+    });
+    options.outputChannel.appendLine("Reusable mutation sandbox build complete.");
+    return sandboxRoot;
+  } catch (err) {
+    await fs.promises.rm(sandboxRoot, { recursive: true, force: true });
+    throw err;
+  }
 }
 
 async function runBaselineTests(options: {
@@ -849,19 +878,26 @@ async function runBaselineTests(options: {
   }
 }
 
-function mutationFailureStatus(err: {
+function classifyForgeMutationFailure(err: {
   stdout?: string;
   stderr?: string;
   message?: string;
-}): MutationStatus {
-  const output = `${err.stdout ?? ""}\n${err.stderr ?? ""}\n${err.message ?? ""}`;
-  if (
-    hasForgeTestFailures(err.stdout) ||
-    /Failing tests|Encountered \d+ failing test|Suite result: FAILED/i.test(output)
-  ) {
-    return "killed";
+}): { status: MutationStatus; message: string } {
+  const testFailure = describeForgeTestFailure(err.stdout);
+  if (testFailure) {
+    return { status: "killed", message: testFailure };
   }
-  return "error";
+  const output = `${err.stdout ?? ""}\n${err.stderr ?? ""}\n${err.message ?? ""}`;
+  if (/Failing tests|Encountered \d+ failing test|Suite result: FAILED/i.test(output)) {
+    return {
+      status: "killed",
+      message: summarizeForgeOutput(output) ?? "Forge reported failing tests.",
+    };
+  }
+  return {
+    status: "error",
+    message: summarizeForgeOutput(output) ?? "forge test exited without a recognized test failure.",
+  };
 }
 
 export function buildForgeMutationTestArgs(options: {
@@ -873,6 +909,10 @@ export function buildForgeMutationTestArgs(options: {
   if (verbosityFlag) args.push(verbosityFlag);
   args.push(...(options.extraArgs ?? []));
   return args;
+}
+
+export function buildForgeMutationBuildArgs(): string[] {
+  return ["build"];
 }
 
 export function resolveMutationForgeTestScope(options: {
@@ -916,21 +956,58 @@ function toForgePath(filePath: string): string {
 }
 
 export function hasForgeTestFailures(stdout: string | undefined): boolean {
-  if (!stdout?.trim()) return false;
+  return !!describeForgeTestFailure(stdout);
+}
+
+export function describeForgeTestFailure(stdout: string | undefined): string | undefined {
+  if (!stdout?.trim()) return undefined;
   try {
     const parsed = JSON.parse(stdout.trim()) as unknown;
-    return forgeJsonHasFailure(parsed);
+    return findForgeJsonFailure(parsed);
   } catch {
-    return /"status"\s*:\s*"Failure"/.test(stdout) || /Suite result: FAILED/i.test(stdout);
+    return /"status"\s*:\s*"Failure"/.test(stdout) || /Suite result: FAILED/i.test(stdout)
+      ? (summarizeForgeOutput(stdout) ?? "Forge reported failing tests.")
+      : undefined;
   }
 }
 
-function forgeJsonHasFailure(value: unknown): boolean {
-  if (!value || typeof value !== "object") return false;
-  if (Array.isArray(value)) return value.some(forgeJsonHasFailure);
+function findForgeJsonFailure(value: unknown, pathParts: string[] = []): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const hit = findForgeJsonFailure(entry, pathParts);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
   const object = value as Record<string, unknown>;
-  if (object.status === "Failure") return true;
-  return Object.values(object).some(forgeJsonHasFailure);
+  if (object.status === "Failure") {
+    const name = pathParts[pathParts.length - 1];
+    const reason = stringField(object, ["reason", "message"]);
+    if (name && reason) return `${name}: ${reason}`;
+    if (name) return name;
+    return reason ? `Forge test failed: ${reason}` : "Forge reported a failing test.";
+  }
+  for (const [key, entry] of Object.entries(object)) {
+    const hit = findForgeJsonFailure(entry, [...pathParts, key]);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+function summarizeForgeOutput(output: string | undefined, maxLength = 1200): string | undefined {
+  const lines = (output ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return undefined;
+  const interesting = lines.filter(
+    (line) =>
+      /error|fail|revert|panic|reason|compiler|solc|no such file|permission denied/i.test(line) &&
+      !/^\{/.test(line),
+  );
+  const summary = (interesting.length > 0 ? interesting : lines).slice(0, 8).join("\n");
+  return summary.length > maxLength ? `${summary.slice(0, maxLength - 1)}…` : summary;
 }
 
 async function copyMutantOverlay(from: string, to: string): Promise<void> {

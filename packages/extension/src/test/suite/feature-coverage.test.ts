@@ -60,10 +60,12 @@ import { shouldFormatSolidityOnSave } from "../../format-on-save";
 import { shellArg, shellCommand } from "../../shell";
 import {
   applyMutation,
+  buildForgeMutationBuildArgs,
   buildMutationCandidates,
   buildForgeMutationTestArgs,
   buildGambitMutateArgs,
   canReuseMutationSandbox,
+  describeForgeTestFailure,
   formatMutationReport,
   generateFoundryTestSkeleton,
   hasForgeTestFailures,
@@ -428,18 +430,15 @@ describe("Feature coverage — mutation testing", () => {
   });
 
   it("detects failing forge JSON output for killed mutant classification", () => {
-    assert.equal(
-      hasForgeTestFailures(
-        JSON.stringify({
-          "test/C.t.sol:CTest": {
-            test_results: {
-              "test_f()": { status: "Failure", reason: "assertion failed" },
-            },
-          },
-        }),
-      ),
-      true,
-    );
+    const failingTest = JSON.stringify({
+      "test/C.t.sol:CTest": {
+        test_results: {
+          "test_f()": { status: "Failure", reason: "assertion failed" },
+        },
+      },
+    });
+    assert.equal(hasForgeTestFailures(failingTest), true);
+    assert.equal(describeForgeTestFailure(failingTest), "test_f(): assertion failed");
     assert.equal(
       hasForgeTestFailures(
         JSON.stringify({
@@ -452,9 +451,18 @@ describe("Feature coverage — mutation testing", () => {
       ),
       false,
     );
+    assert.equal(
+      hasForgeTestFailures(
+        JSON.stringify({
+          errors: [{ severity: "error", message: "Compiler run failed" }],
+        }),
+      ),
+      false,
+    );
   });
 
   it("builds scoped forge test args for mutation runs", () => {
+    assert.deepEqual(buildForgeMutationBuildArgs(), ["build"]);
     assert.deepEqual(
       buildForgeMutationTestArgs({
         verbosity: 3,
