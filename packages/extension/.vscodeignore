@@ -39,6 +39,7 @@ dist/*.js
 dist/analysis/**
 dist/commands/**
 dist/debugger/**
+dist/mutation/**
 dist/test-explorer/**
 dist/views/**
 # `package.json#icon` points at `resources/icon.png`, which is what
