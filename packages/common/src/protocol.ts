@@ -132,6 +132,43 @@ export interface ListTestsResult {
   contracts: TestContractInfo[];
 }
 
+/** Request compiler-backed mutation candidates for the built-in mutation engine. */
+export const GetMutationCandidates = "solidity-workbench/getMutationCandidates";
+
+export interface GetMutationCandidatesParams {
+  /** Foundry root URI for the mutation run. */
+  forgeRootUri: string;
+  /** Optional single file URI to mutate. Omit for a workspace/root scan. */
+  targetFileUri?: string;
+  /** Include test files as mutation targets. Defaults to false. */
+  includeTests?: boolean;
+  /** Maximum number of candidates to return. */
+  maxMutants: number;
+}
+
+export type MutationCandidateSource = "solc";
+
+export interface MutationCandidateInfo {
+  id: string;
+  uri: string;
+  filePath: string;
+  relativePath: string;
+  range: SourceRange;
+  operator: string;
+  original: string;
+  replacement: string;
+  contractName?: string;
+  functionName?: string;
+  lineText: string;
+  source: MutationCandidateSource;
+}
+
+export interface GetMutationCandidatesResult {
+  candidates: MutationCandidateInfo[];
+  source: "solc" | "unavailable";
+  reason?: string;
+}
+
 /** Request to get the storage layout for a contract */
 export const GetStorageLayout = "solidity-workbench/getStorageLayout";
 

@@ -48,10 +48,12 @@ import { SelectionRangesProvider } from "./providers/selection-ranges.js";
 import { DocumentLinksProvider } from "./providers/document-links.js";
 import { ImplementationProvider } from "./providers/implementation.js";
 import { InheritanceGraphProvider } from "./providers/inheritance-graph.js";
+import { MutationCandidatesProvider } from "./providers/mutation-candidates.js";
 import { SolcBridge } from "./compiler/solc-bridge.js";
 import { SemanticResolver } from "./analyzer/semantic-resolver.js";
 import { listTests } from "./providers/list-tests.js";
 import {
+  GetMutationCandidates,
   GetInheritanceGraph,
   GetProjectGraph,
   GetProjectGraphNeighborhood,
@@ -65,6 +67,8 @@ import {
   ServerStateNotification,
   ListTests,
   type GetInheritanceGraphParams,
+  type GetMutationCandidatesParams,
+  type GetMutationCandidatesResult,
   type GetProjectGraphParams,
   type GetProjectGraphNeighborhoodParams,
   type GetProjectGraphPathParams,
@@ -119,6 +123,7 @@ let selectionRangesProvider: SelectionRangesProvider;
 let documentLinksProvider: DocumentLinksProvider;
 let implementationProvider: ImplementationProvider;
 let inheritanceGraphProvider: InheritanceGraphProvider;
+let mutationCandidatesProvider: MutationCandidatesProvider;
 let semanticResolver: SemanticResolver;
 let solcBridge: SolcBridge;
 
@@ -441,6 +446,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
   );
   solcBridge = new SolcBridge(workspaceManager);
   graphIndex.setSolcBridge(solcBridge);
+  mutationCandidatesProvider = new MutationCandidatesProvider(workspaceManager, solcBridge);
 
   // Make the type-resolved AST cache available to providers that want it
   // for overload disambiguation, member resolution, canonical selector
@@ -947,6 +953,13 @@ connection.onDocumentLinks(async (params, token) => {
 connection.onRequest(ListTests, async (params: ListTestsParams): Promise<ListTestsResult> => {
   return listTests(workspaceManager, parser, params);
 });
+
+connection.onRequest(
+  GetMutationCandidates,
+  async (params: GetMutationCandidatesParams): Promise<GetMutationCandidatesResult> => {
+    return mutationCandidatesProvider.provideMutationCandidates(params);
+  },
+);
 
 connection.onRequest(
   GetInheritanceGraph,

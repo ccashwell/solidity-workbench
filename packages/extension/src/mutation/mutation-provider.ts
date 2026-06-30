@@ -4,7 +4,14 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
-import { findForgeRoot, forgeVerbosityFlag } from "@solidity-workbench/common";
+import type { LanguageClient } from "vscode-languageclient/node";
+import {
+  findForgeRoot,
+  forgeVerbosityFlag,
+  GetMutationCandidates,
+  type GetMutationCandidatesResult,
+  type MutationCandidateInfo,
+} from "@solidity-workbench/common";
 
 const execFileAsync = promisify(execFile);
 
@@ -80,7 +87,7 @@ export class MutationProvider {
   private outputChannel: vscode.OutputChannel;
   private lastSummary: MutationRunSummary | null = null;
 
-  constructor() {
+  constructor(private client?: LanguageClient) {
     this.outputChannel = vscode.window.createOutputChannel("Solidity Mutations");
   }
 
@@ -209,6 +216,8 @@ export class MutationProvider {
             targetFile: options.targetFile?.fsPath,
             includeTests,
             maxMutants,
+            client: this.client,
+            outputChannel: this.outputChannel,
           });
 
     if (candidates.length === 0) {
@@ -335,7 +344,17 @@ export async function collectMutationCandidates(options: {
   targetFile?: string;
   includeTests: boolean;
   maxMutants: number;
+  client?: LanguageClient;
+  outputChannel?: vscode.OutputChannel;
 }): Promise<MutationCandidate[]> {
+  const serverCandidates = await collectServerMutationCandidates(options);
+  if (serverCandidates.length > 0) {
+    options.outputChannel?.appendLine(
+      `Using ${serverCandidates.length} compiler-backed mutation candidates from the language server.`,
+    );
+    return serverCandidates;
+  }
+
   const files = options.targetFile
     ? [options.targetFile]
     : await findSolidityFiles(options.forgeRoot, options.includeTests);
@@ -355,6 +374,69 @@ export async function collectMutationCandidates(options: {
     );
   }
   return candidates.slice(0, options.maxMutants);
+}
+
+async function collectServerMutationCandidates(options: {
+  forgeRoot: string;
+  targetFile?: string;
+  includeTests: boolean;
+  maxMutants: number;
+  client?: LanguageClient;
+  outputChannel?: vscode.OutputChannel;
+}): Promise<MutationCandidate[]> {
+  if (!options.client || options.client.state !== 2 /* LanguageClient.State.Running */) {
+    return [];
+  }
+  try {
+    const result = await options.client.sendRequest<GetMutationCandidatesResult>(
+      GetMutationCandidates,
+      {
+        forgeRootUri: vscode.Uri.file(options.forgeRoot).toString(),
+        targetFileUri: options.targetFile
+          ? vscode.Uri.file(options.targetFile).toString()
+          : undefined,
+        includeTests: options.includeTests,
+        maxMutants: options.maxMutants,
+      },
+    );
+    if (result.source !== "solc" || result.candidates.length === 0) {
+      if (result.reason) {
+        options.outputChannel?.appendLine(
+          `Compiler-backed mutation candidates unavailable: ${result.reason}`,
+        );
+      }
+      return [];
+    }
+    return result.candidates.map(serverMutationCandidateToLocal);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    options.outputChannel?.appendLine(
+      `Compiler-backed mutation candidate request failed; falling back to lexical candidates: ${message}`,
+    );
+    return [];
+  }
+}
+
+function serverMutationCandidateToLocal(candidate: MutationCandidateInfo): MutationCandidate {
+  return {
+    id: candidate.id,
+    uri: candidate.uri,
+    filePath: candidate.filePath,
+    relativePath: candidate.relativePath,
+    range: new vscode.Range(
+      candidate.range.start.line,
+      candidate.range.start.character,
+      candidate.range.end.line,
+      candidate.range.end.character,
+    ),
+    operator: candidate.operator,
+    original: candidate.original,
+    replacement: candidate.replacement,
+    contractName: candidate.contractName,
+    functionName: candidate.functionName,
+    lineText: candidate.lineText,
+    engine: "builtin",
+  };
 }
 
 export async function collectGambitMutationCandidates(options: {

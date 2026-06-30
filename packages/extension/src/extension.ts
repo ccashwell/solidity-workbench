@@ -149,7 +149,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // ── Mutation Testing ──────────────────────────────────────────────
 
-  const mutation = new MutationProvider();
+  const mutation = new MutationProvider(client);
   mutation.activate(context);
 
   // ── Storage Layout ────────────────────────────────────────────────

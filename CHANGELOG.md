@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Mutation testing now adapts the effective per-mutant timeout from the
   measured baseline test duration and uses `forge test --fail-fast` for mutant
   runs by default.
+- Built-in mutation testing now requests compiler-backed candidates from the
+  language server, using solc AST binary-operator nodes before falling back to
+  the legacy lexical scanner.
 
 ## [0.8.11] - 2026-06-30
 
