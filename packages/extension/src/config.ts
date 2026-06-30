@@ -32,6 +32,7 @@ export interface WorkbenchConfig {
     engine: "builtin" | "gambit";
     maxMutants: number;
     timeoutMs: number;
+    failFast: boolean;
     includeTests: boolean;
     forgeTestArgs: string[];
     gambitPath: string;
@@ -74,6 +75,7 @@ export function getConfig(): WorkbenchConfig {
       engine: mutationEngine(config.get<string>("mutation.engine")),
       maxMutants: config.get<number>("mutation.maxMutants") ?? 25,
       timeoutMs: config.get<number>("mutation.timeoutMs") ?? 120_000,
+      failFast: config.get<boolean>("mutation.failFast") ?? true,
       includeTests: config.get<boolean>("mutation.includeTests") ?? false,
       forgeTestArgs: stringArray(config.get<unknown>("mutation.forgeTestArgs")),
       gambitPath: config.get<string>("mutation.gambitPath") || "gambit",

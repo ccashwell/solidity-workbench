@@ -132,8 +132,9 @@ export class MutationProvider {
 
     const config = vscode.workspace.getConfiguration("solidity-workbench");
     const maxMutants = clampPositiveInt(config.get<number>("mutation.maxMutants"), 25);
-    const timeoutMs = clampPositiveInt(config.get<number>("mutation.timeoutMs"), 120_000);
+    const configuredTimeoutMs = clampPositiveInt(config.get<number>("mutation.timeoutMs"), 120_000);
     const includeTests = config.get<boolean>("mutation.includeTests") ?? false;
+    const failFast = config.get<boolean>("mutation.failFast") ?? true;
     const configuredForgeTestArgs = stringArraySetting(
       config.get<unknown>("mutation.forgeTestArgs"),
     );
@@ -154,7 +155,8 @@ export class MutationProvider {
     this.outputChannel.appendLine(`Engine: ${engine}`);
     this.outputChannel.appendLine(`Forge root: ${forgeRoot}`);
     this.outputChannel.appendLine(`Max mutants: ${maxMutants}`);
-    this.outputChannel.appendLine(`Per-mutant timeout: ${timeoutMs}ms`);
+    this.outputChannel.appendLine(`Configured per-mutant timeout: ${configuredTimeoutMs}ms`);
+    this.outputChannel.appendLine(`Mutant fail-fast: ${failFast ? "enabled" : "disabled"}`);
     if (forgeTestArgs.length > 0) {
       this.outputChannel.appendLine(`Extra forge test args: ${forgeTestArgs.join(" ")}`);
     }
@@ -171,14 +173,25 @@ export class MutationProvider {
     const baseline = await runBaselineTests({
       forgeRoot,
       forgePath,
-      timeoutMs,
+      timeoutMs: configuredTimeoutMs,
       verbosity,
       extraArgs: forgeTestArgs,
     });
-    if (baseline) {
-      this.outputChannel.appendLine(baseline);
-      vscode.window.showErrorMessage(baseline);
+    if (baseline.error) {
+      this.outputChannel.appendLine(baseline.error);
+      vscode.window.showErrorMessage(baseline.error);
       return;
+    }
+    const effectiveTimeout = resolveMutationTimeout({
+      configuredTimeoutMs,
+      baselineDurationMs: baseline.durationMs,
+    });
+    const timeoutMs = effectiveTimeout.timeoutMs;
+    this.outputChannel.appendLine(`Baseline completed in ${baseline.durationMs}ms.`);
+    if (effectiveTimeout.note) {
+      this.outputChannel.appendLine(effectiveTimeout.note);
+    } else {
+      this.outputChannel.appendLine(`Effective per-mutant timeout: ${timeoutMs}ms`);
     }
     const candidates =
       engine === "gambit"
@@ -240,7 +253,7 @@ export class MutationProvider {
             this.outputChannel.appendLine(
               `  $ ${formatCommand(
                 forgePath,
-                buildForgeMutationTestArgs({ verbosity, extraArgs: forgeTestArgs }),
+                buildForgeMutationTestArgs({ verbosity, extraArgs: forgeTestArgs, failFast }),
               )}`,
             );
             const result = await runCandidate({
@@ -250,6 +263,7 @@ export class MutationProvider {
               timeoutMs,
               verbosity,
               extraArgs: forgeTestArgs,
+              failFast,
               sandboxRoot: reusableSandboxRoot,
             });
             results.push(result);
@@ -726,6 +740,7 @@ async function runCandidate(options: {
   timeoutMs: number;
   verbosity: number;
   extraArgs?: string[];
+  failFast?: boolean;
   sandboxRoot?: string;
 }): Promise<MutationResult> {
   const started = Date.now();
@@ -754,6 +769,7 @@ async function runCandidate(options: {
     const args = buildForgeMutationTestArgs({
       verbosity: options.verbosity,
       extraArgs: options.extraArgs,
+      failFast: options.failFast,
     });
     const result = await execFileAsync(options.forgePath, args, {
       cwd: tempRoot,
@@ -852,7 +868,8 @@ async function runBaselineTests(options: {
   timeoutMs: number;
   verbosity: number;
   extraArgs?: string[];
-}): Promise<string | null> {
+}): Promise<{ durationMs: number; error?: string }> {
+  const started = Date.now();
   const args = buildForgeMutationTestArgs({
     verbosity: options.verbosity,
     extraArgs: options.extraArgs,
@@ -863,18 +880,29 @@ async function runBaselineTests(options: {
       maxBuffer: 50 * 1024 * 1024,
       timeout: options.timeoutMs,
     });
-    return hasForgeTestFailures(result.stdout)
-      ? "Baseline forge test run has failing tests; mutation testing aborted."
-      : null;
+    const durationMs = Date.now() - started;
+    return {
+      durationMs,
+      error: hasForgeTestFailures(result.stdout)
+        ? "Baseline forge test run has failing tests; mutation testing aborted."
+        : undefined,
+    };
   } catch (err: unknown) {
     const e = err as { stdout?: string; stderr?: string; message?: string; killed?: boolean };
+    const durationMs = Date.now() - started;
     if (e.killed === true) {
-      return "Baseline forge test run timed out; mutation testing aborted.";
+      return { durationMs, error: "Baseline forge test run timed out; mutation testing aborted." };
     }
     if (hasForgeTestFailures(e.stdout)) {
-      return "Baseline forge test run has failing tests; mutation testing aborted.";
+      return {
+        durationMs,
+        error: "Baseline forge test run has failing tests; mutation testing aborted.",
+      };
     }
-    return `Baseline forge test run failed before mutation testing: ${e.stderr?.trim() || e.message || String(err)}`;
+    return {
+      durationMs,
+      error: `Baseline forge test run failed before mutation testing: ${e.stderr?.trim() || e.message || String(err)}`,
+    };
   }
 }
 
@@ -903,16 +931,33 @@ function classifyForgeMutationFailure(err: {
 export function buildForgeMutationTestArgs(options: {
   verbosity: number;
   extraArgs?: string[];
+  failFast?: boolean;
 }): string[] {
   const args = ["test", "--json"];
   const verbosityFlag = forgeVerbosityFlag(options.verbosity);
   if (verbosityFlag) args.push(verbosityFlag);
+  if (options.failFast) args.push("--fail-fast");
   args.push(...(options.extraArgs ?? []));
   return args;
 }
 
 export function buildForgeMutationBuildArgs(): string[] {
   return ["build"];
+}
+
+export function resolveMutationTimeout(options: {
+  configuredTimeoutMs: number;
+  baselineDurationMs: number;
+}): { timeoutMs: number; note?: string } {
+  const adaptiveTimeoutMs = Math.ceil(options.baselineDurationMs * 3 + 30_000);
+  const timeoutMs = Math.max(options.configuredTimeoutMs, adaptiveTimeoutMs);
+  if (timeoutMs === options.configuredTimeoutMs) {
+    return { timeoutMs };
+  }
+  return {
+    timeoutMs,
+    note: `Effective per-mutant timeout raised to ${timeoutMs}ms based on baseline duration ${options.baselineDurationMs}ms.`,
+  };
 }
 
 export function resolveMutationForgeTestScope(options: {

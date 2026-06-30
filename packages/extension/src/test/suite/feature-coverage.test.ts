@@ -71,6 +71,7 @@ import {
   hasForgeTestFailures,
   parseGambitMutantsLog,
   resolveMutationForgeTestScope,
+  resolveMutationTimeout,
   summarizeMutationResults,
   type MutationCandidate,
   type MutationResult,
@@ -469,9 +470,35 @@ describe("Feature coverage — mutation testing", () => {
       buildForgeMutationTestArgs({
         verbosity: 3,
         extraArgs: ["--match-path", "test/alf/**", "--isolate"],
+        failFast: true,
       }),
-      ["test", "--json", "-vvv", "--match-path", "test/alf/**", "--isolate"],
+      ["test", "--json", "-vvv", "--fail-fast", "--match-path", "test/alf/**", "--isolate"],
     );
+    assert.deepEqual(
+      buildForgeMutationTestArgs({
+        verbosity: 2,
+        extraArgs: [],
+        failFast: false,
+      }),
+      ["test", "--json", "-vv"],
+    );
+  });
+
+  it("adapts mutation timeouts to the measured baseline duration", () => {
+    assert.deepEqual(
+      resolveMutationTimeout({
+        configuredTimeoutMs: 120_000,
+        baselineDurationMs: 10_000,
+      }),
+      { timeoutMs: 120_000 },
+    );
+
+    const adjusted = resolveMutationTimeout({
+      configuredTimeoutMs: 120_000,
+      baselineDurationMs: 60_000,
+    });
+    assert.equal(adjusted.timeoutMs, 210_000);
+    assert.match(adjusted.note ?? "", /baseline duration 60000ms/);
   });
 
   it("auto-scopes current-file mutation runs only when the target is a test file", () => {

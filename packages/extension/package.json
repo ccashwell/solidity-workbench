@@ -216,7 +216,12 @@
           "type": "number",
           "default": 120000,
           "minimum": 1000,
-          "description": "Per-mutant forge test timeout in milliseconds."
+          "description": "Minimum per-mutant forge test timeout in milliseconds. Mutation runs may raise this automatically based on the measured baseline test duration."
+        },
+        "solidity-workbench.mutation.failFast": {
+          "type": "boolean",
+          "default": true,
+          "description": "Pass --fail-fast to per-mutant forge test runs so killed mutants stop at the first failing test."
         },
         "solidity-workbench.mutation.forgeTestArgs": {
           "type": "array",

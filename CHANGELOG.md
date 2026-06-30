@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failures and include the failing test or Forge error summary.
 - Built-in mutation candidate generation no longer treats Solidity mapping
   arrows (`=>`) as relational `>` operators.
+- Mutation testing now adapts the effective per-mutant timeout from the
+  measured baseline test duration and uses `forge test --fail-fast` for mutant
+  runs by default.
 
 ## [0.8.11] - 2026-06-30
 
