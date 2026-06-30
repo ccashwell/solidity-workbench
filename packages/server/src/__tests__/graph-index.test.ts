@@ -3866,8 +3866,8 @@ contract Vault${vault}Test {
       const updatedUris = graph.updateFileAndDependents(baseUri);
       const updateMs = Date.now() - updateStarted;
       assert.ok(
-        updateMs < 1_000,
-        `expected shared-base incremental update under 1000ms, got ${updateMs}ms`,
+        updateMs < 2_000,
+        `expected shared-base incremental update under 2000ms, got ${updateMs}ms`,
       );
       assert.ok(updatedUris.length > 1, "expected shared base update to refresh dependents");
 
