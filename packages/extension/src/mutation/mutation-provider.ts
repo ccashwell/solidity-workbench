@@ -9,6 +9,7 @@ import { findForgeRoot, forgeVerbosityFlag } from "@solidity-workbench/common";
 const execFileAsync = promisify(execFile);
 
 export type MutationStatus = "killed" | "survived" | "timeout" | "error";
+export type MutationEngine = "builtin" | "gambit";
 
 export interface MutationCandidate {
   id: string;
@@ -22,6 +23,9 @@ export interface MutationCandidate {
   contractName?: string;
   functionName?: string;
   lineText: string;
+  engine?: MutationEngine;
+  mutantDir?: string;
+  cleanupRoot?: string;
 }
 
 export interface MutationResult {
@@ -131,13 +135,35 @@ export class MutationProvider {
     const timeoutMs = clampPositiveInt(config.get<number>("mutation.timeoutMs"), 120_000);
     const includeTests = config.get<boolean>("mutation.includeTests") ?? false;
     const forgePath = config.get<string>("foundryPath") || "forge";
+    const gambitPath = config.get<string>("mutation.gambitPath") || "gambit";
+    const solcPath = config.get<string>("mutation.solcPath") || "";
+    const engine = mutationEngine(config.get<string>("mutation.engine"));
     const verbosity = config.get<number>("test.verbosity") ?? 2;
-    const candidates = await collectMutationCandidates({
-      forgeRoot,
-      targetFile: options.targetFile?.fsPath,
-      includeTests,
-      maxMutants,
-    });
+    const baseline = await runBaselineTests({ forgeRoot, forgePath, timeoutMs, verbosity });
+    if (baseline) {
+      this.outputChannel.clear();
+      this.outputChannel.show(true);
+      this.outputChannel.appendLine(baseline);
+      vscode.window.showErrorMessage(baseline);
+      return;
+    }
+    const candidates =
+      engine === "gambit"
+        ? await collectGambitMutationCandidates({
+            forgeRoot,
+            targetFile: options.targetFile?.fsPath,
+            includeTests,
+            maxMutants,
+            gambitPath,
+            solcPath,
+            outputChannel: this.outputChannel,
+          })
+        : await collectMutationCandidates({
+            forgeRoot,
+            targetFile: options.targetFile?.fsPath,
+            includeTests,
+            maxMutants,
+          });
 
     if (candidates.length === 0) {
       vscode.window.showInformationMessage("No mutation candidates found for the selected scope.");
@@ -146,6 +172,7 @@ export class MutationProvider {
 
     this.outputChannel.clear();
     this.outputChannel.show(true);
+    this.outputChannel.appendLine(`Engine: ${engine}`);
     this.outputChannel.appendLine(`Generated ${candidates.length} mutation candidates.`);
 
     await vscode.window.withProgress(
@@ -156,22 +183,26 @@ export class MutationProvider {
       },
       async (progress, token) => {
         const results: MutationResult[] = [];
-        for (let i = 0; i < candidates.length; i++) {
-          if (token.isCancellationRequested) break;
-          const candidate = candidates[i];
-          progress.report({
-            increment: 100 / candidates.length,
-            message: `${i + 1}/${candidates.length}: ${candidate.relativePath}:${candidate.range.start.line + 1}`,
-          });
-          const result = await runCandidate({
-            candidate,
-            forgeRoot,
-            forgePath,
-            timeoutMs,
-            verbosity,
-          });
-          results.push(result);
-          this.outputChannel.appendLine(formatResultLine(result));
+        try {
+          for (let i = 0; i < candidates.length; i++) {
+            if (token.isCancellationRequested) break;
+            const candidate = candidates[i];
+            progress.report({
+              increment: 100 / candidates.length,
+              message: `${i + 1}/${candidates.length}: ${candidate.relativePath}:${candidate.range.start.line + 1}`,
+            });
+            const result = await runCandidate({
+              candidate,
+              forgeRoot,
+              forgePath,
+              timeoutMs,
+              verbosity,
+            });
+            results.push(result);
+            this.outputChannel.appendLine(formatResultLine(result));
+          }
+        } finally {
+          await cleanupMutationCandidates(candidates);
         }
 
         const scopeLabel = options.targetFile
@@ -255,6 +286,241 @@ export async function collectMutationCandidates(options: {
   return candidates.slice(0, options.maxMutants);
 }
 
+export async function collectGambitMutationCandidates(options: {
+  forgeRoot: string;
+  targetFile?: string;
+  includeTests: boolean;
+  maxMutants: number;
+  gambitPath: string;
+  solcPath?: string;
+  outputChannel?: vscode.OutputChannel;
+}): Promise<MutationCandidate[]> {
+  const sourceRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), "solidity-workbench-gambit-src-"),
+  );
+  const outRoot = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), "solidity-workbench-gambit-out-"),
+  );
+  try {
+    await copyForgeProject(options.forgeRoot, sourceRoot);
+    const files = options.targetFile
+      ? [options.targetFile]
+      : await findSolidityFiles(options.forgeRoot, options.includeTests);
+    const candidates: MutationCandidate[] = [];
+    for (const filePath of files) {
+      if (candidates.length >= options.maxMutants) break;
+      const relativePath = path.relative(options.forgeRoot, filePath);
+      if (!options.includeTests && isTestPath(relativePath)) continue;
+      const outdir = path.join(outRoot, sanitizePathSegment(relativePath));
+      const remaining = options.maxMutants - candidates.length;
+      const args = buildGambitMutateArgs({
+        relativePath,
+        outdir,
+        numMutants: remaining,
+        solcPath: options.solcPath,
+      });
+      options.outputChannel?.appendLine(`$ ${options.gambitPath} ${args.join(" ")}`);
+      await execFileAsync(options.gambitPath, args, {
+        cwd: sourceRoot,
+        maxBuffer: 50 * 1024 * 1024,
+        timeout: 300_000,
+      });
+      const logPath = path.join(outdir, "mutants.log");
+      let parsed: GambitMutantRecord[] = [];
+      try {
+        parsed = parseGambitMutantsLog(await fs.promises.readFile(logPath, "utf-8"));
+      } catch {
+        parsed = await fallbackGambitRecords(outdir, relativePath);
+      }
+      candidates.push(
+        ...parsed.slice(0, remaining).map((record) =>
+          gambitRecordToCandidate({
+            record,
+            forgeRoot: options.forgeRoot,
+            outdir,
+            cleanupRoot: outRoot,
+            relativePath,
+          }),
+        ),
+      );
+    }
+    if (candidates.length === 0) {
+      await fs.promises.rm(outRoot, { recursive: true, force: true });
+    }
+    return candidates.slice(0, options.maxMutants);
+  } catch (err: unknown) {
+    await fs.promises.rm(outRoot, { recursive: true, force: true });
+    const message = err instanceof Error ? err.message : String(err);
+    vscode.window.showErrorMessage(`Gambit mutation generation failed: ${message}`);
+    return [];
+  } finally {
+    await fs.promises.rm(sourceRoot, { recursive: true, force: true });
+    // Mutant directories are consumed later by `runCandidate`, so `outRoot`
+    // is attached to each candidate and cleaned after the run completes.
+  }
+}
+
+export interface GambitMutantRecord {
+  id: string;
+  file: string;
+  line?: number;
+  column?: number;
+  original?: string;
+  replacement?: string;
+  operator?: string;
+  description?: string;
+}
+
+export function buildGambitMutateArgs(options: {
+  relativePath: string;
+  outdir: string;
+  numMutants: number;
+  solcPath?: string;
+}): string[] {
+  const args = [
+    "mutate",
+    "--filename",
+    options.relativePath,
+    "--sourceroot",
+    ".",
+    "--outdir",
+    options.outdir,
+    "--num_mutants",
+    String(options.numMutants),
+  ];
+  if (options.solcPath) {
+    args.push("--solc", options.solcPath);
+  }
+  return args;
+}
+
+export function parseGambitMutantsLog(text: string): GambitMutantRecord[] {
+  const records: GambitMutantRecord[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const jsonRecord = parseGambitJsonLine(trimmed);
+    if (jsonRecord) {
+      records.push(jsonRecord);
+      continue;
+    }
+    const textRecord = parseGambitTextLine(trimmed);
+    if (textRecord) records.push(textRecord);
+  }
+  return records;
+}
+
+function parseGambitJsonLine(line: string): GambitMutantRecord | null {
+  if (!line.startsWith("{")) return null;
+  try {
+    const record = JSON.parse(line) as Record<string, unknown>;
+    const id = stringField(record, ["id", "mutant_id", "mutant"]);
+    const file = stringField(record, ["file", "filename", "path", "source_file"]);
+    if (!id || !file) return null;
+    return {
+      id,
+      file,
+      line: numberField(record, ["line", "line_no", "start_line"]),
+      column: numberField(record, ["column", "col", "start_column"]),
+      original: stringField(record, ["original", "from", "old"]),
+      replacement: stringField(record, ["replacement", "to", "new"]),
+      operator: stringField(record, ["operator", "mutation", "mutator"]),
+      description: stringField(record, ["description", "message", "summary"]),
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseGambitTextLine(line: string): GambitMutantRecord | null {
+  const idMatch = line.match(/(?:^|\b)(?:mutant\s*)?(\d+)(?::|\s)/i);
+  const fileMatch = line.match(/([A-Za-z0-9_./@+-]+\.sol)(?::(\d+))?(?::(\d+))?/);
+  if (!idMatch || !fileMatch) return null;
+  const arrowMatch = line.match(/`?([^`\s]+)`?\s*(?:=>|->|to)\s*`?([^`\s]+)`?/i);
+  return {
+    id: idMatch[1],
+    file: fileMatch[1],
+    line: fileMatch[2] ? Number(fileMatch[2]) : undefined,
+    column: fileMatch[3] ? Number(fileMatch[3]) : undefined,
+    original: arrowMatch?.[1],
+    replacement: arrowMatch?.[2],
+    description: line,
+  };
+}
+
+function gambitRecordToCandidate(options: {
+  record: GambitMutantRecord;
+  forgeRoot: string;
+  outdir: string;
+  cleanupRoot: string;
+  relativePath: string;
+}): MutationCandidate {
+  const relativePath = normalizeRelativePath(options.record.file || options.relativePath);
+  const line = Math.max(0, (options.record.line ?? 1) - 1);
+  const column = Math.max(0, (options.record.column ?? 1) - 1);
+  const mutantDir = path.join(options.outdir, "mutants", options.record.id);
+  return {
+    id: `gambit:${options.record.id}`,
+    uri: vscode.Uri.file(path.join(options.forgeRoot, relativePath)).toString(),
+    filePath: path.join(options.forgeRoot, relativePath),
+    relativePath,
+    range: new vscode.Range(
+      line,
+      column,
+      line,
+      column + Math.max(1, options.record.original?.length ?? 1),
+    ),
+    operator: options.record.operator ?? "gambit",
+    original: options.record.original ?? "original",
+    replacement: options.record.replacement ?? "mutated",
+    lineText: options.record.description ?? `Gambit mutant ${options.record.id}`,
+    engine: "gambit",
+    mutantDir,
+    cleanupRoot: options.cleanupRoot,
+  };
+}
+
+async function fallbackGambitRecords(
+  outdir: string,
+  relativePath: string,
+): Promise<GambitMutantRecord[]> {
+  const mutantsDir = path.join(outdir, "mutants");
+  const entries = await fs.promises.readdir(mutantsDir, { withFileTypes: true });
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => ({
+      id: entry.name,
+      file: relativePath,
+      description: `Gambit mutant ${entry.name}`,
+    }));
+}
+
+function normalizeRelativePath(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\.\//, "");
+}
+
+function sanitizePathSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 120);
+}
+
+function stringField(record: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.length > 0) return value;
+    if (typeof value === "number") return String(value);
+  }
+  return undefined;
+}
+
+function numberField(record: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  }
+  return undefined;
+}
+
 export function buildMutationCandidates(
   text: string,
   options: { uri: string; filePath: string; relativePath: string; maxMutants?: number },
@@ -264,10 +530,13 @@ export function buildMutationCandidates(
   const candidates: MutationCandidate[] = [];
   let contractName: string | undefined;
   let functionName: string | undefined;
+  let inBlockComment = false;
 
   for (let lineNo = 0; lineNo < lines.length && candidates.length < maxMutants; lineNo++) {
     const line = lines[lineNo];
-    const code = stripLineComment(line);
+    const stripped = stripCommentsFromLine(line, inBlockComment);
+    inBlockComment = stripped.inBlockComment;
+    const code = stripped.code;
     const contractMatch = code.match(
       /\b(?:abstract\s+)?(?:contract|library|interface)\s+([A-Za-z_]\w*)/,
     );
@@ -404,10 +673,18 @@ async function runCandidate(options: {
   const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "solidity-workbench-mutant-"));
   try {
     await copyForgeProject(options.forgeRoot, tempRoot);
-    const relativePath = path.relative(options.forgeRoot, options.candidate.filePath);
-    const tempFile = path.join(tempRoot, relativePath);
-    const originalText = await fs.promises.readFile(tempFile, "utf-8");
-    await fs.promises.writeFile(tempFile, applyMutation(originalText, options.candidate), "utf-8");
+    if (options.candidate.engine === "gambit" && options.candidate.mutantDir) {
+      await copyMutantOverlay(options.candidate.mutantDir, tempRoot);
+    } else {
+      const relativePath = path.relative(options.forgeRoot, options.candidate.filePath);
+      const tempFile = path.join(tempRoot, relativePath);
+      const originalText = await fs.promises.readFile(tempFile, "utf-8");
+      await fs.promises.writeFile(
+        tempFile,
+        applyMutation(originalText, options.candidate),
+        "utf-8",
+      );
+    }
     const args = ["test", "--json"];
     const verbosityFlag = forgeVerbosityFlag(options.verbosity);
     if (verbosityFlag) args.push(verbosityFlag);
@@ -416,6 +693,15 @@ async function runCandidate(options: {
       maxBuffer: 50 * 1024 * 1024,
       timeout: options.timeoutMs,
     });
+    if (hasForgeTestFailures(result.stdout)) {
+      return {
+        candidate: options.candidate,
+        status: "killed",
+        durationMs: Date.now() - started,
+        stdout: result.stdout,
+        stderr: result.stderr,
+      };
+    }
     return {
       candidate: options.candidate,
       status: "survived",
@@ -446,16 +732,79 @@ async function runCandidate(options: {
   }
 }
 
+async function runBaselineTests(options: {
+  forgeRoot: string;
+  forgePath: string;
+  timeoutMs: number;
+  verbosity: number;
+}): Promise<string | null> {
+  const args = ["test", "--json"];
+  const verbosityFlag = forgeVerbosityFlag(options.verbosity);
+  if (verbosityFlag) args.push(verbosityFlag);
+  try {
+    const result = await execFileAsync(options.forgePath, args, {
+      cwd: options.forgeRoot,
+      maxBuffer: 50 * 1024 * 1024,
+      timeout: options.timeoutMs,
+    });
+    return hasForgeTestFailures(result.stdout)
+      ? "Baseline forge test run has failing tests; mutation testing aborted."
+      : null;
+  } catch (err: unknown) {
+    const e = err as { stdout?: string; stderr?: string; message?: string; killed?: boolean };
+    if (e.killed === true) {
+      return "Baseline forge test run timed out; mutation testing aborted.";
+    }
+    if (hasForgeTestFailures(e.stdout)) {
+      return "Baseline forge test run has failing tests; mutation testing aborted.";
+    }
+    return `Baseline forge test run failed before mutation testing: ${e.stderr?.trim() || e.message || String(err)}`;
+  }
+}
+
 function mutationFailureStatus(err: {
   stdout?: string;
   stderr?: string;
   message?: string;
 }): MutationStatus {
   const output = `${err.stdout ?? ""}\n${err.stderr ?? ""}\n${err.message ?? ""}`;
-  if (/Failing tests|Encountered \d+ failing test|FAIL|Suite result: FAILED/i.test(output)) {
+  if (
+    hasForgeTestFailures(err.stdout) ||
+    /Failing tests|Encountered \d+ failing test|Suite result: FAILED/i.test(output)
+  ) {
     return "killed";
   }
   return "error";
+}
+
+export function hasForgeTestFailures(stdout: string | undefined): boolean {
+  if (!stdout?.trim()) return false;
+  try {
+    const parsed = JSON.parse(stdout.trim()) as unknown;
+    return forgeJsonHasFailure(parsed);
+  } catch {
+    return /"status"\s*:\s*"Failure"/.test(stdout) || /Suite result: FAILED/i.test(stdout);
+  }
+}
+
+function forgeJsonHasFailure(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(forgeJsonHasFailure);
+  const object = value as Record<string, unknown>;
+  if (object.status === "Failure") return true;
+  return Object.values(object).some(forgeJsonHasFailure);
+}
+
+async function copyMutantOverlay(from: string, to: string): Promise<void> {
+  await fs.promises.cp(from, to, {
+    recursive: true,
+    dereference: false,
+    force: true,
+    filter: (source) => {
+      const name = path.basename(source);
+      return !EXCLUDED_COPY_ENTRIES.has(name) && name !== "README.md";
+    },
+  });
 }
 
 async function copyForgeProject(from: string, to: string): Promise<void> {
@@ -486,6 +835,13 @@ async function findSolidityFiles(root: string, includeTests: boolean): Promise<s
   }
   await walk(root);
   return found.sort();
+}
+
+async function cleanupMutationCandidates(candidates: MutationCandidate[]): Promise<void> {
+  const roots = new Set(candidates.map((c) => c.cleanupRoot).filter((v): v is string => !!v));
+  await Promise.all(
+    Array.from(roots).map((root) => fs.promises.rm(root, { recursive: true, force: true })),
+  );
 }
 
 function findMutationForgeRoot(
@@ -526,6 +882,10 @@ function findNestedFoundryRoot(workspaceRoot: string): string | null {
   return null;
 }
 
+function mutationEngine(value: string | undefined): MutationEngine {
+  return value === "gambit" ? "gambit" : "builtin";
+}
+
 function tokenColumns(line: string, token: string): number[] {
   const columns: number[] = [];
   let cursor = 0;
@@ -543,6 +903,12 @@ function tokenColumns(line: string, token: string): number[] {
 function isPartOfLongerOperator(line: string, idx: number, token: string): boolean {
   const before = line[idx - 1] ?? "";
   const after = line[idx + token.length] ?? "";
+  if (["+", "-", ">", "<"].includes(token) && (before === token || after === token)) {
+    return true;
+  }
+  if ((token === ">" || token === "<") && before === ".") {
+    return true;
+  }
   if ((token === ">" || token === "<" || token === "+" || token === "-") && after === token) {
     return true;
   }
@@ -550,6 +916,9 @@ function isPartOfLongerOperator(line: string, idx: number, token: string): boole
     return true;
   }
   if ((token === "+" || token === "-") && after === "=") {
+    return true;
+  }
+  if ((token === "+" || token === "-") && before === "=") {
     return true;
   }
   if ((token === "==" || token === "!=" || token === ">=" || token === "<=") && before === "=") {
@@ -567,16 +936,42 @@ function shouldSkipMutationLine(line: string): boolean {
   );
 }
 
-function stripLineComment(line: string): string {
+function stripCommentsFromLine(
+  line: string,
+  startsInBlockComment: boolean,
+): { code: string; inBlockComment: boolean } {
+  let inBlockComment = startsInBlockComment;
   let inSingle = false;
   let inDouble = false;
-  for (let i = 0; i < line.length - 1; i++) {
+  let code = "";
+  for (let i = 0; i < line.length; i++) {
     const ch = line[i];
-    if (ch === "'" && !inDouble && line[i - 1] !== "\\") inSingle = !inSingle;
-    if (ch === '"' && !inSingle && line[i - 1] !== "\\") inDouble = !inDouble;
-    if (!inSingle && !inDouble && ch === "/" && line[i + 1] === "/") return line.slice(0, i);
+    const next = line[i + 1] ?? "";
+    if (inBlockComment) {
+      if (ch === "*" && next === "/") {
+        inBlockComment = false;
+        i += 1;
+      }
+      code += " ";
+      continue;
+    }
+    if (ch === "'" && !inDouble && line[i - 1] !== "\\") {
+      inSingle = !inSingle;
+    } else if (ch === '"' && !inSingle && line[i - 1] !== "\\") {
+      inDouble = !inDouble;
+    }
+    if (!inSingle && !inDouble && ch === "/" && next === "/") {
+      break;
+    }
+    if (!inSingle && !inDouble && ch === "/" && next === "*") {
+      inBlockComment = true;
+      code += " ";
+      i += 1;
+      continue;
+    }
+    code += ch;
   }
-  return line;
+  return { code, inBlockComment };
 }
 
 function isInsideQuotedString(line: string, idx: number): boolean {

@@ -13,6 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run each mutant through Foundry in an isolated temporary workspace, report
   killed/survived/timeout/error outcomes, and generate Foundry test skeletons
   for surviving mutants.
+- Mutation testing can now optionally use Gambit for mutant generation while
+  keeping Foundry execution/reporting in Solidity Workbench.
+
+### Fixed
+
+- Mutation testing now aborts when the baseline Foundry test run fails, parses
+  Forge JSON failures when classifying killed mutants, and avoids generating
+  built-in mutants from block comments, strings, and increment/decrement
+  operators.
 
 ## [0.8.9] - 2026-06-29
 

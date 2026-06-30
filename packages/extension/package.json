@@ -189,6 +189,29 @@
           "maximum": 500,
           "description": "Maximum number of generated source mutants to test in one run."
         },
+        "solidity-workbench.mutation.engine": {
+          "type": "string",
+          "default": "builtin",
+          "enum": [
+            "builtin",
+            "gambit"
+          ],
+          "enumDescriptions": [
+            "Use Solidity Workbench's built-in source-level mutation engine.",
+            "Use Gambit to generate mutants, then run them through Foundry."
+          ],
+          "description": "Mutation generation engine."
+        },
+        "solidity-workbench.mutation.gambitPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the gambit binary. Leave empty to use PATH."
+        },
+        "solidity-workbench.mutation.solcPath": {
+          "type": "string",
+          "default": "",
+          "description": "Optional solc binary path passed to Gambit."
+        },
         "solidity-workbench.mutation.timeoutMs": {
           "type": "number",
           "default": 120000,

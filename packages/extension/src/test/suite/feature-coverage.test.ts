@@ -60,8 +60,11 @@ import { shellArg, shellCommand } from "../../shell";
 import {
   applyMutation,
   buildMutationCandidates,
+  buildGambitMutateArgs,
   formatMutationReport,
   generateFoundryTestSkeleton,
+  hasForgeTestFailures,
+  parseGambitMutantsLog,
   summarizeMutationResults,
   type MutationResult,
 } from "../../mutation/mutation-provider";
@@ -340,10 +343,14 @@ describe("Feature coverage — mutation testing", () => {
   it("builds bounded mutation candidates without mutating comments or strings", () => {
     const source = [
       "contract Vault {",
+      "    /* require(amount == balance);",
+      "       if (amount >= balance) revert(); */",
       "    function withdraw(uint256 amount) external {",
       "        require(amount <= balance);",
       '        string memory ignored = "a <= b"; // amount == balance',
       "        if (amount == 0 || amount > balance) revert();",
+      "        uint256 sum = amount + balance;",
+      "        unchecked { ++sum; --sum; }",
       "    }",
       "}",
     ].join("\n");
@@ -358,7 +365,10 @@ describe("Feature coverage — mutation testing", () => {
     assert.ok(candidates.some((c) => c.original === "<=" && c.replacement === "<"));
     assert.ok(candidates.some((c) => c.original === "==" && c.replacement === "!="));
     assert.ok(candidates.some((c) => c.original === "||" && c.replacement === "&&"));
-    assert.ok(candidates.every((c) => c.range.start.line !== 3));
+    assert.ok(candidates.some((c) => c.original === "+" && c.replacement === "-"));
+    assert.ok(candidates.every((c) => c.range.start.line !== 1 && c.range.start.line !== 2));
+    assert.ok(candidates.every((c) => c.range.start.line !== 5));
+    assert.ok(candidates.every((c) => c.lineText !== "unchecked { ++sum; --sum; }"));
     assert.ok(candidates.every((c) => c.contractName === "Vault"));
     assert.ok(candidates.every((c) => c.functionName === "withdraw"));
   });
@@ -410,6 +420,69 @@ describe("Feature coverage — mutation testing", () => {
     const skeleton = generateFoundryTestSkeleton(candidate);
     assert.match(skeleton, /function test_mutation_C_f_equality_1\(\) public/);
     assert.match(skeleton, /Original line:/);
+  });
+
+  it("detects failing forge JSON output for killed mutant classification", () => {
+    assert.equal(
+      hasForgeTestFailures(
+        JSON.stringify({
+          "test/C.t.sol:CTest": {
+            test_results: {
+              "test_f()": { status: "Failure", reason: "assertion failed" },
+            },
+          },
+        }),
+      ),
+      true,
+    );
+    assert.equal(
+      hasForgeTestFailures(
+        JSON.stringify({
+          "test/C.t.sol:CTest": {
+            test_results: {
+              "test_f()": { status: "Success" },
+            },
+          },
+        }),
+      ),
+      false,
+    );
+  });
+
+  it("builds Gambit mutate args and parses common mutants.log formats", () => {
+    assert.deepEqual(
+      buildGambitMutateArgs({
+        relativePath: "src/C.sol",
+        outdir: "/tmp/gambit",
+        numMutants: 7,
+        solcPath: "/usr/local/bin/solc",
+      }),
+      [
+        "mutate",
+        "--filename",
+        "src/C.sol",
+        "--sourceroot",
+        ".",
+        "--outdir",
+        "/tmp/gambit",
+        "--num_mutants",
+        "7",
+        "--solc",
+        "/usr/local/bin/solc",
+      ],
+    );
+
+    const jsonRecords = parseGambitMutantsLog(
+      '{"id":1,"file":"src/C.sol","line":10,"column":5,"operator":"BOR","original":"<=","replacement":"<"}\n',
+    );
+    assert.equal(jsonRecords[0].id, "1");
+    assert.equal(jsonRecords[0].file, "src/C.sol");
+    assert.equal(jsonRecords[0].original, "<=");
+
+    const textRecords = parseGambitMutantsLog("2: src/C.sol:12:8 `==` -> `!=`");
+    assert.equal(textRecords[0].id, "2");
+    assert.equal(textRecords[0].file, "src/C.sol");
+    assert.equal(textRecords[0].line, 12);
   });
 });
 

@@ -29,9 +29,12 @@ export interface WorkbenchConfig {
     verbosity: number;
   };
   mutation: {
+    engine: "builtin" | "gambit";
     maxMutants: number;
     timeoutMs: number;
     includeTests: boolean;
+    gambitPath: string;
+    solcPath: string;
   };
 }
 
@@ -67,9 +70,12 @@ export function getConfig(): WorkbenchConfig {
       verbosity: config.get<number>("test.verbosity") ?? 2,
     },
     mutation: {
+      engine: mutationEngine(config.get<string>("mutation.engine")),
       maxMutants: config.get<number>("mutation.maxMutants") ?? 25,
       timeoutMs: config.get<number>("mutation.timeoutMs") ?? 120_000,
       includeTests: config.get<boolean>("mutation.includeTests") ?? false,
+      gambitPath: config.get<string>("mutation.gambitPath") || "gambit",
+      solcPath: config.get<string>("mutation.solcPath") || "",
     },
   };
 }
@@ -82,6 +88,10 @@ function graphDependencyIndexingMode(
   value: string | undefined,
 ): "disabled" | "declarations" | "relationships" {
   return value === "declarations" || value === "relationships" ? value : "disabled";
+}
+
+function mutationEngine(value: string | undefined): "builtin" | "gambit" {
+  return value === "gambit" ? "gambit" : "builtin";
 }
 
 // Forge CLI helpers live in `@solidity-workbench/common/foundry-cli`
