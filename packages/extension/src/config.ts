@@ -28,6 +28,11 @@ export interface WorkbenchConfig {
   test: {
     verbosity: number;
   };
+  mutation: {
+    maxMutants: number;
+    timeoutMs: number;
+    includeTests: boolean;
+  };
 }
 
 export function getConfig(): WorkbenchConfig {
@@ -60,6 +65,11 @@ export function getConfig(): WorkbenchConfig {
     },
     test: {
       verbosity: config.get<number>("test.verbosity") ?? 2,
+    },
+    mutation: {
+      maxMutants: config.get<number>("mutation.maxMutants") ?? 25,
+      timeoutMs: config.get<number>("mutation.timeoutMs") ?? 120_000,
+      includeTests: config.get<boolean>("mutation.includeTests") ?? false,
     },
   };
 }

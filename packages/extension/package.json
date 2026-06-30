@@ -181,6 +181,24 @@
           "minimum": 0,
           "maximum": 5,
           "description": "Verbosity level for forge test output (0-5)."
+        },
+        "solidity-workbench.mutation.maxMutants": {
+          "type": "number",
+          "default": 25,
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum number of generated source mutants to test in one run."
+        },
+        "solidity-workbench.mutation.timeoutMs": {
+          "type": "number",
+          "default": 120000,
+          "minimum": 1000,
+          "description": "Per-mutant forge test timeout in milliseconds."
+        },
+        "solidity-workbench.mutation.includeTests": {
+          "type": "boolean",
+          "default": false,
+          "description": "Include test files when generating mutation candidates. Source files are mutated by default."
         }
       }
     },
@@ -276,6 +294,22 @@
       {
         "command": "solidity-workbench.coverageClear",
         "title": "Solidity Workbench: Clear Coverage Highlights"
+      },
+      {
+        "command": "solidity-workbench.mutation.run",
+        "title": "Solidity Workbench: Run Mutation Tests"
+      },
+      {
+        "command": "solidity-workbench.mutation.runFile",
+        "title": "Solidity Workbench: Run Mutation Tests for Current File"
+      },
+      {
+        "command": "solidity-workbench.mutation.openReport",
+        "title": "Solidity Workbench: Open Mutation Report"
+      },
+      {
+        "command": "solidity-workbench.mutation.generateTests",
+        "title": "Solidity Workbench: Generate Tests for Surviving Mutants"
       },
       {
         "command": "solidity-workbench.slither",

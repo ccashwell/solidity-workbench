@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Mutation testing commands can now generate source-level Solidity mutants,
+  run each mutant through Foundry in an isolated temporary workspace, report
+  killed/survived/timeout/error outcomes, and generate Foundry test skeletons
+  for surviving mutants.
+
 ## [0.8.9] - 2026-06-29
 
 ### Added

@@ -32,6 +32,7 @@ import { RemoteChainPanel } from "./views/remote-chain.js";
 import { IrViewerPanel } from "./views/ir-viewer.js";
 import { ProjectGraphExporter } from "./views/project-graph.js";
 import { registerFormatOnSave } from "./format-on-save.js";
+import { MutationProvider } from "./mutation/mutation-provider.js";
 
 let client: LanguageClient;
 
@@ -145,6 +146,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const coverage = new CoverageProvider();
   coverage.onCoverageChange((pct) => statusBar.setCoverage(pct));
   coverage.activate(context);
+
+  // ── Mutation Testing ──────────────────────────────────────────────
+
+  const mutation = new MutationProvider();
+  mutation.activate(context);
 
   // ── Storage Layout ────────────────────────────────────────────────
 

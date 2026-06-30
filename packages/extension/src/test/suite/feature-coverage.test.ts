@@ -57,6 +57,14 @@ import { buildWakeDiagnostics } from "../../analysis/wake";
 import { buildMythrilDiagnostics } from "../../analysis/mythril";
 import { shouldFormatSolidityOnSave } from "../../format-on-save";
 import { shellArg, shellCommand } from "../../shell";
+import {
+  applyMutation,
+  buildMutationCandidates,
+  formatMutationReport,
+  generateFoundryTestSkeleton,
+  summarizeMutationResults,
+  type MutationResult,
+} from "../../mutation/mutation-provider";
 
 /**
  * End-to-end coverage of the feature surface that landed across the
@@ -257,6 +265,18 @@ describe("Feature coverage — webview commands", () => {
     }
   });
 
+  it("registers each mutation testing command", async () => {
+    const all = await vscode.commands.getCommands(true);
+    for (const cmd of [
+      "solidity-workbench.mutation.run",
+      "solidity-workbench.mutation.runFile",
+      "solidity-workbench.mutation.openReport",
+      "solidity-workbench.mutation.generateTests",
+    ]) {
+      assert.ok(all.includes(cmd), `expected '${cmd}' to be registered`);
+    }
+  });
+
   it("renders inheritance graph scope controls as explicit reload requests", () => {
     type InheritanceGraphPanelInternals = {
       includeTests: boolean;
@@ -313,6 +333,83 @@ describe("Feature coverage — webview commands", () => {
       includeDependencies: false,
     });
     assert.match(runtime.element("canvas").innerHTML, /Loading graph/);
+  });
+});
+
+describe("Feature coverage — mutation testing", () => {
+  it("builds bounded mutation candidates without mutating comments or strings", () => {
+    const source = [
+      "contract Vault {",
+      "    function withdraw(uint256 amount) external {",
+      "        require(amount <= balance);",
+      '        string memory ignored = "a <= b"; // amount == balance',
+      "        if (amount == 0 || amount > balance) revert();",
+      "    }",
+      "}",
+    ].join("\n");
+
+    const candidates = buildMutationCandidates(source, {
+      uri: "file:///tmp/Vault.sol",
+      filePath: "/tmp/Vault.sol",
+      relativePath: "src/Vault.sol",
+      maxMutants: 10,
+    });
+
+    assert.ok(candidates.some((c) => c.original === "<=" && c.replacement === "<"));
+    assert.ok(candidates.some((c) => c.original === "==" && c.replacement === "!="));
+    assert.ok(candidates.some((c) => c.original === "||" && c.replacement === "&&"));
+    assert.ok(candidates.every((c) => c.range.start.line !== 3));
+    assert.ok(candidates.every((c) => c.contractName === "Vault"));
+    assert.ok(candidates.every((c) => c.functionName === "withdraw"));
+  });
+
+  it("applies a mutation at the exact source range", () => {
+    const source = "contract C {\n    function f() external { require(x <= y); }\n}";
+    const [candidate] = buildMutationCandidates(source, {
+      uri: "file:///tmp/C.sol",
+      filePath: "/tmp/C.sol",
+      relativePath: "src/C.sol",
+      maxMutants: 1,
+    });
+
+    const mutated = applyMutation(source, candidate);
+    assert.match(mutated, /require\(x < y\)/);
+  });
+
+  it("summarizes mutation results and emits Foundry test skeletons for survivors", () => {
+    const source = "contract C {\n    function f() external { require(x == y); }\n}";
+    const [candidate] = buildMutationCandidates(source, {
+      uri: "file:///tmp/C.sol",
+      filePath: "/tmp/C.sol",
+      relativePath: "src/C.sol",
+      maxMutants: 1,
+    });
+    const results: MutationResult[] = [
+      { candidate, status: "killed", durationMs: 10 },
+      { candidate, status: "survived", durationMs: 12 },
+      { candidate, status: "timeout", durationMs: 120_000 },
+      { candidate, status: "error", durationMs: 5 },
+    ];
+
+    assert.deepEqual(summarizeMutationResults(results), {
+      killed: 1,
+      survived: 1,
+      timeout: 1,
+      error: 1,
+    });
+
+    const report = formatMutationReport({
+      forgeRoot: "/tmp/project",
+      scopeLabel: "src/C.sol",
+      generatedAt: "2026-06-29T00:00:00.000Z",
+      results,
+    });
+    assert.match(report, /Score: 50\.0%/);
+    assert.match(report, /Generated Test Starting Points/);
+
+    const skeleton = generateFoundryTestSkeleton(candidate);
+    assert.match(skeleton, /function test_mutation_C_f_equality_1\(\) public/);
+    assert.match(skeleton, /Original line:/);
   });
 });
 
