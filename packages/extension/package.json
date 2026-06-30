@@ -218,6 +218,14 @@
           "minimum": 1000,
           "description": "Per-mutant forge test timeout in milliseconds."
         },
+        "solidity-workbench.mutation.forgeTestArgs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Extra arguments appended to each baseline and mutant `forge test --json` command, for example [\"--match-path\", \"test/alf/**\", \"--isolate\"]."
+        },
         "solidity-workbench.mutation.includeTests": {
           "type": "boolean",
           "default": false,

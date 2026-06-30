@@ -61,6 +61,7 @@ import { shellArg, shellCommand } from "../../shell";
 import {
   applyMutation,
   buildMutationCandidates,
+  buildForgeMutationTestArgs,
   buildGambitMutateArgs,
   formatMutationReport,
   generateFoundryTestSkeleton,
@@ -447,6 +448,16 @@ describe("Feature coverage — mutation testing", () => {
         }),
       ),
       false,
+    );
+  });
+
+  it("builds scoped forge test args for mutation runs", () => {
+    assert.deepEqual(
+      buildForgeMutationTestArgs({
+        verbosity: 3,
+        extraArgs: ["--match-path", "test/alf/**", "--isolate"],
+      }),
+      ["test", "--json", "-vvv", "--match-path", "test/alf/**", "--isolate"],
     );
   });
 

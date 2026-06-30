@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Mutation testing now logs baseline, active mutant, operator, and exact Forge
+  command progress to the Solidity Mutations output channel, and supports
+  `solidity-workbench.mutation.forgeTestArgs` for scoped per-mutant
+  `forge test` runs.
+
+### Fixed
+
+- Mutation timeout results now explain that Forge did not finish before the
+  per-mutant timeout and point users toward scoping test args or increasing
+  `solidity-workbench.mutation.timeoutMs`.
+
 ## [0.8.10] - 2026-06-30
 
 ### Added

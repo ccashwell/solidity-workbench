@@ -33,6 +33,7 @@ export interface WorkbenchConfig {
     maxMutants: number;
     timeoutMs: number;
     includeTests: boolean;
+    forgeTestArgs: string[];
     gambitPath: string;
     solcPath: string;
   };
@@ -74,6 +75,7 @@ export function getConfig(): WorkbenchConfig {
       maxMutants: config.get<number>("mutation.maxMutants") ?? 25,
       timeoutMs: config.get<number>("mutation.timeoutMs") ?? 120_000,
       includeTests: config.get<boolean>("mutation.includeTests") ?? false,
+      forgeTestArgs: stringArray(config.get<unknown>("mutation.forgeTestArgs")),
       gambitPath: config.get<string>("mutation.gambitPath") || "gambit",
       solcPath: config.get<string>("mutation.solcPath") || "",
     },
@@ -92,6 +94,12 @@ function graphDependencyIndexingMode(
 
 function mutationEngine(value: string | undefined): "builtin" | "gambit" {
   return value === "gambit" ? "gambit" : "builtin";
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
 }
 
 // Forge CLI helpers live in `@solidity-workbench/common/foundry-cli`

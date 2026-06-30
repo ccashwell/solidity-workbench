@@ -134,15 +134,37 @@ export class MutationProvider {
     const maxMutants = clampPositiveInt(config.get<number>("mutation.maxMutants"), 25);
     const timeoutMs = clampPositiveInt(config.get<number>("mutation.timeoutMs"), 120_000);
     const includeTests = config.get<boolean>("mutation.includeTests") ?? false;
+    const forgeTestArgs = stringArraySetting(config.get<unknown>("mutation.forgeTestArgs"));
     const forgePath = config.get<string>("foundryPath") || "forge";
     const gambitPath = config.get<string>("mutation.gambitPath") || "gambit";
     const solcPath = config.get<string>("mutation.solcPath") || "";
     const engine = mutationEngine(config.get<string>("mutation.engine"));
     const verbosity = config.get<number>("test.verbosity") ?? 2;
-    const baseline = await runBaselineTests({ forgeRoot, forgePath, timeoutMs, verbosity });
+
+    this.outputChannel.clear();
+    this.outputChannel.show(true);
+    this.outputChannel.appendLine(`Engine: ${engine}`);
+    this.outputChannel.appendLine(`Forge root: ${forgeRoot}`);
+    this.outputChannel.appendLine(`Max mutants: ${maxMutants}`);
+    this.outputChannel.appendLine(`Per-mutant timeout: ${timeoutMs}ms`);
+    if (forgeTestArgs.length > 0) {
+      this.outputChannel.appendLine(`Extra forge test args: ${forgeTestArgs.join(" ")}`);
+    }
+    this.outputChannel.appendLine(
+      `Baseline: ${formatCommand(
+        forgePath,
+        buildForgeMutationTestArgs({ verbosity, extraArgs: forgeTestArgs }),
+      )}`,
+    );
+
+    const baseline = await runBaselineTests({
+      forgeRoot,
+      forgePath,
+      timeoutMs,
+      verbosity,
+      extraArgs: forgeTestArgs,
+    });
     if (baseline) {
-      this.outputChannel.clear();
-      this.outputChannel.show(true);
       this.outputChannel.appendLine(baseline);
       vscode.window.showErrorMessage(baseline);
       return;
@@ -170,10 +192,8 @@ export class MutationProvider {
       return;
     }
 
-    this.outputChannel.clear();
-    this.outputChannel.show(true);
-    this.outputChannel.appendLine(`Engine: ${engine}`);
     this.outputChannel.appendLine(`Generated ${candidates.length} mutation candidates.`);
+    this.outputChannel.appendLine("");
 
     await vscode.window.withProgress(
       {
@@ -187,16 +207,30 @@ export class MutationProvider {
           for (let i = 0; i < candidates.length; i++) {
             if (token.isCancellationRequested) break;
             const candidate = candidates[i];
+            const candidateLabel = `${candidate.relativePath}:${candidate.range.start.line + 1}`;
             progress.report({
               increment: 100 / candidates.length,
-              message: `${i + 1}/${candidates.length}: ${candidate.relativePath}:${candidate.range.start.line + 1}`,
+              message: `${i + 1}/${candidates.length}: ${candidateLabel}`,
             });
+            this.outputChannel.appendLine(
+              `[${i + 1}/${candidates.length}] Running ${candidateLabel}`,
+            );
+            this.outputChannel.appendLine(
+              `  ${candidate.operator}: ${candidate.original} -> ${candidate.replacement}`,
+            );
+            this.outputChannel.appendLine(
+              `  $ ${formatCommand(
+                forgePath,
+                buildForgeMutationTestArgs({ verbosity, extraArgs: forgeTestArgs }),
+              )}`,
+            );
             const result = await runCandidate({
               candidate,
               forgeRoot,
               forgePath,
               timeoutMs,
               verbosity,
+              extraArgs: forgeTestArgs,
             });
             results.push(result);
             this.outputChannel.appendLine(formatResultLine(result));
@@ -668,6 +702,7 @@ async function runCandidate(options: {
   forgePath: string;
   timeoutMs: number;
   verbosity: number;
+  extraArgs?: string[];
 }): Promise<MutationResult> {
   const started = Date.now();
   const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), "solidity-workbench-mutant-"));
@@ -685,9 +720,10 @@ async function runCandidate(options: {
         "utf-8",
       );
     }
-    const args = ["test", "--json"];
-    const verbosityFlag = forgeVerbosityFlag(options.verbosity);
-    if (verbosityFlag) args.push(verbosityFlag);
+    const args = buildForgeMutationTestArgs({
+      verbosity: options.verbosity,
+      extraArgs: options.extraArgs,
+    });
     const result = await execFileAsync(options.forgePath, args, {
       cwd: tempRoot,
       maxBuffer: 50 * 1024 * 1024,
@@ -725,7 +761,9 @@ async function runCandidate(options: {
       durationMs: Date.now() - started,
       stdout: e.stdout,
       stderr: e.stderr,
-      message: e.stderr?.trim() || e.message,
+      message: timedOut
+        ? `forge test did not complete within ${options.timeoutMs}ms; narrow solidity-workbench.mutation.forgeTestArgs or raise solidity-workbench.mutation.timeoutMs.`
+        : e.stderr?.trim() || e.message,
     };
   } finally {
     await fs.promises.rm(tempRoot, { recursive: true, force: true });
@@ -737,10 +775,12 @@ async function runBaselineTests(options: {
   forgePath: string;
   timeoutMs: number;
   verbosity: number;
+  extraArgs?: string[];
 }): Promise<string | null> {
-  const args = ["test", "--json"];
-  const verbosityFlag = forgeVerbosityFlag(options.verbosity);
-  if (verbosityFlag) args.push(verbosityFlag);
+  const args = buildForgeMutationTestArgs({
+    verbosity: options.verbosity,
+    extraArgs: options.extraArgs,
+  });
   try {
     const result = await execFileAsync(options.forgePath, args, {
       cwd: options.forgeRoot,
@@ -775,6 +815,17 @@ function mutationFailureStatus(err: {
     return "killed";
   }
   return "error";
+}
+
+export function buildForgeMutationTestArgs(options: {
+  verbosity: number;
+  extraArgs?: string[];
+}): string[] {
+  const args = ["test", "--json"];
+  const verbosityFlag = forgeVerbosityFlag(options.verbosity);
+  if (verbosityFlag) args.push(verbosityFlag);
+  args.push(...(options.extraArgs ?? []));
+  return args;
 }
 
 export function hasForgeTestFailures(stdout: string | undefined): boolean {
@@ -884,6 +935,16 @@ function findNestedFoundryRoot(workspaceRoot: string): string | null {
 
 function mutationEngine(value: string | undefined): MutationEngine {
   return value === "gambit" ? "gambit" : "builtin";
+}
+
+function stringArraySetting(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === "string")
+    : [];
+}
+
+function formatCommand(command: string, args: string[]): string {
+  return [command, ...args].join(" ");
 }
 
 function tokenColumns(line: string, token: string): number[] {
@@ -996,7 +1057,8 @@ function clampPositiveInt(value: number | undefined, fallback: number): number {
 
 function formatResultLine(result: MutationResult): string {
   const c = result.candidate;
-  return `${result.status.toUpperCase()} ${c.relativePath}:${c.range.start.line + 1} ${c.original}->${c.replacement} (${result.durationMs}ms)`;
+  const message = result.message ? ` - ${result.message}` : "";
+  return `${result.status.toUpperCase()} ${c.relativePath}:${c.range.start.line + 1} ${c.original}->${c.replacement} (${result.durationMs}ms)${message}`;
 }
 
 function sanitizeSolidityIdentifier(value: string): string {
