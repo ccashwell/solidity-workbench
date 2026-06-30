@@ -1153,6 +1153,9 @@ function isPartOfLongerOperator(line: string, idx: number, token: string): boole
   if ((token === "+" || token === "-") && before === "=") {
     return true;
   }
+  if ((token === ">" || token === "<") && before === "=") {
+    return true;
+  }
   if ((token === "==" || token === "!=" || token === ">=" || token === "<=") && before === "=") {
     return true;
   }

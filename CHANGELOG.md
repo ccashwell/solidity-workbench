@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so per-mutant `forge test` calls start from prepared build artifacts.
 - Mutation reports now distinguish failing-test kills from non-test Forge
   failures and include the failing test or Forge error summary.
+- Built-in mutation candidate generation no longer treats Solidity mapping
+  arrows (`=>`) as relational `>` operators.
 
 ## [0.8.11] - 2026-06-30
 

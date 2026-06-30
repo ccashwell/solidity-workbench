@@ -352,6 +352,7 @@ describe("Feature coverage — mutation testing", () => {
       "contract Vault {",
       "    /* require(amount == balance);",
       "       if (amount >= balance) revert(); */",
+      "    mapping(bytes32 id => mapping(uint256 blockNumber => uint256 notional)) internal liquidated;",
       "    function withdraw(uint256 amount) external {",
       "        require(amount <= balance);",
       '        string memory ignored = "a <= b"; // amount == balance',
@@ -374,7 +375,8 @@ describe("Feature coverage — mutation testing", () => {
     assert.ok(candidates.some((c) => c.original === "||" && c.replacement === "&&"));
     assert.ok(candidates.some((c) => c.original === "+" && c.replacement === "-"));
     assert.ok(candidates.every((c) => c.range.start.line !== 1 && c.range.start.line !== 2));
-    assert.ok(candidates.every((c) => c.range.start.line !== 5));
+    assert.ok(candidates.every((c) => c.range.start.line !== 3));
+    assert.ok(candidates.every((c) => c.range.start.line !== 6));
     assert.ok(candidates.every((c) => c.lineText !== "unchecked { ++sum; --sum; }"));
     assert.ok(candidates.every((c) => c.contractName === "Vault"));
     assert.ok(candidates.every((c) => c.functionName === "withdraw"));
