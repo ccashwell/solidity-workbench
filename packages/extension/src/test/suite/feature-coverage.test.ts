@@ -1,4 +1,5 @@
 import * as assert from "node:assert";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -2470,7 +2471,7 @@ function makeSourceMappedDebugFixture(): {
   const projectRoot = folder.uri.fsPath;
   const artifactPath = path.join(projectRoot, "out", "Counter.sol", "Counter.json");
   const sourcePath = path.join(projectRoot, "src", "Counter.sol");
-  assert.ok(fs.existsSync(artifactPath), `expected checked-in forge artifact at ${artifactPath}`);
+  ensureSampleForgeArtifact(projectRoot, artifactPath);
   assert.ok(fs.existsSync(sourcePath), `expected sample source at ${sourcePath}`);
 
   const artifact = parseForgeArtifact(fs.readFileSync(artifactPath, "utf8"));
@@ -2511,6 +2512,33 @@ function makeSourceMappedDebugFixture(): {
     expectedLine: mapped!.line,
     expectedColumn: mapped!.column,
   };
+}
+
+function ensureSampleForgeArtifact(projectRoot: string, artifactPath: string): void {
+  if (fs.existsSync(artifactPath)) return;
+
+  try {
+    execFileSync("forge", ["build", "src/Counter.sol"], {
+      cwd: projectRoot,
+      encoding: "utf8",
+      stdio: "pipe",
+      timeout: 60_000,
+    });
+  } catch (err) {
+    const details =
+      err && typeof err === "object"
+        ? [
+            String((err as { message?: unknown }).message ?? ""),
+            String((err as { stdout?: unknown }).stdout ?? ""),
+            String((err as { stderr?: unknown }).stderr ?? ""),
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : String(err);
+    assert.fail(`expected forge build to generate ${artifactPath}${details ? `\n${details}` : ""}`);
+  }
+
+  assert.ok(fs.existsSync(artifactPath), `expected forge build to generate ${artifactPath}`);
 }
 
 function findSourceMappedInstruction(
