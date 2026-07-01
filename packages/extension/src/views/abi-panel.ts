@@ -128,12 +128,12 @@ export class AbiPanel {
     const forgePath = config.get<string>("foundryPath") || "forge";
 
     try {
-      const result = await execFileAsync(forgePath, ["inspect", contractName, "abi"], {
+      const result = await execFileAsync(forgePath, buildForgeAbiInspectArgs(contractName), {
         cwd: forgeRoot,
         maxBuffer: 10 * 1024 * 1024,
         timeout: 60_000,
       });
-      return { abi: JSON.parse(result.stdout) };
+      return { abi: parseForgeAbiOutput(result.stdout) };
     } catch (err: unknown) {
       const execErr = err as { stderr?: unknown; stdout?: unknown; message?: string };
       const stderr = (execErr.stderr ?? "").toString().trim();
@@ -345,6 +345,18 @@ interface AbiParam {
   indexed?: boolean;
   components?: AbiParam[];
   internalType?: string;
+}
+
+export function buildForgeAbiInspectArgs(contractName: string): string[] {
+  return ["inspect", contractName, "abi", "--json"];
+}
+
+export function parseForgeAbiOutput(stdout: string): AbiEntry[] {
+  const parsed = JSON.parse(stdout);
+  if (!Array.isArray(parsed)) {
+    throw new Error("forge inspect abi --json returned a non-array payload.");
+  }
+  return parsed as AbiEntry[];
 }
 
 interface AbiEntry {

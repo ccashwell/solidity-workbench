@@ -495,7 +495,7 @@ export class SolcBridge {
    * Get the ABI for a contract.
    */
   async getAbi(contractName: string): Promise<unknown[] | null> {
-    const result = await this.workspace.runForge(["inspect", contractName, "abi"]);
+    const result = await this.workspace.runForge(["inspect", contractName, "abi", "--json"]);
 
     if (result.exitCode !== 0) return null;
 

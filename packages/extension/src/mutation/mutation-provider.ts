@@ -140,6 +140,7 @@ export class MutationProvider {
     const config = vscode.workspace.getConfiguration("solidity-workbench");
     const maxMutants = clampPositiveInt(config.get<number>("mutation.maxMutants"), 25);
     const configuredTimeoutMs = clampPositiveInt(config.get<number>("mutation.timeoutMs"), 120_000);
+    const baselineTimeoutMs = resolveMutationBaselineTimeout({ configuredTimeoutMs });
     const includeTests = config.get<boolean>("mutation.includeTests") ?? false;
     const failFast = config.get<boolean>("mutation.failFast") ?? true;
     const configuredForgeTestArgs = stringArraySetting(
@@ -163,6 +164,7 @@ export class MutationProvider {
     this.outputChannel.appendLine(`Forge root: ${forgeRoot}`);
     this.outputChannel.appendLine(`Max mutants: ${maxMutants}`);
     this.outputChannel.appendLine(`Configured per-mutant timeout: ${configuredTimeoutMs}ms`);
+    this.outputChannel.appendLine(`Baseline timeout: ${baselineTimeoutMs}ms`);
     this.outputChannel.appendLine(`Mutant fail-fast: ${failFast ? "enabled" : "disabled"}`);
     if (forgeTestArgs.length > 0) {
       this.outputChannel.appendLine(`Extra forge test args: ${forgeTestArgs.join(" ")}`);
@@ -180,7 +182,7 @@ export class MutationProvider {
     const baseline = await runBaselineTests({
       forgeRoot,
       forgePath,
-      timeoutMs: configuredTimeoutMs,
+      timeoutMs: baselineTimeoutMs,
       verbosity,
       extraArgs: forgeTestArgs,
     });
@@ -973,7 +975,10 @@ async function runBaselineTests(options: {
     const e = err as { stdout?: string; stderr?: string; message?: string; killed?: boolean };
     const durationMs = Date.now() - started;
     if (e.killed === true) {
-      return { durationMs, error: "Baseline forge test run timed out; mutation testing aborted." };
+      return {
+        durationMs,
+        error: `Baseline forge test run timed out after ${options.timeoutMs}ms; mutation testing aborted. Set solidity-workbench.mutation.forgeTestArgs to narrow the covering suite or raise solidity-workbench.mutation.timeoutMs.`,
+      };
     }
     if (hasForgeTestFailures(e.stdout)) {
       return {
@@ -1042,6 +1047,10 @@ export function resolveMutationTimeout(options: {
   };
 }
 
+export function resolveMutationBaselineTimeout(options: { configuredTimeoutMs: number }): number {
+  return Math.max(options.configuredTimeoutMs * 3, 300_000);
+}
+
 export function resolveMutationForgeTestScope(options: {
   forgeRoot: string;
   targetFile?: string;
@@ -1060,10 +1069,50 @@ export function resolveMutationForgeTestScope(options: {
     };
   }
 
+  const inferredMatchPath = inferSourceMutationTestMatchPath(options.forgeRoot, relativePath);
+  if (inferredMatchPath) {
+    return {
+      args: [...options.configuredArgs, "--match-path", inferredMatchPath],
+      note: `Scoped source-file mutation run to inferred covering tests: ${inferredMatchPath}`,
+    };
+  }
+
   return {
     args: options.configuredArgs,
     note: `Current mutation target is not a test file; set solidity-workbench.mutation.forgeTestArgs to narrow the covering test suite.`,
   };
+}
+
+export function inferSourceMutationTestMatchPath(
+  forgeRoot: string,
+  sourceRelativePath: string,
+): string | undefined {
+  const sourcePath = toForgePath(sourceRelativePath);
+  const segments = sourcePath.split("/").filter(Boolean);
+  if (segments.length === 0 || isTestPath(sourcePath)) return undefined;
+
+  const sourceRoot = segments[0];
+  const sourceRoots = new Set(["src", "contracts"]);
+  const testRoot = path.join(forgeRoot, "test");
+  if (!sourceRoots.has(sourceRoot) || !hasSolidityFiles(testRoot)) {
+    return undefined;
+  }
+
+  const area = segments[1];
+  if (area) {
+    const areaDir = path.join(testRoot, area);
+    if (hasSolidityFiles(areaDir)) {
+      return `test/${area}/**`;
+    }
+  }
+
+  const stem = path.basename(sourcePath, ".sol");
+  const basenameMatch = findMatchingTestBasename(testRoot, stem);
+  if (basenameMatch) {
+    return basenameMatch;
+  }
+
+  return undefined;
 }
 
 function hasForgeTestSelector(args: string[]): boolean {
@@ -1080,6 +1129,43 @@ function hasForgeTestSelector(args: string[]): boolean {
 
 function toForgePath(filePath: string): string {
   return filePath.split(path.sep).join("/");
+}
+
+function hasSolidityFiles(dir: string): boolean {
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name.endsWith(".sol")) return true;
+      if (entry.isDirectory() && hasSolidityFiles(path.join(dir, entry.name))) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
+function findMatchingTestBasename(testRoot: string, sourceStem: string): string | undefined {
+  const queue = [testRoot];
+  while (queue.length > 0) {
+    const dir = queue.shift()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    const matchingFile = entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".sol"))
+      .map((entry) => entry.name)
+      .find((name) => name === `${sourceStem}.t.sol` || name.startsWith(`${sourceStem}.`));
+    if (matchingFile) {
+      return toForgePath(path.relative(path.dirname(testRoot), path.join(dir, matchingFile)));
+    }
+    for (const entry of entries) {
+      if (entry.isDirectory()) queue.push(path.join(dir, entry.name));
+    }
+  }
+  return undefined;
 }
 
 export function hasForgeTestFailures(stdout: string | undefined): boolean {

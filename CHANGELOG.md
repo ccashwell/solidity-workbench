@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.12] - 2026-07-01
+
 ### Fixed
 
 - Mutation testing for the current file now automatically scopes `forge test`
@@ -26,6 +28,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Built-in mutation testing now requests compiler-backed candidates from the
   language server, using solc AST binary-operator nodes before falling back to
   the legacy lexical scanner.
+- Source-file mutation runs now infer likely covering Foundry tests, such as
+  `src/alf/...` -> `test/alf/**`, before falling back to whole-suite baseline
+  execution.
+- Mutation baseline validation now uses a longer baseline-specific timeout
+  instead of aborting at the configured per-mutant timeout.
+- ABI Explorer now calls `forge inspect <contract> abi --json` so Foundry's
+  table output is not parsed as JSON.
 
 ## [0.8.11] - 2026-06-30
 

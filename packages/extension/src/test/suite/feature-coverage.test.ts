@@ -58,6 +58,7 @@ import { buildWakeDiagnostics } from "../../analysis/wake";
 import { buildMythrilDiagnostics } from "../../analysis/mythril";
 import { shouldFormatSolidityOnSave } from "../../format-on-save";
 import { shellArg, shellCommand } from "../../shell";
+import { buildForgeAbiInspectArgs, parseForgeAbiOutput } from "../../views/abi-panel";
 import {
   applyMutation,
   buildForgeMutationBuildArgs,
@@ -69,7 +70,9 @@ import {
   formatMutationReport,
   generateFoundryTestSkeleton,
   hasForgeTestFailures,
+  inferSourceMutationTestMatchPath,
   parseGambitMutantsLog,
+  resolveMutationBaselineTimeout,
   resolveMutationForgeTestScope,
   resolveMutationTimeout,
   summarizeMutationResults,
@@ -262,6 +265,19 @@ describe("Feature coverage — webview commands", () => {
     for (const cmd of expected) {
       assert.ok(all.includes(cmd), `expected '${cmd}' to be registered`);
     }
+  });
+
+  it("requests ABI inspect output as JSON", () => {
+    assert.deepEqual(buildForgeAbiInspectArgs("DualPoolHook"), [
+      "inspect",
+      "DualPoolHook",
+      "abi",
+      "--json",
+    ]);
+    assert.deepEqual(parseForgeAbiOutput('[{"type":"function","name":"balanceOf"}]'), [
+      { type: "function", name: "balanceOf" },
+    ]);
+    assert.throws(() => parseForgeAbiOutput("╭---------╮"), /Unexpected token/);
   });
 
   it("registers each static-analysis command", async () => {
@@ -485,6 +501,13 @@ describe("Feature coverage — mutation testing", () => {
   });
 
   it("adapts mutation timeouts to the measured baseline duration", () => {
+    assert.equal(
+      resolveMutationBaselineTimeout({
+        configuredTimeoutMs: 120_000,
+      }),
+      360_000,
+    );
+
     assert.deepEqual(
       resolveMutationTimeout({
         configuredTimeoutMs: 120_000,
@@ -501,33 +524,46 @@ describe("Feature coverage — mutation testing", () => {
     assert.match(adjusted.note ?? "", /baseline duration 60000ms/);
   });
 
-  it("auto-scopes current-file mutation runs only when the target is a test file", () => {
-    assert.deepEqual(
-      resolveMutationForgeTestScope({
-        forgeRoot: "/project",
-        targetFile: "/project/test/Counter.t.sol",
-        configuredArgs: ["--isolate"],
-      }).args,
-      ["--isolate", "--match-path", "test/Counter.t.sol"],
-    );
+  it("auto-scopes current-file mutation runs to likely covering tests", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "mutation-scope-"));
+    try {
+      fs.mkdirSync(path.join(root, "src/alf"), { recursive: true });
+      fs.mkdirSync(path.join(root, "src/base"), { recursive: true });
+      fs.mkdirSync(path.join(root, "test/alf"), { recursive: true });
+      fs.writeFileSync(path.join(root, "test/alf/DualPoolHook.t.sol"), "contract T {}", "utf-8");
+      fs.writeFileSync(path.join(root, "test/Wrapper.t.sol"), "contract T {}", "utf-8");
 
-    assert.deepEqual(
-      resolveMutationForgeTestScope({
-        forgeRoot: "/project",
-        targetFile: "/project/src/Counter.sol",
-        configuredArgs: [],
-      }).args,
-      [],
-    );
+      assert.deepEqual(
+        resolveMutationForgeTestScope({
+          forgeRoot: root,
+          targetFile: path.join(root, "test/Wrapper.t.sol"),
+          configuredArgs: ["--isolate"],
+        }).args,
+        ["--isolate", "--match-path", "test/Wrapper.t.sol"],
+      );
 
-    assert.deepEqual(
-      resolveMutationForgeTestScope({
-        forgeRoot: "/project",
-        targetFile: "/project/test/Counter.t.sol",
-        configuredArgs: ["--match-path", "test/alf/**"],
-      }).args,
-      ["--match-path", "test/alf/**"],
-    );
+      assert.deepEqual(
+        resolveMutationForgeTestScope({
+          forgeRoot: root,
+          targetFile: path.join(root, "src/alf/DualPoolHook.sol"),
+          configuredArgs: [],
+        }).args,
+        ["--match-path", "test/alf/**"],
+      );
+
+      assert.equal(inferSourceMutationTestMatchPath(root, "src/Wrapper.sol"), "test/Wrapper.t.sol");
+
+      assert.deepEqual(
+        resolveMutationForgeTestScope({
+          forgeRoot: root,
+          targetFile: path.join(root, "src/alf/DualPoolHook.sol"),
+          configuredArgs: ["--match-path", "test/custom/**"],
+        }).args,
+        ["--match-path", "test/custom/**"],
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("reuses a warm mutation sandbox for built-in mutants only", () => {
