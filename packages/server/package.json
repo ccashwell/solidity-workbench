@@ -13,7 +13,7 @@
     "@solidity-workbench/common": "workspace:*",
     "@solidity-parser/parser": "^0.18.0",
     "js-sha3": "^0.9.3",
-    "toml": "^3.0.0",
+    "toml": "^4.2.0",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.11",
     "vscode-uri": "^3.0.8"
