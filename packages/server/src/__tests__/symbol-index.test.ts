@@ -794,6 +794,43 @@ contract DiskOnly {
     });
   });
 
+  describe("incomplete declarations", () => {
+    it("does not index empty recovery names", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      indexText(
+        parser,
+        idx,
+        "file:///w/Incomplete.sol",
+        `pragma solidity 0.8.38;
+contract 
+struct 
+event 
+`,
+      );
+      indexText(
+        parser,
+        idx,
+        "file:///w/Mixed.sol",
+        `pragma solidity 0.8.38;
+contract Mixed {
+  struct 
+}
+`,
+      );
+
+      assert.equal(idx.findSymbols("").length, 0);
+      assert.equal(idx.getContract(""), undefined);
+      assert.equal(idx.findSymbols("Mixed").length, 1);
+      assert.equal(
+        idx.getFileSymbols("file:///w/Mixed.sol").filter((sym) => sym.kind === "struct").length,
+        0,
+      );
+      assert.ok(idx.getFileSymbols("file:///w/Incomplete.sol").every((sym) => !!sym.name));
+      assert.ok(idx.findWorkspaceSymbols("").every((sym) => !!sym.name));
+    });
+  });
+
   describe("findWorkspaceSymbols ranking", () => {
     const seed = (parser: SolidityParser, idx: SymbolIndex) => {
       indexText(

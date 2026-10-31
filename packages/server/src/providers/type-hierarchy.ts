@@ -132,12 +132,15 @@ export class TypeHierarchyProvider {
     if (resolved && this.resolver) {
       return this.resolver
         .getSubtypes(resolved)
+        .filter((entry) => !!entry.contract.name)
         .map((entry) => this.contractToItem(entry.contract, entry.uri, entry.id));
     }
 
     const subtypes: TypeHierarchyItem[] = [];
 
     for (const entry of this.symbolIndex.getAllContractEntries()) {
+      // getAllContractEntries walks the parser AST, including nameless recovery nodes.
+      if (!entry.contract.name) continue;
       for (const base of entry.contract.baseContracts) {
         const baseEntry = this.symbolIndex.getVisibleContract(base.baseName, entry.uri);
         if (baseEntry?.contract.name === item.name && baseEntry.uri === item.uri) {

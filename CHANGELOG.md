@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Document / workspace symbols and call / type hierarchy no longer emit empty
+  names for incomplete Solidity (e.g. a bare `contract` keyword), which used to
+  make the client throw `Error: name must not be falsy` and flood the output.
+
 ## [0.8.12] - 2026-07-01
 
 ### Fixed

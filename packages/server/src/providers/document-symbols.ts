@@ -28,6 +28,7 @@ export class DocumentSymbolProvider {
 
     // Pragmas (flat, not nested)
     for (const pragma of result.sourceUnit.pragmas) {
+      if (!pragma.name && !pragma.value) continue;
       symbols.push({
         name: `pragma ${pragma.name} ${pragma.value}`,
         kind: SymbolKind.Namespace,
@@ -36,12 +37,18 @@ export class DocumentSymbolProvider {
       });
     }
 
-    // Contracts (with nested children)
+    // Contracts (with nested children). Skip empty recovery names — the
+    // client throws on falsy DocumentSymbol.name — and promote children.
     for (const contract of result.sourceUnit.contracts) {
+      if (!contract.name) {
+        symbols.push(...this.collectContractChildren(contract));
+        continue;
+      }
       symbols.push(this.buildContractSymbol(contract));
     }
 
     for (const struct of result.sourceUnit.structs) {
+      if (!struct.name) continue;
       symbols.push({
         name: struct.name,
         kind: SymbolKind.Struct,
@@ -51,6 +58,7 @@ export class DocumentSymbolProvider {
     }
 
     for (const enumDef of result.sourceUnit.enums) {
+      if (!enumDef.name) continue;
       symbols.push({
         name: enumDef.name,
         detail: `{ ${enumDef.members.map((m) => m.name).join(", ")} }`,
@@ -72,6 +80,7 @@ export class DocumentSymbolProvider {
     }
 
     for (const event of result.sourceUnit.events) {
+      if (!event.name) continue;
       symbols.push({
         name: event.name,
         detail: "event",
@@ -82,6 +91,7 @@ export class DocumentSymbolProvider {
     }
 
     for (const err of result.sourceUnit.errors) {
+      if (!err.name) continue;
       symbols.push({
         name: err.name,
         detail: "error",
@@ -92,6 +102,7 @@ export class DocumentSymbolProvider {
     }
 
     for (const udvt of result.sourceUnit.userDefinedValueTypes) {
+      if (!udvt.name) continue;
       symbols.push({
         name: udvt.name,
         detail: udvt.underlyingType,
@@ -102,6 +113,7 @@ export class DocumentSymbolProvider {
     }
 
     for (const constant of result.sourceUnit.fileConstants) {
+      if (!constant.name) continue;
       symbols.push({
         name: constant.name,
         detail: constant.typeName,
@@ -115,84 +127,7 @@ export class DocumentSymbolProvider {
   }
 
   private buildContractSymbol(contract: ContractDefinition): DocumentSymbol {
-    const children: DocumentSymbol[] = [];
-
-    // Functions
-    for (const func of contract.functions) {
-      const name = func.name ?? func.kind; // constructor, receive, fallback
-      const detail = this.buildFunctionDetail(func);
-      children.push({
-        name,
-        detail,
-        kind: func.kind === "constructor" ? SymbolKind.Constructor : SymbolKind.Function,
-        range: func.range,
-        selectionRange: func.nameRange,
-        tags: func.isVirtual ? [] : undefined,
-      });
-    }
-
-    // Modifiers
-    for (const mod of contract.modifiers) {
-      children.push({
-        name: mod.name,
-        kind: SymbolKind.Method,
-        range: mod.range,
-        selectionRange: mod.nameRange,
-      });
-    }
-
-    // Events
-    for (const event of contract.events) {
-      children.push({
-        name: event.name,
-        kind: SymbolKind.Event,
-        range: event.range,
-        selectionRange: event.nameRange,
-      });
-    }
-
-    // Errors
-    for (const error of contract.errors) {
-      children.push({
-        name: error.name,
-        detail: "error",
-        kind: SymbolKind.Struct,
-        range: error.range,
-        selectionRange: error.nameRange,
-      });
-    }
-
-    // Structs
-    for (const struct of contract.structs) {
-      children.push({
-        name: struct.name,
-        kind: SymbolKind.Struct,
-        range: struct.range,
-        selectionRange: struct.nameRange,
-      });
-    }
-
-    // Enums
-    for (const enumDef of contract.enums) {
-      children.push({
-        name: enumDef.name,
-        detail: `{ ${enumDef.members.map((m) => m.name).join(", ")} }`,
-        kind: SymbolKind.Enum,
-        range: enumDef.range,
-        selectionRange: enumDef.nameRange,
-      });
-    }
-
-    // State variables
-    for (const svar of contract.stateVariables) {
-      children.push({
-        name: svar.name,
-        detail: svar.typeName,
-        kind: svar.mutability === "constant" ? SymbolKind.Constant : SymbolKind.Field,
-        range: svar.range,
-        selectionRange: svar.nameRange,
-      });
-    }
+    const children = this.collectContractChildren(contract);
 
     const kind =
       contract.kind === "interface"
@@ -209,6 +144,96 @@ export class DocumentSymbolProvider {
       selectionRange: contract.nameRange,
       children,
     };
+  }
+
+  private collectContractChildren(contract: ContractDefinition): DocumentSymbol[] {
+    const children: DocumentSymbol[] = [];
+
+    // Functions
+    for (const func of contract.functions) {
+      const name = func.name || func.kind; // constructor, receive, fallback (|| skips "")
+      if (!name) continue;
+      const detail = this.buildFunctionDetail(func);
+      children.push({
+        name,
+        detail,
+        kind: func.kind === "constructor" ? SymbolKind.Constructor : SymbolKind.Function,
+        range: func.range,
+        selectionRange: func.nameRange,
+        tags: func.isVirtual ? [] : undefined,
+      });
+    }
+
+    // Modifiers
+    for (const mod of contract.modifiers) {
+      if (!mod.name) continue;
+      children.push({
+        name: mod.name,
+        kind: SymbolKind.Method,
+        range: mod.range,
+        selectionRange: mod.nameRange,
+      });
+    }
+
+    // Events
+    for (const event of contract.events) {
+      if (!event.name) continue;
+      children.push({
+        name: event.name,
+        kind: SymbolKind.Event,
+        range: event.range,
+        selectionRange: event.nameRange,
+      });
+    }
+
+    // Errors
+    for (const error of contract.errors) {
+      if (!error.name) continue;
+      children.push({
+        name: error.name,
+        detail: "error",
+        kind: SymbolKind.Struct,
+        range: error.range,
+        selectionRange: error.nameRange,
+      });
+    }
+
+    // Structs
+    for (const struct of contract.structs) {
+      if (!struct.name) continue;
+      children.push({
+        name: struct.name,
+        kind: SymbolKind.Struct,
+        range: struct.range,
+        selectionRange: struct.nameRange,
+      });
+    }
+
+    // Enums
+    for (const enumDef of contract.enums) {
+      if (!enumDef.name) continue;
+      children.push({
+        name: enumDef.name,
+        detail: `{ ${enumDef.members.map((m) => m.name).join(", ")} }`,
+        kind: SymbolKind.Enum,
+        range: enumDef.range,
+        selectionRange: enumDef.nameRange,
+      });
+    }
+
+    // State variables
+    for (const svar of contract.stateVariables) {
+      if (!svar.name) continue;
+      children.push({
+        name: svar.name,
+        detail: svar.typeName,
+        kind: svar.mutability === "constant" ? SymbolKind.Constant : SymbolKind.Field,
+        range: svar.range,
+        selectionRange: svar.nameRange,
+      });
+    }
+
+    return children;
   }
 
   private buildFunctionDetail(func: FunctionDefinition): string {
