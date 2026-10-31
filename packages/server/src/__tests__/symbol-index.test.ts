@@ -794,6 +794,59 @@ contract DiskOnly {
     });
   });
 
+  describe("incomplete declarations", () => {
+    it("does not index empty-named recovery nodes from bare contract/struct/event", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      indexText(
+        parser,
+        idx,
+        "file:///w/Incomplete.sol",
+        `pragma solidity 0.8.38;
+contract 
+struct 
+event 
+`,
+      );
+
+      assert.equal(idx.findSymbols("").length, 0, "empty name must not be indexed");
+      assert.equal(idx.getContract(""), undefined);
+      assert.ok(
+        idx.getFileSymbols("file:///w/Incomplete.sol").every((sym) => !!sym.name),
+        "every indexed symbol must have a non-empty name",
+      );
+      assert.ok(
+        idx.findWorkspaceSymbols("").every((sym) => !!sym.name),
+        "workspace symbols must never emit a falsy name",
+      );
+    });
+
+    it("indexes a named contract that contains only an incomplete struct", () => {
+      const parser = new SolidityParser();
+      const idx = new SymbolIndex(parser, makeFakeWorkspace());
+      indexText(
+        parser,
+        idx,
+        "file:///w/Mixed.sol",
+        `pragma solidity 0.8.38;
+contract Mixed {
+  struct 
+}
+`,
+      );
+
+      assert.equal(idx.findSymbols("Mixed").length, 1);
+      assert.ok(
+        idx.getFileSymbols("file:///w/Mixed.sol").every((sym) => !!sym.name),
+        "incomplete struct must not produce an empty-name index entry",
+      );
+      assert.equal(
+        idx.getFileSymbols("file:///w/Mixed.sol").filter((sym) => sym.kind === "struct").length,
+        0,
+      );
+    });
+  });
+
   describe("findWorkspaceSymbols ranking", () => {
     const seed = (parser: SolidityParser, idx: SymbolIndex) => {
       indexText(

@@ -151,15 +151,17 @@ export class CallHierarchyProvider {
     );
     const prepared = symbolsAtCursor.length > 0 ? symbolsAtCursor : funcSymbols;
 
-    return prepared.map((sym) => ({
-      name: sym.name,
-      kind: this.symbolKindToCallHierarchyKind(sym.kind),
-      uri: sym.filePath,
-      range: sym.range,
-      selectionRange: sym.nameRange,
-      detail: sym.containerName,
-      data: this.makeKey(sym.filePath, sym.name, sym.containerName),
-    }));
+    return prepared
+      .filter((sym) => !!sym.name)
+      .map((sym) => ({
+        name: sym.name,
+        kind: this.symbolKindToCallHierarchyKind(sym.kind),
+        uri: sym.filePath,
+        range: sym.range,
+        selectionRange: sym.nameRange,
+        detail: sym.containerName,
+        data: this.makeKey(sym.filePath, sym.name, sym.containerName),
+      }));
   }
 
   /**
@@ -198,6 +200,7 @@ export class CallHierarchyProvider {
       let entry = callerMap.get(callerKey);
 
       if (!entry) {
+        if (!site.callerName) continue;
         const callerSymbols = this.symbolIndex.findSymbols(site.callerName);
         const callerSym =
           callerSymbols.find(
@@ -205,7 +208,7 @@ export class CallHierarchyProvider {
           ) ??
           callerSymbols.find((s) => s.filePath === site.callerUri) ??
           callerSymbols[0];
-        if (!callerSym) continue;
+        if (!callerSym?.name) continue;
 
         entry = {
           item: {
@@ -258,7 +261,7 @@ export class CallHierarchyProvider {
 
       if (!entry) {
         const calleeSym = site.target ?? this.resolveCalleeSymbol(site);
-        if (!calleeSym) continue;
+        if (!calleeSym?.name) continue;
 
         entry = {
           item: {

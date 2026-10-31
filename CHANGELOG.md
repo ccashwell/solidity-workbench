@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Document outline (`textDocument/documentSymbol`) no longer returns symbols with
+  empty names for incomplete Solidity (e.g. a bare `contract` keyword, or a
+  partially typed struct/event/modifier/enum). Those recovery nodes previously
+  caused the VS Code client to throw `Error: name must not be falsy` and flood
+  the extension output. Workspace symbols, call hierarchy, and type hierarchy
+  now skip the same empty-name recovery nodes.
+
 ## [0.8.12] - 2026-07-01
 
 ### Fixed

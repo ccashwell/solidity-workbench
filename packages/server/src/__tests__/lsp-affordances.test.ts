@@ -161,6 +161,125 @@ contract Token {}`;
     assert.equal(root.selectionRange.start.line, 3);
   });
 
+  describe("document symbols with incomplete code", () => {
+    function assertNoFalsyNames(
+      symbols: ReturnType<DocumentSymbolProvider["provideDocumentSymbols"]>,
+      path = "",
+    ): void {
+      for (const symbol of symbols) {
+        assert.ok(
+          symbol.name,
+          `expected non-empty DocumentSymbol.name at ${path || "<root>"} (got ${JSON.stringify(symbol.name)})`,
+        );
+        if (symbol.children) {
+          assertNoFalsyNames(symbol.children, `${path}${symbol.name}/`);
+        }
+      }
+    }
+
+    it("returns only the pragma for SPDX + pragma with no declarations", () => {
+      const text = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.38;
+`;
+      const { doc, parser } = setup(text, "file:///w/PragmaOnly.sol");
+      const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
+
+      assertNoFalsyNames(symbols);
+      assert.equal(symbols.length, 1);
+      assert.equal(symbols[0].name, "pragma solidity 0.8.38");
+    });
+
+    it("skips a bare contract keyword with no name", () => {
+      const text = `// SPDX-License-Identifier: MIT
+pragma solidity 0.8.38;
+contract 
+`;
+      const { doc, parser } = setup(text, "file:///w/BareContract.sol");
+      const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
+
+      assertNoFalsyNames(symbols);
+      assert.ok(symbols.every((s) => s.name.startsWith("pragma") || s.name.length > 0));
+      assert.equal(
+        symbols.filter((s) => !s.name.startsWith("pragma")).length,
+        0,
+        "unnamed contract recovery node must not appear in the outline",
+      );
+    });
+
+    it("skips a nameless struct while keeping the enclosing named contract", () => {
+      const text = `pragma solidity 0.8.38;
+contract C {
+  struct 
+}`;
+      const { doc, parser } = setup(text, "file:///w/PartialStruct.sol");
+      const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
+
+      assertNoFalsyNames(symbols);
+      const contract = symbols.find((s) => s.name === "C");
+      assert.ok(contract, "expected named contract C in the outline");
+      assert.deepEqual(
+        (contract.children ?? []).map((c) => c.name),
+        [],
+        "nameless struct recovery node must be omitted",
+      );
+    });
+
+    it("skips nameless event, modifier, and enum recovery nodes", () => {
+      for (const [label, member] of [
+        ["event", "event "],
+        ["modifier", "modifier "],
+        ["enum", "enum "],
+      ] as const) {
+        const text = `pragma solidity 0.8.38;
+contract C {
+  ${member}
+}`;
+        const { doc, parser } = setup(text, `file:///w/Partial${label}.sol`);
+        const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
+
+        assertNoFalsyNames(symbols);
+        const contract = symbols.find((s) => s.name === "C");
+        assert.ok(contract, `expected contract C for incomplete ${label}`);
+        assert.deepEqual(
+          (contract.children ?? []).map((c) => c.name),
+          [],
+          `nameless ${label} recovery node must be omitted`,
+        );
+      }
+    });
+
+    it("skips a file-level nameless struct while keeping the pragma", () => {
+      const text = `pragma solidity 0.8.38;
+struct 
+`;
+      const { doc, parser } = setup(text, "file:///w/BareStruct.sol");
+      const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
+
+      assertNoFalsyNames(symbols);
+      assert.equal(symbols.length, 1);
+      assert.equal(symbols[0].name, "pragma solidity 0.8.38");
+    });
+
+    it("still returns a complete contract outline when names are present", () => {
+      const text = `pragma solidity 0.8.38;
+contract Foo {
+  function bar() public {}
+  struct S { uint256 x; }
+  event E(uint256 a);
+  error Err();
+  modifier onlyOwner() { _; }
+}`;
+      const { doc, parser } = setup(text, "file:///w/Complete.sol");
+      const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
+
+      assertNoFalsyNames(symbols);
+      const foo = symbols.find((s) => s.name === "Foo");
+      assert.ok(foo);
+      const childNames = (foo.children ?? []).map((c) => c.name).sort();
+      assert.deepEqual(childNames, ["E", "Err", "S", "bar", "onlyOwner"]);
+    });
+  });
+
   it("turns import strings into document links", () => {
     const text = `pragma solidity ^0.8.0;
 import { Token } from "./Token.sol";

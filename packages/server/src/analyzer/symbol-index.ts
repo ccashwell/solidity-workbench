@@ -254,26 +254,33 @@ export class SymbolIndex {
     const su = result.sourceUnit;
 
     for (const contract of su.contracts) {
-      // Contract itself
-      newSymbols.push({
-        name: contract.name,
-        kind:
-          contract.kind === "interface"
-            ? "interface"
-            : contract.kind === "library"
-              ? "library"
-              : "contract",
-        filePath: uri,
-        range: contract.range,
-        nameRange: contract.nameRange,
-        natspec: contract.natspec,
-      });
+      // Incomplete `contract` / `interface` / `library` recovery nodes have
+      // an empty name. Skip indexing them (and don't register under "") —
+      // vscode-languageclient rejects falsy WorkspaceSymbol / hierarchy names.
+      const contractName = contract.name || undefined;
+      if (contractName) {
+        newSymbols.push({
+          name: contractName,
+          kind:
+            contract.kind === "interface"
+              ? "interface"
+              : contract.kind === "library"
+                ? "library"
+                : "contract",
+          filePath: uri,
+          range: contract.range,
+          nameRange: contract.nameRange,
+          natspec: contract.natspec,
+        });
 
-      this.contractsByName.set(contract.name, { uri, contract });
+        this.contractsByName.set(contractName, { uri, contract });
+      }
 
       // Functions (including constructor / receive / fallback — `name` is null)
       for (const func of contract.functions) {
-        const symbolName = func.name ?? func.kind;
+        // Prefer declared name; fall back to kind. Empty-string recovery
+        // names must not win over kind via `??`.
+        const symbolName = func.name || func.kind;
         const symbolKind =
           func.kind === "constructor"
             ? "constructor"
@@ -289,7 +296,7 @@ export class SymbolIndex {
           filePath: uri,
           range: func.range,
           nameRange: func.nameRange,
-          containerName: contract.name,
+          containerName: contractName,
           detail: this.buildFunctionSignature(func),
           natspec: func.natspec,
         });
@@ -297,13 +304,14 @@ export class SymbolIndex {
 
       // Events
       for (const event of contract.events) {
+        if (!event.name) continue;
         newSymbols.push({
           name: event.name,
           kind: "event",
           filePath: uri,
           range: event.range,
           nameRange: event.nameRange,
-          containerName: contract.name,
+          containerName: contractName,
           detail: this.buildEventSignature(event),
           natspec: event.natspec,
         });
@@ -311,13 +319,14 @@ export class SymbolIndex {
 
       // Errors
       for (const error of contract.errors) {
+        if (!error.name) continue;
         newSymbols.push({
           name: error.name,
           kind: "error",
           filePath: uri,
           range: error.range,
           nameRange: error.nameRange,
-          containerName: contract.name,
+          containerName: contractName,
           detail: this.buildErrorSignature(error),
           natspec: error.natspec,
         });
@@ -325,13 +334,14 @@ export class SymbolIndex {
 
       // State variables
       for (const svar of contract.stateVariables) {
+        if (!svar.name) continue;
         newSymbols.push({
           name: svar.name,
           kind: "stateVariable",
           filePath: uri,
           range: svar.range,
           nameRange: svar.nameRange,
-          containerName: contract.name,
+          containerName: contractName,
           detail: svar.typeName,
           natspec: svar.natspec,
         });
@@ -339,23 +349,24 @@ export class SymbolIndex {
 
       // Structs
       for (const struct of contract.structs) {
-        this.indexStruct(newSymbols, uri, struct, contract.name);
+        this.indexStruct(newSymbols, uri, struct, contractName);
       }
 
       // Enums
       for (const enumDef of contract.enums) {
-        this.indexEnum(newSymbols, uri, enumDef, contract.name);
+        this.indexEnum(newSymbols, uri, enumDef, contractName);
       }
 
       // Modifiers
       for (const mod of contract.modifiers) {
+        if (!mod.name) continue;
         newSymbols.push({
           name: mod.name,
           kind: "modifier",
           filePath: uri,
           range: mod.range,
           nameRange: mod.nameRange,
-          containerName: contract.name,
+          containerName: contractName,
           natspec: mod.natspec,
         });
       }
@@ -386,6 +397,7 @@ export class SymbolIndex {
 
     // File-level events
     for (const event of su.events) {
+      if (!event.name) continue;
       newSymbols.push({
         name: event.name,
         kind: "event",
@@ -399,6 +411,7 @@ export class SymbolIndex {
 
     // File-level custom errors
     for (const err of su.errors) {
+      if (!err.name) continue;
       newSymbols.push({
         name: err.name,
         kind: "error",
@@ -411,6 +424,7 @@ export class SymbolIndex {
     }
 
     for (const constant of su.fileConstants) {
+      if (!constant.name) continue;
       newSymbols.push({
         name: constant.name,
         kind: "fileConstant",
@@ -424,6 +438,7 @@ export class SymbolIndex {
 
     // File-level user-defined value types (e.g. `type Fixed is uint256;`)
     for (const udvt of su.userDefinedValueTypes) {
+      if (!udvt.name) continue;
       newSymbols.push({
         name: udvt.name,
         kind: "userDefinedValueType",
@@ -434,9 +449,10 @@ export class SymbolIndex {
       });
     }
 
-    // Store symbols
+    // Store symbols — never index a falsy name (client converters throw).
     this.symbolsByFile.set(uri, newSymbols);
     for (const sym of newSymbols) {
+      if (!sym.name) continue;
       const existing = this.symbolsByName.get(sym.name) ?? [];
       existing.push(sym);
       this.symbolsByName.set(sym.name, existing);
@@ -549,8 +565,12 @@ export class SymbolIndex {
     const results: WorkspaceSymbol[] = [];
     for (const { sym } of scored) {
       if (results.length >= 100) break;
+      // Defense in depth: never emit a falsy WorkspaceSymbol.name.
+      if (!sym.name) continue;
+      const displayName = sym.containerName ? `${sym.containerName}.${sym.name}` : sym.name;
+      if (!displayName) continue;
       results.push({
-        name: sym.containerName ? `${sym.containerName}.${sym.name}` : sym.name,
+        name: displayName,
         kind: this.toLSPSymbolKind(sym.kind),
         location: {
           uri: sym.filePath,
@@ -802,6 +822,8 @@ export class SymbolIndex {
     struct: StructDefinition,
     contractName?: string,
   ): void {
+    if (!struct.name) return;
+
     newSymbols.push({
       name: struct.name,
       kind: "struct",
@@ -832,6 +854,8 @@ export class SymbolIndex {
     enumDef: EnumDefinition,
     contractName?: string,
   ): void {
+    if (!enumDef.name) return;
+
     newSymbols.push({
       name: enumDef.name,
       kind: "enum",
@@ -843,6 +867,7 @@ export class SymbolIndex {
     });
 
     for (const member of enumDef.members) {
+      if (!member.name) continue;
       newSymbols.push({
         name: member.name,
         kind: "enumMember",
