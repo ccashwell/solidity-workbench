@@ -705,6 +705,8 @@ export class CallHierarchyProvider {
     }
 
     for (const contract of result.sourceUnit.contracts) {
+      // Match SymbolIndex: nameless recovery contracts use undefined, not "".
+      const callerContainer = contract.name || undefined;
       for (const func of contract.functions) {
         this.indexCallsInFunction({
           uri,
@@ -712,7 +714,7 @@ export class CallHierarchyProvider {
           lines,
           commentRanges,
           func,
-          callerContainer: contract.name,
+          callerContainer,
           contract,
           fileIncomingNames,
           fileOutgoingKeys,
@@ -726,7 +728,7 @@ export class CallHierarchyProvider {
           lines,
           commentRanges,
           func: mod,
-          callerContainer: contract.name,
+          callerContainer,
           contract,
           fileIncomingNames,
           fileOutgoingKeys,
@@ -945,6 +947,7 @@ export class CallHierarchyProvider {
     contract: ContractDefinition,
     modifierName: string,
   ): CallTarget | undefined {
+    if (!contract.name) return undefined;
     const resolved = this.resolver?.findMemberInInheritanceChain(contract.name, modifierName, uri);
     if (resolved?.kind === "modifier") return this.symbolToTarget(resolved);
 

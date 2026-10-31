@@ -10,11 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Document outline (`textDocument/documentSymbol`) no longer returns symbols with
-  empty names for incomplete Solidity (e.g. a bare `contract` keyword, or a
-  partially typed struct/event/modifier/enum). Those recovery nodes previously
-  caused the VS Code client to throw `Error: name must not be falsy` and flood
-  the extension output. Workspace symbols, call hierarchy, and type hierarchy
-  now skip the same empty-name recovery nodes.
+  empty names for incomplete Solidity (e.g. a bare `contract` / `contract {`,
+  or a partially typed struct/event/modifier/enum). Those recovery nodes
+  previously caused the VS Code client to throw `Error: name must not be falsy`
+  and flood the extension output. Named children of an unnamed contract are
+  promoted into the outline instead of being dropped. Workspace symbols, call
+  hierarchy, and type hierarchy now skip the same empty-name recovery nodes
+  (and treat nameless contract containers as unset rather than `""`).
 
 ## [0.8.12] - 2026-07-01
 

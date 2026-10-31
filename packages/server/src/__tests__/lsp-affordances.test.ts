@@ -278,6 +278,163 @@ contract Foo {
       const childNames = (foo.children ?? []).map((c) => c.name).sort();
       assert.deepEqual(childNames, ["E", "Err", "S", "bar", "onlyOwner"]);
     });
+
+    it("preserves outline parity for a representative complete file", () => {
+      // Intentionally mirrors the pre-fix DocumentSymbol shape for valid code:
+      // pragmas → contracts (with ctor/receive/fallback/members) → file-level
+      // structs/enums/free functions/events/errors/UDVTs/constants.
+      const text = `// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.24;
+pragma abicoder v2;
+
+uint256 constant MAX = 1;
+type Currency is address;
+struct Point { uint256 x; uint256 y; }
+enum Status { None, Active }
+error NotAllowed(address who);
+event Transfer(address indexed from, address to, uint256 amount);
+function freeHelper(uint256 a) pure returns (uint256) { return a; }
+
+interface IFoo { function bar() external; }
+library Lib { function add(uint256 a, uint256 b) internal pure returns (uint256) { return a + b; } }
+abstract contract Base { function virtualFn() public virtual; }
+
+contract Foo is Base, IFoo {
+  uint256 public x;
+  uint256 constant Y = 2;
+  uint256 immutable z;
+  constructor(uint256 _z) { z = _z; }
+  receive() external payable {}
+  fallback() external {}
+  modifier onlyOwner() { _; }
+  function bar() public override {}
+  function virtualFn() public override {}
+  struct Inner { uint256 a; }
+  enum Mode { A, B }
+  event Ping(uint256 n);
+  error Boom();
+  using Lib for uint256;
+}
+`;
+      const { doc, parser, idx } = setup(text, "file:///w/Parity.sol");
+      const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
+
+      assertNoFalsyNames(symbols);
+
+      const outline = symbols.map((s) => ({
+        name: s.name,
+        kind: s.kind,
+        children: (s.children ?? []).map((c) => c.name),
+      }));
+      assert.deepEqual(
+        outline.map((s) => s.name),
+        [
+          "pragma solidity ^0.8.24",
+          "pragma abicoder v2",
+          "IFoo",
+          "Lib",
+          "Base",
+          "Foo",
+          "Point",
+          "Status",
+          "freeHelper",
+          "Transfer",
+          "NotAllowed",
+          "Currency",
+          "MAX",
+        ],
+      );
+
+      const foo = symbols.find((s) => s.name === "Foo");
+      assert.ok(foo);
+      assert.deepEqual(
+        (foo.children ?? []).map((c) => c.name),
+        [
+          "constructor",
+          "receive",
+          "fallback",
+          "bar",
+          "virtualFn",
+          "onlyOwner",
+          "Ping",
+          "Boom",
+          "Inner",
+          "Mode",
+          "x",
+          "Y",
+          "z",
+        ],
+      );
+      assert.equal(foo.children?.[0]?.kind, SymbolKind.Constructor);
+
+      // selectionRange must stay inside range for every emitted symbol
+      const assertSelectionInside = (list: typeof symbols, path = ""): void => {
+        for (const s of list) {
+          const { range: r, selectionRange: sr } = s;
+          const before =
+            sr.start.line < r.start.line ||
+            (sr.start.line === r.start.line && sr.start.character < r.start.character);
+          const after =
+            sr.end.line > r.end.line ||
+            (sr.end.line === r.end.line && sr.end.character > r.end.character);
+          assert.equal(before || after, false, `selectionRange outside range at ${path}${s.name}`);
+          if (s.children) assertSelectionInside(s.children, `${path}${s.name}/`);
+        }
+      };
+      assertSelectionInside(symbols);
+
+      // Workspace / index parity: special functions keep kind-based names;
+      // nothing is indexed under an empty name.
+      assert.ok(idx.findSymbols("constructor").some((s) => s.containerName === "Foo"));
+      assert.ok(idx.findSymbols("receive").some((s) => s.containerName === "Foo"));
+      assert.ok(idx.findSymbols("fallback").some((s) => s.containerName === "Foo"));
+      assert.equal(idx.findSymbols("").length, 0);
+      assert.ok(idx.getFileSymbols(doc.uri).every((s) => !!s.name));
+      assert.ok(idx.findWorkspaceSymbols("").every((s) => !!s.name));
+    });
+
+    it("tolerates incomplete braces and half-typed inheritance without empty names", () => {
+      const snippets = [
+        ["contract {", "pragma solidity ^0.8.24;\ncontract {\n"],
+        ["contract A is {", "pragma solidity ^0.8.24;\ncontract A is {\n"],
+        ["function (", "pragma solidity ^0.8.24;\ncontract C {\n  function (\n}"],
+        ["struct {", "pragma solidity ^0.8.24;\ncontract C {\n  struct {\n}"],
+        ["event (", "pragma solidity ^0.8.24;\ncontract C {\n  event (\n}"],
+        ["modifier {", "pragma solidity ^0.8.24;\ncontract C {\n  modifier {\n}"],
+        [
+          "unnamed contract with named children",
+          "pragma solidity ^0.8.24;\ncontract {\n  function foo() public {}\n  event Bar();\n}",
+        ],
+      ] as const;
+
+      for (const [label, text] of snippets) {
+        const { doc, parser, idx } = setup(text, `file:///w/${label.replace(/\W+/g, "_")}.sol`);
+        const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
+        assertNoFalsyNames(symbols);
+        assert.ok(
+          idx.getFileSymbols(doc.uri).every((s) => !!s.name),
+          `${label}: index must not store empty names`,
+        );
+        assert.ok(
+          idx.findWorkspaceSymbols("").every((s) => !!s.name),
+          `${label}: workspace symbols must not emit empty names`,
+        );
+      }
+
+      // Named children of an unnamed contract are promoted, not dropped or duplicated.
+      const { doc, parser } = setup(
+        `pragma solidity ^0.8.24;
+contract {
+  function foo() public {}
+  event Bar();
+}`,
+        "file:///w/Promote.sol",
+      );
+      const promoted = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
+      assertNoFalsyNames(promoted);
+      const topNames = promoted.filter((s) => !s.name.startsWith("pragma")).map((s) => s.name);
+      assert.deepEqual(topNames, ["foo", "Bar"]);
+    });
   });
 
   it("turns import strings into document links", () => {
