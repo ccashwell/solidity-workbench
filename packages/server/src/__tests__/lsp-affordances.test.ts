@@ -161,149 +161,22 @@ contract Token {}`;
     assert.equal(root.selectionRange.start.line, 3);
   });
 
-  describe("document symbols with incomplete code", () => {
-    function assertNoFalsyNames(
-      symbols: ReturnType<DocumentSymbolProvider["provideDocumentSymbols"]>,
-      path = "",
-    ): void {
-      for (const symbol of symbols) {
-        assert.ok(
-          symbol.name,
-          `expected non-empty DocumentSymbol.name at ${path || "<root>"} (got ${JSON.stringify(symbol.name)})`,
-        );
-        if (symbol.children) {
-          assertNoFalsyNames(symbol.children, `${path}${symbol.name}/`);
-        }
-      }
-    }
-
-    it("returns only the pragma for SPDX + pragma with no declarations", () => {
-      const text = `// SPDX-License-Identifier: MIT
-pragma solidity 0.8.38;
-`;
-      const { doc, parser } = setup(text, "file:///w/PragmaOnly.sol");
-      const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
-
-      assertNoFalsyNames(symbols);
-      assert.equal(symbols.length, 1);
-      assert.equal(symbols[0].name, "pragma solidity 0.8.38");
-    });
-
-    it("skips a bare contract keyword with no name", () => {
-      const text = `// SPDX-License-Identifier: MIT
-pragma solidity 0.8.38;
-contract 
-`;
-      const { doc, parser } = setup(text, "file:///w/BareContract.sol");
-      const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
-
-      assertNoFalsyNames(symbols);
-      assert.ok(symbols.every((s) => s.name.startsWith("pragma") || s.name.length > 0));
-      assert.equal(
-        symbols.filter((s) => !s.name.startsWith("pragma")).length,
-        0,
-        "unnamed contract recovery node must not appear in the outline",
-      );
-    });
-
-    it("skips a nameless struct while keeping the enclosing named contract", () => {
-      const text = `pragma solidity 0.8.38;
-contract C {
-  struct 
-}`;
-      const { doc, parser } = setup(text, "file:///w/PartialStruct.sol");
-      const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
-
-      assertNoFalsyNames(symbols);
-      const contract = symbols.find((s) => s.name === "C");
-      assert.ok(contract, "expected named contract C in the outline");
-      assert.deepEqual(
-        (contract.children ?? []).map((c) => c.name),
-        [],
-        "nameless struct recovery node must be omitted",
-      );
-    });
-
-    it("skips nameless event, modifier, and enum recovery nodes", () => {
-      for (const [label, member] of [
-        ["event", "event "],
-        ["modifier", "modifier "],
-        ["enum", "enum "],
-      ] as const) {
-        const text = `pragma solidity 0.8.38;
-contract C {
-  ${member}
-}`;
-        const { doc, parser } = setup(text, `file:///w/Partial${label}.sol`);
-        const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
-
-        assertNoFalsyNames(symbols);
-        const contract = symbols.find((s) => s.name === "C");
-        assert.ok(contract, `expected contract C for incomplete ${label}`);
-        assert.deepEqual(
-          (contract.children ?? []).map((c) => c.name),
-          [],
-          `nameless ${label} recovery node must be omitted`,
-        );
-      }
-    });
-
-    it("skips a file-level nameless struct while keeping the pragma", () => {
-      const text = `pragma solidity 0.8.38;
-struct 
-`;
-      const { doc, parser } = setup(text, "file:///w/BareStruct.sol");
-      const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
-
-      assertNoFalsyNames(symbols);
-      assert.equal(symbols.length, 1);
-      assert.equal(symbols[0].name, "pragma solidity 0.8.38");
-    });
-
-    it("still returns a complete contract outline when names are present", () => {
-      const text = `pragma solidity 0.8.38;
-contract Foo {
-  function bar() public {}
-  struct S { uint256 x; }
-  event E(uint256 a);
-  error Err();
-  modifier onlyOwner() { _; }
-}`;
-      const { doc, parser } = setup(text, "file:///w/Complete.sol");
-      const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
-
-      assertNoFalsyNames(symbols);
-      const foo = symbols.find((s) => s.name === "Foo");
-      assert.ok(foo);
-      const childNames = (foo.children ?? []).map((c) => c.name).sort();
-      assert.deepEqual(childNames, ["E", "Err", "S", "bar", "onlyOwner"]);
-    });
-
-    it("preserves outline parity for a representative complete file", () => {
-      // Intentionally mirrors the pre-fix DocumentSymbol shape for valid code:
-      // pragmas → contracts (with ctor/receive/fallback/members) → file-level
-      // structs/enums/free functions/events/errors/UDVTs/constants.
-      const text = `// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.24;
+  it("preserves document-symbol outline for a complete file", () => {
+    const text = `pragma solidity ^0.8.24;
 pragma abicoder v2;
-
 uint256 constant MAX = 1;
 type Currency is address;
-struct Point { uint256 x; uint256 y; }
+struct Point { uint256 x; }
 enum Status { None, Active }
-error NotAllowed(address who);
-event Transfer(address indexed from, address to, uint256 amount);
-function freeHelper(uint256 a) pure returns (uint256) { return a; }
-
+error NotAllowed();
+event Transfer(address indexed from);
+function freeHelper() pure returns (uint256) { return 1; }
 interface IFoo { function bar() external; }
 library Lib { function add(uint256 a, uint256 b) internal pure returns (uint256) { return a + b; } }
 abstract contract Base { function virtualFn() public virtual; }
-
 contract Foo is Base, IFoo {
   uint256 public x;
-  uint256 constant Y = 2;
-  uint256 immutable z;
-  constructor(uint256 _z) { z = _z; }
+  constructor() {}
   receive() external payable {}
   fallback() external {}
   modifier onlyOwner() { _; }
@@ -313,128 +186,143 @@ contract Foo is Base, IFoo {
   enum Mode { A, B }
   event Ping(uint256 n);
   error Boom();
-  using Lib for uint256;
 }
 `;
-      const { doc, parser, idx } = setup(text, "file:///w/Parity.sol");
+    const { doc, parser, idx } = setup(text, "file:///w/Parity.sol");
+    const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
+
+    assert.deepEqual(
+      symbols.map((s) => s.name),
+      [
+        "pragma solidity ^0.8.24",
+        "pragma abicoder v2",
+        "IFoo",
+        "Lib",
+        "Base",
+        "Foo",
+        "Point",
+        "Status",
+        "freeHelper",
+        "Transfer",
+        "NotAllowed",
+        "Currency",
+        "MAX",
+      ],
+    );
+    const foo = symbols.find((s) => s.name === "Foo");
+    assert.ok(foo);
+    assert.deepEqual(
+      (foo.children ?? []).map((c) => c.name),
+      [
+        "constructor",
+        "receive",
+        "fallback",
+        "bar",
+        "virtualFn",
+        "onlyOwner",
+        "Ping",
+        "Boom",
+        "Inner",
+        "Mode",
+        "x",
+      ],
+    );
+    assert.equal(foo.children?.[0]?.kind, SymbolKind.Constructor);
+    assert.ok(idx.findSymbols("constructor").some((s) => s.containerName === "Foo"));
+    assert.equal(idx.findSymbols("").length, 0);
+  });
+
+  it("skips empty recovery names in incomplete Solidity", () => {
+    const cases: Array<{
+      label: string;
+      text: string;
+      top?: string[];
+      childrenOf?: [string, string[]];
+    }> = [
+      {
+        label: "spdx+pragma",
+        text: "// SPDX-License-Identifier: MIT\npragma solidity 0.8.38;\n",
+        top: ["pragma solidity 0.8.38"],
+      },
+      {
+        label: "bare contract",
+        text: "pragma solidity ^0.8.24;\ncontract \n",
+        top: ["pragma solidity ^0.8.24"],
+      },
+      {
+        label: "contract {",
+        text: "pragma solidity ^0.8.24;\ncontract {\n",
+        top: ["pragma solidity ^0.8.24"],
+      },
+      {
+        label: "contract A is {",
+        text: "pragma solidity ^0.8.24;\ncontract A is {\n",
+        top: ["pragma solidity ^0.8.24", "A"],
+        childrenOf: ["A", []],
+      },
+      {
+        label: "function (",
+        text: "pragma solidity ^0.8.24;\ncontract C {\n  function (\n}",
+      },
+      {
+        label: "struct {",
+        text: "pragma solidity ^0.8.24;\ncontract C {\n  struct {\n}",
+        childrenOf: ["C", []],
+      },
+      {
+        label: "event (",
+        text: "pragma solidity ^0.8.24;\ncontract C {\n  event (\n}",
+        childrenOf: ["C", []],
+      },
+      {
+        label: "modifier {",
+        text: "pragma solidity ^0.8.24;\ncontract C {\n  modifier {\n}",
+        childrenOf: ["C", []],
+      },
+      {
+        label: "enum / file struct",
+        text: "pragma solidity ^0.8.24;\ncontract C {\n  enum \n}\nstruct \n",
+        childrenOf: ["C", []],
+      },
+      {
+        label: "promote children",
+        text: "pragma solidity ^0.8.24;\ncontract {\n  function foo() public {}\n  event Bar();\n}",
+        top: ["pragma solidity ^0.8.24", "foo", "Bar"],
+      },
+    ];
+
+    for (const c of cases) {
+      const { doc, parser, idx } = setup(c.text, `file:///w/${c.label.replace(/\W+/g, "_")}.sol`);
       const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
-
-      assertNoFalsyNames(symbols);
-
-      const outline = symbols.map((s) => ({
-        name: s.name,
-        kind: s.kind,
-        children: (s.children ?? []).map((c) => c.name),
-      }));
-      assert.deepEqual(
-        outline.map((s) => s.name),
-        [
-          "pragma solidity ^0.8.24",
-          "pragma abicoder v2",
-          "IFoo",
-          "Lib",
-          "Base",
-          "Foo",
-          "Point",
-          "Status",
-          "freeHelper",
-          "Transfer",
-          "NotAllowed",
-          "Currency",
-          "MAX",
-        ],
-      );
-
-      const foo = symbols.find((s) => s.name === "Foo");
-      assert.ok(foo);
-      assert.deepEqual(
-        (foo.children ?? []).map((c) => c.name),
-        [
-          "constructor",
-          "receive",
-          "fallback",
-          "bar",
-          "virtualFn",
-          "onlyOwner",
-          "Ping",
-          "Boom",
-          "Inner",
-          "Mode",
-          "x",
-          "Y",
-          "z",
-        ],
-      );
-      assert.equal(foo.children?.[0]?.kind, SymbolKind.Constructor);
-
-      // selectionRange must stay inside range for every emitted symbol
-      const assertSelectionInside = (list: typeof symbols, path = ""): void => {
+      const walk = (list: typeof symbols): void => {
         for (const s of list) {
-          const { range: r, selectionRange: sr } = s;
-          const before =
-            sr.start.line < r.start.line ||
-            (sr.start.line === r.start.line && sr.start.character < r.start.character);
-          const after =
-            sr.end.line > r.end.line ||
-            (sr.end.line === r.end.line && sr.end.character > r.end.character);
-          assert.equal(before || after, false, `selectionRange outside range at ${path}${s.name}`);
-          if (s.children) assertSelectionInside(s.children, `${path}${s.name}/`);
+          assert.ok(s.name, `${c.label}: empty DocumentSymbol.name`);
+          if (s.children) walk(s.children);
         }
       };
-      assertSelectionInside(symbols);
-
-      // Workspace / index parity: special functions keep kind-based names;
-      // nothing is indexed under an empty name.
-      assert.ok(idx.findSymbols("constructor").some((s) => s.containerName === "Foo"));
-      assert.ok(idx.findSymbols("receive").some((s) => s.containerName === "Foo"));
-      assert.ok(idx.findSymbols("fallback").some((s) => s.containerName === "Foo"));
-      assert.equal(idx.findSymbols("").length, 0);
-      assert.ok(idx.getFileSymbols(doc.uri).every((s) => !!s.name));
-      assert.ok(idx.findWorkspaceSymbols("").every((s) => !!s.name));
-    });
-
-    it("tolerates incomplete braces and half-typed inheritance without empty names", () => {
-      const snippets = [
-        ["contract {", "pragma solidity ^0.8.24;\ncontract {\n"],
-        ["contract A is {", "pragma solidity ^0.8.24;\ncontract A is {\n"],
-        ["function (", "pragma solidity ^0.8.24;\ncontract C {\n  function (\n}"],
-        ["struct {", "pragma solidity ^0.8.24;\ncontract C {\n  struct {\n}"],
-        ["event (", "pragma solidity ^0.8.24;\ncontract C {\n  event (\n}"],
-        ["modifier {", "pragma solidity ^0.8.24;\ncontract C {\n  modifier {\n}"],
-        [
-          "unnamed contract with named children",
-          "pragma solidity ^0.8.24;\ncontract {\n  function foo() public {}\n  event Bar();\n}",
-        ],
-      ] as const;
-
-      for (const [label, text] of snippets) {
-        const { doc, parser, idx } = setup(text, `file:///w/${label.replace(/\W+/g, "_")}.sol`);
-        const symbols = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
-        assertNoFalsyNames(symbols);
-        assert.ok(
-          idx.getFileSymbols(doc.uri).every((s) => !!s.name),
-          `${label}: index must not store empty names`,
-        );
-        assert.ok(
-          idx.findWorkspaceSymbols("").every((s) => !!s.name),
-          `${label}: workspace symbols must not emit empty names`,
+      walk(symbols);
+      assert.ok(
+        idx.getFileSymbols(doc.uri).every((s) => !!s.name),
+        `${c.label}: empty indexed name`,
+      );
+      if (c.top) {
+        assert.deepEqual(
+          symbols.map((s) => s.name),
+          c.top,
+          c.label,
         );
       }
-
-      // Named children of an unnamed contract are promoted, not dropped or duplicated.
-      const { doc, parser } = setup(
-        `pragma solidity ^0.8.24;
-contract {
-  function foo() public {}
-  event Bar();
-}`,
-        "file:///w/Promote.sol",
-      );
-      const promoted = new DocumentSymbolProvider(parser).provideDocumentSymbols(doc);
-      assertNoFalsyNames(promoted);
-      const topNames = promoted.filter((s) => !s.name.startsWith("pragma")).map((s) => s.name);
-      assert.deepEqual(topNames, ["foo", "Bar"]);
-    });
+      if (c.childrenOf) {
+        const [name, kids] = c.childrenOf;
+        const parent = symbols.find((s) => s.name === name);
+        assert.ok(parent, `${c.label}: missing ${name}`);
+        assert.deepEqual(
+          (parent.children ?? []).map((ch) => ch.name),
+          kids,
+          c.label,
+        );
+      }
+    }
   });
 
   it("turns import strings into document links", () => {

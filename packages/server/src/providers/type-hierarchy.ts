@@ -41,19 +41,15 @@ export class TypeHierarchyProvider {
     );
     if (underCursor) {
       const resolved = this.resolver?.resolveContract(underCursor.name, underCursor.filePath);
-      if (resolved) {
-        return this.asItems(this.contractToItem(resolved.contract, resolved.uri, resolved.id));
-      }
+      if (resolved) return [this.contractToItem(resolved.contract, resolved.uri, resolved.id)];
       const entry = this.symbolIndex.getContract(underCursor.name, underCursor.filePath);
-      return entry ? this.asItems(this.contractToItem(entry.contract, entry.uri)) : [];
+      return entry ? [this.contractToItem(entry.contract, entry.uri)] : [];
     }
 
     const imported = this.resolver?.resolveImportedSymbol(word, document.uri);
     if (imported) {
       const resolved = this.resolver?.resolveContract(word, document.uri);
-      if (resolved) {
-        return this.asItems(this.contractToItem(resolved.contract, resolved.uri, resolved.id));
-      }
+      if (resolved) return [this.contractToItem(resolved.contract, resolved.uri, resolved.id)];
     }
 
     const visibleSymbols = this.resolver
@@ -64,17 +60,15 @@ export class TypeHierarchyProvider {
         visibleSymbols.find((candidate) => candidate.filePath === document.uri) ??
         visibleSymbols[0];
       const resolved = this.resolver?.resolveContract(sym.name, sym.filePath);
-      if (resolved) {
-        return this.asItems(this.contractToItem(resolved.contract, resolved.uri, resolved.id));
-      }
+      if (resolved) return [this.contractToItem(resolved.contract, resolved.uri, resolved.id)];
       const entry = this.symbolIndex.getContract(sym.name, sym.filePath);
-      return entry ? this.asItems(this.contractToItem(entry.contract, entry.uri)) : [];
+      return entry ? [this.contractToItem(entry.contract, entry.uri)] : [];
     }
 
     if (this.resolver) return [];
 
     const entry = this.symbolIndex.getContract(word);
-    return entry ? this.asItems(this.contractToItem(entry.contract, entry.uri)) : [];
+    return entry ? [this.contractToItem(entry.contract, entry.uri)] : [];
   }
 
   private isTypeSymbol(sym: SolSymbol): boolean {
@@ -108,8 +102,7 @@ export class TypeHierarchyProvider {
       for (const base of resolved.contract.baseContracts) {
         const baseEntry = this.resolver.resolveBaseContract(resolved.uri, base.baseName);
         if (baseEntry) {
-          const mapped = this.contractToItem(baseEntry.contract, baseEntry.uri, baseEntry.id);
-          if (mapped) supertypes.push(mapped);
+          supertypes.push(this.contractToItem(baseEntry.contract, baseEntry.uri, baseEntry.id));
         }
       }
       return supertypes;
@@ -123,8 +116,7 @@ export class TypeHierarchyProvider {
     for (const base of entry.contract.baseContracts) {
       const baseEntry = this.symbolIndex.getVisibleContract(base.baseName, entry.uri);
       if (baseEntry) {
-        const mapped = this.contractToItem(baseEntry.contract, baseEntry.uri);
-        if (mapped) supertypes.push(mapped);
+        supertypes.push(this.contractToItem(baseEntry.contract, baseEntry.uri));
       }
     }
 
@@ -140,18 +132,19 @@ export class TypeHierarchyProvider {
     if (resolved && this.resolver) {
       return this.resolver
         .getSubtypes(resolved)
-        .map((entry) => this.contractToItem(entry.contract, entry.uri, entry.id))
-        .filter((mapped): mapped is TypeHierarchyItem => mapped !== null);
+        .filter((entry) => !!entry.contract.name)
+        .map((entry) => this.contractToItem(entry.contract, entry.uri, entry.id));
     }
 
     const subtypes: TypeHierarchyItem[] = [];
 
     for (const entry of this.symbolIndex.getAllContractEntries()) {
+      // getAllContractEntries walks the parser AST, including nameless recovery nodes.
+      if (!entry.contract.name) continue;
       for (const base of entry.contract.baseContracts) {
         const baseEntry = this.symbolIndex.getVisibleContract(base.baseName, entry.uri);
         if (baseEntry?.contract.name === item.name && baseEntry.uri === item.uri) {
-          const mapped = this.contractToItem(entry.contract, entry.uri);
-          if (mapped) subtypes.push(mapped);
+          subtypes.push(this.contractToItem(entry.contract, entry.uri));
           break;
         }
       }
@@ -174,11 +167,7 @@ export class TypeHierarchyProvider {
     contract: ContractDefinition,
     uri: string,
     id?: string,
-  ): TypeHierarchyItem | null {
-    // Incomplete `contract` recovery nodes have an empty name; the client
-    // throws `name must not be falsy` when converting hierarchy items.
-    if (!contract.name) return null;
-
+  ): TypeHierarchyItem {
     const kind =
       contract.kind === "interface"
         ? SymbolKind.Interface
@@ -200,9 +189,5 @@ export class TypeHierarchyProvider {
       detail,
       data: id ? { id } : undefined,
     };
-  }
-
-  private asItems(item: TypeHierarchyItem | null): TypeHierarchyItem[] {
-    return item ? [item] : [];
   }
 }

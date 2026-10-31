@@ -254,9 +254,7 @@ export class SymbolIndex {
     const su = result.sourceUnit;
 
     for (const contract of su.contracts) {
-      // Incomplete `contract` / `interface` / `library` recovery nodes have
-      // an empty name. Skip indexing them (and don't register under "") —
-      // vscode-languageclient rejects falsy WorkspaceSymbol / hierarchy names.
+      // Skip empty recovery names (client rejects falsy WorkspaceSymbol.name).
       const contractName = contract.name || undefined;
       if (contractName) {
         newSymbols.push({
@@ -278,9 +276,7 @@ export class SymbolIndex {
 
       // Functions (including constructor / receive / fallback — `name` is null)
       for (const func of contract.functions) {
-        // Prefer declared name; fall back to kind. Empty-string recovery
-        // names must not win over kind via `??`.
-        const symbolName = func.name || func.kind;
+        const symbolName = func.name || func.kind; // || skips empty recovery names
         const symbolKind =
           func.kind === "constructor"
             ? "constructor"
@@ -449,10 +445,9 @@ export class SymbolIndex {
       });
     }
 
-    // Store symbols — never index a falsy name (client converters throw).
+    // Store symbols
     this.symbolsByFile.set(uri, newSymbols);
     for (const sym of newSymbols) {
-      if (!sym.name) continue;
       const existing = this.symbolsByName.get(sym.name) ?? [];
       existing.push(sym);
       this.symbolsByName.set(sym.name, existing);
@@ -565,12 +560,8 @@ export class SymbolIndex {
     const results: WorkspaceSymbol[] = [];
     for (const { sym } of scored) {
       if (results.length >= 100) break;
-      // Defense in depth: never emit a falsy WorkspaceSymbol.name.
-      if (!sym.name) continue;
-      const displayName = sym.containerName ? `${sym.containerName}.${sym.name}` : sym.name;
-      if (!displayName) continue;
       results.push({
-        name: displayName,
+        name: sym.containerName ? `${sym.containerName}.${sym.name}` : sym.name,
         kind: this.toLSPSymbolKind(sym.kind),
         location: {
           uri: sym.filePath,

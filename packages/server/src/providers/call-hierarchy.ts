@@ -151,17 +151,15 @@ export class CallHierarchyProvider {
     );
     const prepared = symbolsAtCursor.length > 0 ? symbolsAtCursor : funcSymbols;
 
-    return prepared
-      .filter((sym) => !!sym.name)
-      .map((sym) => ({
-        name: sym.name,
-        kind: this.symbolKindToCallHierarchyKind(sym.kind),
-        uri: sym.filePath,
-        range: sym.range,
-        selectionRange: sym.nameRange,
-        detail: sym.containerName,
-        data: this.makeKey(sym.filePath, sym.name, sym.containerName),
-      }));
+    return prepared.map((sym) => ({
+      name: sym.name,
+      kind: this.symbolKindToCallHierarchyKind(sym.kind),
+      uri: sym.filePath,
+      range: sym.range,
+      selectionRange: sym.nameRange,
+      detail: sym.containerName,
+      data: this.makeKey(sym.filePath, sym.name, sym.containerName),
+    }));
   }
 
   /**
@@ -208,7 +206,7 @@ export class CallHierarchyProvider {
           ) ??
           callerSymbols.find((s) => s.filePath === site.callerUri) ??
           callerSymbols[0];
-        if (!callerSym?.name) continue;
+        if (!callerSym) continue;
 
         entry = {
           item: {
@@ -705,7 +703,6 @@ export class CallHierarchyProvider {
     }
 
     for (const contract of result.sourceUnit.contracts) {
-      // Match SymbolIndex: nameless recovery contracts use undefined, not "".
       const callerContainer = contract.name || undefined;
       for (const func of contract.functions) {
         this.indexCallsInFunction({
